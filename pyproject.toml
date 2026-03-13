@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.backends"
+
+[project]
+name = "pen-plotter"
+version = "0.1.0"
+description = "手書き風文字生成ペンプロッタ制御プログラム"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "pyserial",
+]
+
+[project.optional-dependencies]
+ml = ["torch", "torchvision"]
+ui = ["gradio"]
+dev = ["pytest", "ruff"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: 実行に時間がかかるテスト（MLなど）",
+    "hardware: 実機接続が必要なテスト",
+]
