@@ -5,9 +5,10 @@ from dataclasses import dataclass
 class PlotterConfig:
     """CoreXY ペンプロッタの機械パラメータ"""
 
-    # 作業エリア (mm)
-    work_area_width: float = 300.0
-    work_area_height: float = 220.0
+    # 作業エリア (mm) — フレーム500×450mm, レールY:400mm/X:350mm に基づく
+    # Y方向トラベル355mm, X方向トラベル305mm
+    work_area_width: float = 300.0   # Y方向 (A4長辺297mm + マージン)
+    work_area_height: float = 220.0  # X方向 (A4短辺210mm + マージン)
 
     # A4用紙配置（用紙左下の座標）
     paper_origin_x: float = 1.5
