@@ -46,8 +46,8 @@
 | パラメータ名 | 値 | 説明 |
 |---|---|---|
 | `extrusion_size` | `20 mm` | 2020 フレームの断面寸法 |
-| `frame_x` | `500 mm` | Y 方向フレーム外寸（長辺） |
-| `frame_y` | `450 mm` | X 方向フレーム外寸（短辺） |
+| `frame_x` | `450 mm` | X 方向フレーム外寸（短辺） |
+| `frame_y` | `500 mm` | Y 方向フレーム外寸（長辺） |
 | `work_area_x` | `220 mm` | 作業エリア X（A4 短辺 210mm + マージン） |
 | `work_area_y` | `300 mm` | 作業エリア Y（A4 長辺 297mm + マージン） |
 | `rail_length_y` | `400 mm` | Y 軸リニアレール長（平行 2 本） |
@@ -69,8 +69,8 @@ travel_y = rail_length_y - mgn12_carriage_len    // 400 - 45 = 355mm
 margin_x = travel_x - work_area_x               // 305 - 220 = 85mm
 margin_y = travel_y - work_area_y               // 355 - 300 = 55mm
 pulley_diameter = belt_pitch * pulley_teeth / PI
-frame_inner_x = frame_y - 2 * extrusion_size    // 450 - 40 = 410mm
-frame_inner_y = frame_x - 2 * extrusion_size    // 500 - 40 = 460mm
+frame_inner_x = frame_x - 2 * extrusion_size    // 450 - 40 = 410mm
+frame_inner_y = frame_y - 2 * extrusion_size    // 500 - 40 = 460mm
 ```
 
 **検証条件**（全て満たすこと）:
