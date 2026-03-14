@@ -30,7 +30,9 @@ class PlotterPipeline:
         style_sample: object | None = None,
         temperature: float = 1.0,
     ) -> None:
-        self._page_config = page_config or PageConfig()
+        self._page_config = page_config or PageConfig(
+            paper_size=(297.0, 210.0),
+        )
         self._plotter_config = plotter_config or PlotterConfig()
         self._typesetter = Typesetter(self._page_config)
         self._generator = GCodeGenerator(self._plotter_config)

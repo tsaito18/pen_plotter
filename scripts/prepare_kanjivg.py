@@ -57,8 +57,13 @@ def _strokes_to_sample(
     recorder: StrokeRecorder,
     num_points: int,
     source_info: str,
+    target_size: float = 10.0,
 ) -> StrokeSample | None:
-    """パース済みストローク配列をStrokeSampleに変換。"""
+    """パース済み・正規化済みストローク配列をStrokeSampleに変換。
+
+    入力ストロークはKanjiVGParser.normalize()で全ストローク一括正規化済みを想定。
+    SVG座標系（Y下向き）からプロッタ座標系（Y上向き）へのY軸反転も行う。
+    """
     if not raw_strokes:
         return None
 
@@ -67,10 +72,11 @@ def _strokes_to_sample(
         if len(arr) < 2:
             continue
         points = [
-            StrokePoint(x=float(x), y=float(y), pressure=1.0, timestamp=0.0)
+            StrokePoint(
+                x=float(x), y=float(target_size - y), pressure=1.0, timestamp=0.0
+            )
             for x, y in arr
         ]
-        points = recorder.normalize_points(points)
         points = recorder.resample_points(points, num_points=num_points)
         stroke_points_list.append(points)
 
