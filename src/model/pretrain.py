@@ -35,15 +35,17 @@ class PairedStrokeDataset(Dataset):
     """
 
     def __init__(self, hand_dir: Path | list[Path], ref_dir: Path) -> None:
-        self.samples: list[tuple[str, Path, Path]] = []  # (char, hand_path, ref_dir_path)
+        self.samples: list[tuple[str, Path, Path]] = []  # (char, hand_path, ref_file_path)
         hand_dirs = hand_dir if isinstance(hand_dir, list) else [hand_dir]
 
         ref_dir = Path(ref_dir)
-        ref_chars: set[str] = set()
+        ref_files: dict[str, Path] = {}
         if ref_dir.is_dir():
             for d in ref_dir.iterdir():
-                if d.is_dir() and list(d.glob("*.json")):
-                    ref_chars.add(d.name)
+                if d.is_dir():
+                    files = sorted(d.glob("*.json"))
+                    if files:
+                        ref_files[d.name] = files[0]
 
         for hd in hand_dirs:
             hd = Path(hd)
@@ -53,16 +55,16 @@ class PairedStrokeDataset(Dataset):
                 if not char_dir.is_dir():
                     continue
                 ch = char_dir.name
-                if ch not in ref_chars:
+                if ch not in ref_files:
                     continue
                 for f in sorted(char_dir.glob("*.json")):
-                    self.samples.append((ch, f, ref_dir / ch))
+                    self.samples.append((ch, f, ref_files[ch]))
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict:
-        character, hand_path, ref_char_dir = self.samples[idx]
+        character, hand_path, ref_path = self.samples[idx]
 
         hand_data = json.loads(hand_path.read_text(encoding="utf-8"))
         points = []
@@ -71,9 +73,7 @@ class PairedStrokeDataset(Dataset):
                 points.append([pt["x"], pt["y"], pt.get("pressure", 1.0)])
         strokes_tensor = torch.tensor(points, dtype=torch.float32)
 
-        # 参照データは最初の JSON ファイルを使用
-        ref_file = sorted(ref_char_dir.glob("*.json"))[0]
-        ref_data = json.loads(ref_file.read_text(encoding="utf-8"))
+        ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
         ref_points = []
         for stroke in ref_data["strokes"]:
             for pt in stroke:
@@ -146,12 +146,13 @@ class Pretrainer:
 
     def train(self) -> dict:
         history: dict[str, list[float]] = {"losses": []}
+        total_batches = len(self.dataloader)
 
-        for _epoch in range(self.config.epochs):
+        for epoch in range(self.config.epochs):
             epoch_loss = 0.0
             n_batches = 0
 
-            for batch in self.dataloader:
+            for batch_idx, batch in enumerate(self.dataloader):
                 strokes = batch["strokes"]
                 reference = batch["reference"]
 
@@ -182,9 +183,18 @@ class Pretrainer:
                 epoch_loss += loss.item()
                 n_batches += 1
 
+                if (batch_idx + 1) % 10 == 0 or batch_idx == total_batches - 1:
+                    print(
+                        f"\r  Epoch {epoch + 1}/{self.config.epochs} "
+                        f"[{batch_idx + 1}/{total_batches}] "
+                        f"loss: {loss.item():.4f}",
+                        end="", flush=True,
+                    )
+
             avg_loss = epoch_loss / max(n_batches, 1)
             history["losses"].append(avg_loss)
             self.scheduler.step()
+            print(f"\r  Epoch {epoch + 1}/{self.config.epochs} — avg loss: {avg_loss:.4f}")
 
         torch.save(
             {
