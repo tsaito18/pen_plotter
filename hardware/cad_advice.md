@@ -90,7 +90,7 @@ frame_inner_y = frame_y - 2 * extrusion_size    // 500 - 40 = 460mm
 PenPlotter (トップレベル)
 ├── Frame
 │   ├── Rail_Y_500mm × 2   (長辺)
-│   ├── Rail_X_450mm × 2   (短辺)
+│   ├── Rail_X_410mm × 2   (短辺・Y通し内側に収まる)
 │   ├── Cross_Y_460mm × 2  (内寸・長辺方向)
 │   ├── Cross_X_410mm × 2  (内寸・短辺方向)
 │   └── CornerBracket × 8
