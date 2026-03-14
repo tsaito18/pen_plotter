@@ -9,6 +9,7 @@ import torch
 
 from src.model.stroke_model import StrokeGenerator
 from src.model.style_encoder import StyleEncoder
+from src.model.train import TrainConfig
 
 
 class StrokeInference:
@@ -21,6 +22,7 @@ class StrokeInference:
         self.generator = StrokeGenerator(**(generator_kwargs or {}))
         self.style_encoder = StyleEncoder(**(style_encoder_kwargs or {}))
 
+        torch.serialization.add_safe_globals([TrainConfig])
         checkpoint = torch.load(
             checkpoint_path, map_location="cpu", weights_only=True
         )
