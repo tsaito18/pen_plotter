@@ -79,8 +79,13 @@ class PlotterPipeline:
             strokes.extend(char_strokes)
         return strokes
 
+    _SKIP_RENDER = set(" \t　")
+
     def _generate_char_strokes(self, placement: CharPlacement) -> list[Stroke]:
         """Tier 1: ML推論 → Tier 2: KanjiVG → Tier 3: 矩形。"""
+        if placement.char in self._SKIP_RENDER:
+            return []
+
         if self._inference is not None:
             try:
                 raw = self._inference.generate(
@@ -119,6 +124,8 @@ class PlotterPipeline:
             logger.warning("KanjiVG JSON load failed for '%s'", placement.char, exc_info=True)
             return None
 
+    _SMALL_PUNCT = set("。、.,")
+
     def _position_strokes(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
         """正規化ストロークをCharPlacementの位置・サイズに合わせる。"""
         if not strokes:
@@ -129,10 +136,16 @@ class PlotterPipeline:
         maxs = all_pts.max(axis=0)
         ranges = maxs - mins
         current_size = ranges.max() if ranges.max() > 0 else 1.0
-        scale = placement.font_size / current_size
 
-        half = placement.font_size / 2.0
-        offset = np.array([placement.x, placement.y - half])
+        fs = placement.font_size
+        if placement.char in self._SMALL_PUNCT:
+            char_size = fs * 0.4
+            scale = char_size / current_size
+            offset = np.array([placement.x, placement.y - fs / 2.0])
+        else:
+            scale = fs / current_size
+            half = fs / 2.0
+            offset = np.array([placement.x, placement.y - half])
 
         return [(stroke - mins) * scale + offset for stroke in strokes]
 
