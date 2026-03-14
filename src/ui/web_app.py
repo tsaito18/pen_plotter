@@ -86,12 +86,15 @@ class PlotterPipeline:
         if placement.char in self._SKIP_RENDER:
             return []
 
+        reference = self._load_reference_strokes(placement.char)
+
         if self._inference is not None:
             try:
                 raw = self._inference.generate(
                     self._style_sample,
                     num_steps=50,
                     temperature=self._temperature,
+                    reference_strokes=reference,
                 )
                 return self._position_strokes(raw, placement)
             except Exception:
@@ -103,6 +106,26 @@ class PlotterPipeline:
                 return self._position_strokes(char_strokes, placement)
 
         return self._rect_fallback(placement)
+
+    def _load_reference_strokes(self, char: str) -> list[Stroke] | None:
+        """KanjiVG参照ストロークをNDArrayリストとして読み込む（CharEncoder入力用）。"""
+        if self._kanjivg_dir is None:
+            return None
+        char_dir = self._kanjivg_dir / char
+        if not char_dir.is_dir():
+            return None
+        json_files = sorted(char_dir.glob(f"{char}_*.json"))
+        if not json_files:
+            return None
+        try:
+            sample = StrokeSample.load(json_files[0])
+            return [
+                np.array([[p.x, p.y] for p in stroke], dtype=np.float64)
+                for stroke in sample.strokes
+                if len(stroke) >= 2
+            ]
+        except Exception:
+            return None
 
     def _load_kanjivg_json(self, placement: CharPlacement) -> list[Stroke] | None:
         """data/strokes/{char}/{char}_*.json からストロークを読み込む。"""

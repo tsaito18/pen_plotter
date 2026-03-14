@@ -163,3 +163,73 @@ class TestFallbackStrokes:
         assert np.allclose(result[0][0], [10.0, 17.0])
         # (1,1) → (10.0 + 6.0, 17.0 + 6.0) = (16.0, 23.0)
         assert np.allclose(result[0][-1], [16.0, 23.0])
+
+    def test_inference_v2_with_reference(self, tmp_path):
+        """V2推論時にreference_strokesがKanjiVGから渡される。"""
+        _create_kanjivg_json(tmp_path, "あ", num_strokes=3, num_points=8)
+
+        mock_strokes = [
+            np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]),
+        ]
+        pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
+        mock_inference = MagicMock()
+        mock_inference.generate.return_value = mock_strokes
+        pipeline._inference = mock_inference
+        pipeline._style_sample = MagicMock()
+        pipeline._temperature = 0.8
+
+        placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=5.0)
+        result = pipeline.placements_to_strokes([placement])
+
+        assert len(result) > 0
+        mock_inference.generate.assert_called_once()
+        call_kwargs = mock_inference.generate.call_args
+        assert call_kwargs.kwargs.get("reference_strokes") is not None
+        ref = call_kwargs.kwargs["reference_strokes"]
+        assert isinstance(ref, list)
+        assert len(ref) == 3
+        for arr in ref:
+            assert isinstance(arr, np.ndarray)
+            assert arr.shape == (8, 2)
+
+    def test_inference_v1_backward_compatible(self):
+        """V1推論（KanjiVGなし）ではreference_strokes=Noneが渡される。"""
+        mock_strokes = [
+            np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]),
+        ]
+        pipeline = PlotterPipeline()
+        mock_inference = MagicMock()
+        mock_inference.generate.return_value = mock_strokes
+        pipeline._inference = mock_inference
+        pipeline._style_sample = MagicMock()
+        pipeline._temperature = 0.8
+
+        placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=5.0)
+        pipeline.placements_to_strokes([placement])
+
+        call_kwargs = mock_inference.generate.call_args
+        assert call_kwargs.kwargs.get("reference_strokes") is None
+
+    def test_load_reference_strokes(self, tmp_path):
+        """_load_reference_strokesがKanjiVG JSONからNDArrayリストを返す。"""
+        _create_kanjivg_json(tmp_path, "あ", num_strokes=2, num_points=5)
+
+        pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
+        ref = pipeline._load_reference_strokes("あ")
+
+        assert ref is not None
+        assert len(ref) == 2
+        for arr in ref:
+            assert isinstance(arr, np.ndarray)
+            assert arr.dtype == np.float64
+            assert arr.shape == (5, 2)
+
+    def test_load_reference_strokes_missing_char(self, tmp_path):
+        """存在しない文字の参照ストロークはNoneを返す。"""
+        pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
+        assert pipeline._load_reference_strokes("ん") is None
+
+    def test_load_reference_strokes_no_kanjivg_dir(self):
+        """kanjivg_dir未設定時はNoneを返す。"""
+        pipeline = PlotterPipeline()
+        assert pipeline._load_reference_strokes("あ") is None
