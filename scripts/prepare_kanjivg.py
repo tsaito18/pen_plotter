@@ -6,8 +6,11 @@ import argparse
 import gzip
 import logging
 import shutil
+import sys
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.collector.data_format import StrokePoint, StrokeSample
 from src.collector.kanjivg_parser import KanjiVGParser
