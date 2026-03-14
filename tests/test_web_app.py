@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -6,16 +7,20 @@ import pytest
 from src.layout.typesetter import CharPlacement
 from src.ui.web_app import PlotterPipeline
 
-SAMPLE_SVG = """<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="109" height="109" viewBox="0 0 109 109">
-  <g id="kvg:StrokePaths" style="fill:none;stroke:#000000;stroke-width:3;">
-    <g id="kvg:03042" kvg:element="あ">
-      <path id="kvg:03042-s1" d="M 30,20 C 30,50 30,80 30,90"/>
-      <path id="kvg:03042-s2" d="M 20,50 L 80,50"/>
-      <path id="kvg:03042-s3" d="M 50,30 C 60,60 70,80 80,90"/>
-    </g>
-  </g>
-</svg>"""
+
+def _create_kanjivg_json(base_dir, char, num_strokes=3, num_points=8):
+    """テスト用のKanjiVG JSONファイルを作成。"""
+    char_dir = base_dir / char
+    char_dir.mkdir(parents=True, exist_ok=True)
+    strokes = []
+    for s in range(num_strokes):
+        stroke = [
+            {"x": float(i + s), "y": float(i * 0.5 + s), "pressure": 1.0, "timestamp": 0.0}
+            for i in range(num_points)
+        ]
+        strokes.append(stroke)
+    data = {"character": char, "strokes": strokes, "metadata": {"source": "kanjivg"}}
+    (char_dir / f"{char}_0.json").write_text(json.dumps(data), encoding="utf-8")
 
 
 class TestPlotterPipeline:
@@ -94,23 +99,19 @@ class TestFallbackStrokes:
         assert np.allclose(strokes[0][0], strokes[0][-1])
 
     def test_pipeline_kanjivg_fallback(self, tmp_path):
-        """KanjiVGファイルが存在する文字はKanjiVGストロークを使用。"""
-        # 「あ」= U+3042 → 03042.svg
-        svg_path = tmp_path / "03042.svg"
-        svg_path.write_text(SAMPLE_SVG)
+        """KanjiVG JSONが存在する文字はKanjiVGストロークを使用。"""
+        _create_kanjivg_json(tmp_path, "あ", num_strokes=3, num_points=8)
 
         pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
         placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=5.0)
         strokes = pipeline.placements_to_strokes([placement])
 
-        assert len(strokes) == 3  # SVGに3ストロークある
+        assert len(strokes) == 3
         for s in strokes:
             assert isinstance(s, np.ndarray)
             assert s.ndim == 2
-            # 矩形ではない（5点の閉じた四角形ではない）
-            assert s.shape[0] != 5 or not np.allclose(s[0], s[-1])
+            assert s.shape[0] == 8
 
-        # 配置位置の範囲内にある
         all_pts = np.concatenate(strokes, axis=0)
         half = placement.font_size / 2.0
         assert all_pts[:, 0].min() >= placement.x - 0.01

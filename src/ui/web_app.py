@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
+from src.collector.data_format import StrokeSample
 from src.collector.kanjivg_parser import KanjiVGParser
 from src.gcode.config import PlotterConfig
 from src.gcode.generator import GCodeGenerator
@@ -89,17 +90,32 @@ class PlotterPipeline:
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
 
-        if self._kanjivg_parser is not None and self._kanjivg_dir is not None:
-            svg_file = self._kanjivg_dir / f"{ord(placement.char):05x}.svg"
-            if svg_file.exists():
-                try:
-                    raw = self._kanjivg_parser.parse_file(svg_file)
-                    normalized = self._kanjivg_parser.normalize(raw, target_size=1.0)
-                    return self._position_strokes(normalized, placement)
-                except Exception:
-                    logger.warning("KanjiVG parse failed for '%s'", placement.char, exc_info=True)
+        if self._kanjivg_dir is not None:
+            char_strokes = self._load_kanjivg_json(placement)
+            if char_strokes is not None:
+                return self._position_strokes(char_strokes, placement)
 
         return self._rect_fallback(placement)
+
+    def _load_kanjivg_json(self, placement: CharPlacement) -> list[Stroke] | None:
+        """data/strokes/{char}/{char}_*.json からストロークを読み込む。"""
+        char_dir = self._kanjivg_dir / placement.char
+        if not char_dir.is_dir():
+            return None
+        json_files = sorted(char_dir.glob(f"{placement.char}_*.json"))
+        if not json_files:
+            return None
+        try:
+            sample = StrokeSample.load(json_files[0])
+            strokes = []
+            for stroke_points in sample.strokes:
+                arr = np.array([[p.x, p.y] for p in stroke_points], dtype=np.float64)
+                if len(arr) >= 2:
+                    strokes.append(arr)
+            return strokes if strokes else None
+        except Exception:
+            logger.warning("KanjiVG JSON load failed for '%s'", placement.char, exc_info=True)
+            return None
 
     def _position_strokes(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
         """正規化ストロークをCharPlacementの位置・サイズに合わせる。"""
