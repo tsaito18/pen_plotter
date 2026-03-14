@@ -5,11 +5,17 @@
 ユーザーの筆跡を学習し、同じ文字でも毎回異なる形で生成する。
 
 ## 技術スタック
-- Python 3.11+
-- PyTorch (ML)
+- Python 3.11+ (venvは3.12で作成、IPEX互換性のため)
+- PyTorch (ML) — XPU版でIntel Arc GPU対応予定
 - Matplotlib (プレビュー)
 - Gradio (Web UI)
 - GRBL (ファームウェア)
+- パッケージマネージャー: uv
+
+## 開発環境
+- Intel Core Ultra 7 258V (Lunar Lake) — GPU: Intel Arc統合, NPU: AI Boost
+- WSL2 (Ubuntu) で開発、ただしWSLではGPU未認識 (/dev/dri/ なし)
+- GPU訓練はWindowsネイティブで実行（PyTorch XPU版、XPU: True確認済み）
 
 ## 開発コマンド
 - テスト: `pytest`
@@ -17,12 +23,35 @@
 - フォーマット: `ruff format src/ tests/`
 
 ## アーキテクチャ
+
+### ディレクトリ構成
 - `src/gcode/` — G-code生成・最適化・プレビュー
-- `src/collector/` — 手書きサンプル収集
-- `src/model/` — ML モデル（LSTM+MDN）
+- `src/collector/` — 手書きサンプル収集（iPad UI, KanjiVGパーサー, CASIAパーサー）
+- `src/model/` — ML モデル（V2: CharEncoder + StyleEncoder + LSTM+MDN）
 - `src/layout/` — 組版エンジン
 - `src/comm/` — GRBL シリアル通信
 - `src/ui/` — Gradio Web UI
+- `scripts/` — CLI スクリプト群
+
+### MLモデル V2アーキテクチャ（文字条件付き生成）
+```
+CharEncoder(KanjiVG_skeleton) → char_embedding（何の文字か）
+StyleEncoder(user_samples) → style_vector（どんな書き癖か）
+StrokeGenerator(char_embedding + style_vector) → strokes
+```
+- 事前訓練: CASIA-OLHWDB or KanjiVGで CharEncoder + Generator を訓練
+- ファインチューニング: ユーザー20-30文字で StyleEncoder のみ更新（Generator凍結）
+- V1チェックポイント（char_dimなし）との後方互換性あり
+
+### スクリプト一覧
+| スクリプト | 用途 |
+|-----------|------|
+| `scripts/prepare_kanjivg.py --download` | KanjiVGデータ取得・変換（6,699文字） |
+| `scripts/pretrain.py` | 事前訓練（CharEncoder+StyleEncoder+Generator） |
+| `scripts/finetune.py` | ファインチューニング（StyleEncoderのみ） |
+| `scripts/train_model.py` | V1訓練（旧方式、char_dimなし） |
+| `scripts/collect_strokes.py` | ガイド付き手書きサンプル収集（292文字セット） |
+| `scripts/run_ui.py` | Gradio Web UI起動 |
 
 ## コーディング規約
 - ruff でフォーマット・リント
@@ -42,6 +71,7 @@
 - 新機能追加時は必ずテストから着手する
 - テストなしの実装コードを書かない
 - 全テストがパスした状態を常に維持する
+- スクリプト作成後は必ず実際に実行して動作確認する（テストだけでは不十分）
 
 ### テスト構成
 - テストファイル: `tests/test_{module}.py`
@@ -70,3 +100,31 @@
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
+
+## メモリ（別デバイスでの開発継続用）
+
+### ユーザープロフィール
+- 電子工作・機械工作の経験が豊富（Arduino、回路設計、機械加工に精通）
+- 利用可能機材: ノートPC（Intel Core Ultra 7 258V / Lunar Lake）、ラズパイ、Arduino、ESP32、3Dプリンター、iPad（Apple Pencil）
+- WSL2で/dev/dri/が認識されずIntel GPU使用不可（2026-03時点）→ Windowsネイティブで GPU 訓練を試行中
+- パッケージマネージャー: uv を使用（pip より優先）
+- Python: システムは 3.14 だが venv は 3.12 で作成（IPEX 互換性のため）
+- 日本語が母語
+
+### 開発方針フィードバック
+- TDD厳守（Red→Green→Refactor）
+- スクリプトは実際に実行確認してからコミット（importエラー、データ不在時のエラー等、テストでは見つからない問題が頻発した）
+
+### 手書き生成V2 方針
+- レポート提出に使える「バレない」品質が目標
+- CASIA-OLHWDB（160万サンプル）で事前訓練 → ユーザー20-30字でファインチューニング
+- Step A-G 全実装完了、GPU(XPU)対応とCASIAデータ取得が次課題
+- WSLでIntel GPU未認識 → WindowsネイティブでPyTorch XPU版を使用（XPU: True確認済み）
+- pretrain.py にデバイス（CPU/XPU）指定の仕組みが未実装
+
+### 全体進捗（2026-03-14時点）
+- 259テスト全パス
+- KanjiVG 6,699文字変換済み
+- 3段階フォールバック（ML推論→KanjiVG→矩形）動作
+- ガイド付きストローク収集UI（292文字セット）実装済み
+- ユーザーサンプルは data/user_strokes/ に保存（KanjiVGデータと分離）

@@ -246,48 +246,57 @@ pen_plotter/
 - [ ] ペンホルダー3Dプリント・取付
 - [ ] キャリブレーション: 100mm四角描画 → 測定 → steps/mm調整
 
-### Phase 3: シリアル通信
+### Phase 3: シリアル通信 ✅
 **目標**: PCからG-codeをストリーミングして描画
 
-- [ ] `src/comm/serial_sender.py` — GRBLストリーミングプロトコル（character-counting方式）
-- [ ] `src/comm/grbl_controller.py` — ホーミング、ステータス、設定
+- [x] `src/comm/serial_sender.py` — GRBLストリーミングプロトコル（character-counting方式）
+- [x] `src/comm/grbl_controller.py` — ホーミング、ステータス、設定
 - [ ] テスト: Phase 1のG-codeを実機で描画
 
-### Phase 4: 組版エンジン
+### Phase 4: 組版エンジン ✅
 **目標**: テキストを受け取り、ページ上に文字を配置
 
-- [ ] `src/layout/page_layout.py` — 用紙サイズ、余白、レポート罫線
-- [ ] `src/layout/typesetter.py` — 文字配置（全角グリッド、ベースライン）
-- [ ] `src/layout/line_breaking.py` — 改行・禁則処理
-- [ ] `src/layout/math_layout.py` — LaTeX簡易数式レイアウト（分数・上下付き等）
-- [ ] `src/layout/table_layout.py` — 表・罫線描画
-- [ ] テスト: サンプルテキストのレイアウト結果をMatplotlibで確認
+- [x] `src/layout/page_layout.py` — 用紙サイズ、余白、レポート罫線
+- [x] `src/layout/typesetter.py` — 文字配置（全角グリッド、ベースライン）
+- [x] `src/layout/line_breaking.py` — 改行・禁則処理
+- [x] `src/layout/math_layout.py` — LaTeX簡易数式レイアウト（分数・上下付き等）
+- [x] `src/layout/table_layout.py` — 表・罫線描画
+- [x] テスト: サンプルテキストのレイアウト結果をMatplotlibで確認
 
-### Phase 5: 手書きサンプル収集
+### Phase 5: 手書きサンプル収集 ✅
 **目標**: ユーザーの筆跡をストロークデータとして取得・保存
 
-- [ ] `src/collector/ipad_sync.py` — iPad向けWeb UI（Canvas API）でストローク収集
+- [x] `src/collector/ipad_sync.py` — iPad向けWeb UI（Canvas API）でストローク収集
 - [ ] `src/collector/scan_import.py` — スキャン画像からストローク軌跡復元
-- [ ] `src/collector/stroke_recorder.py` — ストロークの正規化・保存
-- [ ] `src/collector/data_format.py` — JSON形式定義
-- [ ] KanjiVGデータのダウンロード・パース
-- [ ] テスト: ひらがな10文字分のサンプル収集・確認
+- [x] `src/collector/stroke_recorder.py` — ストロークの正規化・保存
+- [x] `src/collector/data_format.py` — JSON形式定義
+- [x] KanjiVGデータのダウンロード・パース（6,699文字変換済み）
+- [x] `src/collector/casia_parser.py` — CASIA-OLHWDB .pot ファイルパーサー
+- [x] ガイド付きストローク収集UI（292文字セット、進捗表示）
+- [x] テスト: 全収集機能
 
-### Phase 6: MLモデル訓練
+### Phase 6: MLモデル ✅
 **目標**: 正規ストローク → ユーザースタイルのストローク生成
 
-- [ ] `src/model/dataset.py` — KanjiVG正規データ + ユーザーサンプルのペアリング
-- [ ] `src/model/style_encoder.py` — スタイル特徴抽出（Bi-LSTM → 128dim）
-- [ ] `src/model/stroke_model.py` — エンコーダ-デコーダ LSTM + MDN
-- [ ] `src/model/train.py` — 訓練ループ（勾配クリップ、学習率スケジューラ）
-- [ ] `src/model/inference.py` — 推論（温度パラメータでバリエーション制御）
-- [ ] まずひらがなのみで訓練・品質確認、その後漢字に拡大
+- [x] `src/model/dataset.py` — KanjiVG正規データ + ユーザーサンプルのペアリング（複数ディレクトリ対応）
+- [x] `src/model/style_encoder.py` — スタイル特徴抽出（Bi-LSTM → 128dim）
+- [x] `src/model/stroke_model.py` — LSTM + MDN（char_embedding対応）
+- [x] `src/model/char_encoder.py` — KanjiVGスケルトン→文字埋め込み（Bi-LSTM → 128dim）
+- [x] `src/model/train.py` — 訓練ループ（勾配クリップ、学習率スケジューラ）
+- [x] `src/model/pretrain.py` — 事前訓練（CharEncoder+StyleEncoder+Generator同時訓練）
+- [x] `src/model/finetune.py` — ファインチューニング（StyleEncoderのみ、Generator凍結）
+- [x] `src/model/inference.py` — 推論（V1/V2自動検出、温度パラメータでバリエーション制御）
+- [x] `src/model/augmentation.py` — リアルさ追加（ベースライン揺らぎ、サイズ変動、ジッター、傾き）
 
-### Phase 7: エンドツーエンド統合
+### Phase 7: エンドツーエンド統合（部分完了）
 **目標**: テキスト入力 → 手書き生成 → 組版 → G-code → 印刷の一気通貫
 
-- [ ] `src/ui/web_app.py` — Gradio Web UI（テキスト入力、プレビュー、印刷ボタン）
-- [ ] パイプライン統合テスト
+- [x] `src/ui/web_app.py` — Gradio Web UI（テキスト入力、プレビュー、印刷ボタン）
+- [x] 3段階フォールバック（ML推論→KanjiVG→矩形）
+- [x] V2パイプライン（CharEncoder+文字条件付き推論）統合
+- [ ] GPU(XPU)デバイス対応（pretrain.py/finetune.pyに--device引数追加）
+- [ ] CASIA-OLHWDBデータ取得・事前訓練の実行
+- [ ] パイプライン統合テスト（実データでのエンドツーエンド）
 - [ ] 全体の品質調整（文字サイズ、間隔、速度）
 
 ### Phase 8: 拡張機能（後回し）
@@ -295,6 +304,54 @@ pen_plotter/
 - [ ] ラズパイスタンドアロンコントローラ
 - [ ] 複数ペン対応（色替え）
 - [ ] 筆圧シミュレーション（サーボ角度微調整で太さ変化）
+
+---
+
+## 手書き生成 V2 アーキテクチャ
+
+### 現状の課題と改修方針
+V1モデルは文字を区別できない（スタイルサンプルから「何かストローク」を生成するだけ）。
+V2では文字条件付き生成に改修し、レポート提出に使える品質を目指す。
+
+### アーキテクチャ
+```
+CharEncoder(KanjiVG_skeleton) → char_embedding（何の文字か）
+StyleEncoder(user_samples) → style_vector（どんな書き癖か）
+StrokeGenerator(char_embedding + style_vector) → strokes
+```
+
+### 訓練戦略
+1. **事前訓練**: CASIA-OLHWDB（160万サンプル）or KanjiVG（6,699字）で CharEncoder + Generator を訓練
+2. **ファインチューニング**: ユーザー20-30文字で StyleEncoder のみ更新（Generator凍結）
+
+### リアルさの要素（augmentation.py で実装済み）
+- 同一文字バリエーション: MDN温度 + ノイズ
+- 行の揺らぎ: ベースライン・文字サイズにランダム変動
+- ジッター: ストロークに微振動を加える（スムージング付き）
+- 傾き: 文字ごとにランダムな傾きを適用
+
+### 実装ステップ（全完了）
+- [x] A. CASIA データローダー (`src/collector/casia_parser.py`) — 8テスト
+- [x] B. CharEncoder (`src/model/char_encoder.py`) — 9テスト
+- [x] C. StrokeGenerator 改修 (`src/model/stroke_model.py` char_dim追加) — 5テスト
+- [x] D. 事前訓練パイプライン (`src/model/pretrain.py` + `scripts/pretrain.py`) — 9テスト
+- [x] E. ファインチューニング (`src/model/finetune.py` + `scripts/finetune.py`) — 10テスト
+- [x] F. リアルさ追加 (`src/model/augmentation.py`) — 14テスト
+- [x] G. パイプライン統合V2 (`inference.py` V1/V2自動検出 + `web_app.py`) — 9テスト
+
+### 次のアクション
+1. **GPU対応**: pretrain.py/finetune.py に `--device xpu` オプション追加（WindowsネイティブでXPU確認済み）
+2. **CASIA取得**: 学術登録→手動ダウンロード→casia_parser.pyで変換
+3. **事前訓練実行**: GPU環境で50エポック
+4. **ユーザーサンプル収集**: collect_strokes.py（20-30文字）
+5. **ファインチューニング → プレビュー確認**
+
+### GPU環境情報
+- Intel Core Ultra 7 258V (Lunar Lake) — Intel Arc 統合GPU
+- WSL2では/dev/dri/が未認識（2026-03-14時点）
+- **Windowsネイティブ**: PyTorch XPU版で `torch.xpu.is_available() = True` 確認済み
+- IPEX (Intel Extension for PyTorch) はWindows非対応、PyTorch XPU版単体で使用
+- Python 3.12 (uv venv)、WSLからのファイルアクセス: `\\wsl$\Ubuntu\home\taiga\Personal\pen_plotter`
 
 ---
 
