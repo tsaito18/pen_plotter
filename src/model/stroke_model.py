@@ -18,14 +18,16 @@ class StrokeGenerator(nn.Module):
         input_dim: int = 3,
         hidden_dim: int = 128,
         style_dim: int = 128,
+        char_dim: int = 0,
         num_mixtures: int = 5,
         num_layers: int = 2,
     ) -> None:
         super().__init__()
         self.num_mixtures = num_mixtures
+        self.char_dim = char_dim
 
         self.lstm = nn.LSTM(
-            input_size=input_dim + style_dim,
+            input_size=input_dim + style_dim + char_dim,
             hidden_size=hidden_dim,
             num_layers=num_layers,
             batch_first=True,
@@ -35,17 +37,30 @@ class StrokeGenerator(nn.Module):
         n_mdn = num_mixtures * 6 + 1
         self.mdn_head = nn.Linear(hidden_dim, n_mdn)
 
-    def forward(self, x: torch.Tensor, style: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        style: torch.Tensor,
+        char_embedding: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         """
         Args:
             x: (batch, seq_len, input_dim) ストロークシーケンス
             style: (batch, style_dim) スタイルベクトル
+            char_embedding: (batch, char_dim) 文字埋め込み（char_dim > 0 時は必須）
         Returns:
             MDN パラメータの辞書
         """
         batch, seq_len, _ = x.shape
         style_expanded = style.unsqueeze(1).expand(-1, seq_len, -1)
-        lstm_input = torch.cat([x, style_expanded], dim=-1)
+
+        if self.char_dim > 0:
+            if char_embedding is None:
+                raise ValueError("char_embedding required when char_dim > 0")
+            char_expanded = char_embedding.unsqueeze(1).expand(-1, seq_len, -1)
+            lstm_input = torch.cat([x, style_expanded, char_expanded], dim=-1)
+        else:
+            lstm_input = torch.cat([x, style_expanded], dim=-1)
 
         h, _ = self.lstm(lstm_input)
         params = self.mdn_head(h)

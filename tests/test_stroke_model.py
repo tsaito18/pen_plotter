@@ -102,3 +102,55 @@ class TestMDNLoss:
         target = torch.randn(batch, seq_len, 3)
         loss = mdn_loss(output, target)
         assert torch.isfinite(loss)
+
+
+class TestStrokeGeneratorCharEmbedding:
+    """char_embedding 対応のテスト。"""
+
+    def test_char_dim_zero_backward_compatible(self):
+        model = StrokeGenerator(input_dim=3, hidden_dim=128, style_dim=128, char_dim=0)
+        x = torch.randn(4, 20, 3)
+        style = torch.randn(4, 128)
+        output = model(x, style)
+        assert output["pi"].shape == (4, 20, 5)
+        assert output["pen_logit"].shape == (4, 20, 1)
+
+    def test_char_dim_nonzero_output_shape(self):
+        model = StrokeGenerator(
+            input_dim=3, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
+        )
+        x = torch.randn(4, 20, 3)
+        style = torch.randn(4, 128)
+        char_emb = torch.randn(4, 128)
+        output = model(x, style, char_embedding=char_emb)
+        assert output["pi"].shape == (4, 20, 5)
+        assert output["mu_x"].shape == (4, 20, 5)
+        assert output["pen_logit"].shape == (4, 20, 1)
+
+    def test_char_dim_nonzero_requires_embedding(self):
+        model = StrokeGenerator(input_dim=3, hidden_dim=128, style_dim=128, char_dim=128)
+        x = torch.randn(2, 10, 3)
+        style = torch.randn(2, 128)
+        with pytest.raises(ValueError, match="char_embedding required"):
+            model(x, style)
+
+    def test_char_dim_zero_ignores_embedding(self):
+        model = StrokeGenerator(input_dim=3, hidden_dim=128, style_dim=128, char_dim=0)
+        x = torch.randn(2, 10, 3)
+        style = torch.randn(2, 128)
+        char_emb = torch.randn(2, 128)
+        output = model(x, style, char_embedding=char_emb)
+        assert output["pi"].shape == (2, 10, 5)
+
+    def test_loss_with_char_embedding(self):
+        model = StrokeGenerator(
+            input_dim=3, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
+        )
+        x = torch.randn(4, 20, 3)
+        style = torch.randn(4, 128)
+        char_emb = torch.randn(4, 128)
+        target = torch.randn(4, 20, 3)
+        output = model(x, style, char_embedding=char_emb)
+        loss = mdn_loss(output, target)
+        assert loss.ndim == 0
+        assert torch.isfinite(loss)
