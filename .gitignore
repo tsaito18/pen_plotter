@@ -8,6 +8,7 @@ build/
 .venv/
 
 # Data
+data/strokes/
 data/models/
 
 # G-code

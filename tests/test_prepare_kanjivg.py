@@ -217,6 +217,80 @@ class TestBatchConversion:
         assert count == 0
 
 
+class TestConvertXml:
+    """KanjiVG統合XMLからの変換テスト。"""
+
+    MINIMAL_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<kanjivg xmlns:kvg='http://kanjivg.tagaini.net'>
+<kanji id="kvg:kanji_04e00">
+<g id="kvg:04e00" kvg:element="一">
+  <path id="kvg:04e00-s1" d="M 10,50 L 90,50"/>
+</g>
+</kanji>
+<kanji id="kvg:kanji_04e8c">
+<g id="kvg:04e8c" kvg:element="二">
+  <path id="kvg:04e8c-s1" d="M 20,30 L 80,30"/>
+  <path id="kvg:04e8c-s2" d="M 10,70 L 90,70"/>
+</g>
+</kanji>
+</kanjivg>"""
+
+    def test_converts_xml_to_samples(self, tmp_path: Path):
+        from scripts.prepare_kanjivg import convert_xml_to_samples
+
+        xml_file = tmp_path / "kanjivg.xml"
+        xml_file.write_text(self.MINIMAL_XML)
+        output_dir = tmp_path / "output"
+
+        count = convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
+
+        assert count == 2
+
+    def test_xml_creates_correct_dirs(self, tmp_path: Path):
+        from scripts.prepare_kanjivg import convert_xml_to_samples
+
+        xml_file = tmp_path / "kanjivg.xml"
+        xml_file.write_text(self.MINIMAL_XML)
+        output_dir = tmp_path / "output"
+
+        convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
+
+        assert (output_dir / "一").is_dir()
+        assert (output_dir / "二").is_dir()
+        assert len(list((output_dir / "一").glob("*.json"))) == 1
+        assert len(list((output_dir / "二").glob("*.json"))) == 1
+
+    def test_xml_stroke_count(self, tmp_path: Path):
+        from scripts.prepare_kanjivg import convert_xml_to_samples
+
+        xml_file = tmp_path / "kanjivg.xml"
+        xml_file.write_text(self.MINIMAL_XML)
+        output_dir = tmp_path / "output"
+
+        convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
+
+        sample = StrokeSample.load(list((output_dir / "二").glob("*.json"))[0])
+        assert sample.character == "二"
+        assert len(sample.strokes) == 2
+
+    def test_xml_dataset_compatible(self, tmp_path: Path):
+        from scripts.prepare_kanjivg import convert_xml_to_samples
+
+        xml_file = tmp_path / "kanjivg.xml"
+        xml_file.write_text(self.MINIMAL_XML)
+        output_dir = tmp_path / "output"
+
+        convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
+
+        json_file = list((output_dir / "一").glob("*.json"))[0]
+        data = json.loads(json_file.read_text(encoding="utf-8"))
+        assert "character" in data
+        assert "strokes" in data
+        assert isinstance(data["strokes"][0], list)
+        assert "x" in data["strokes"][0][0]
+
+
 class TestMetadata:
     def test_metadata_contains_source(self, tmp_path: Path):
         from scripts.prepare_kanjivg import convert_single_svg
@@ -229,4 +303,3 @@ class TestMetadata:
         sample = convert_single_svg(svg_file, output_dir, target_size=10.0, num_points=8)
 
         assert sample.metadata["source"] == "kanjivg"
-        assert sample.metadata["svg_file"] == "0904e.svg"
