@@ -25,7 +25,9 @@ class TrainConfig:
 
 
 class Trainer:
-    def __init__(self, config: TrainConfig, data_dir: Path, output_dir: Path) -> None:
+    def __init__(
+        self, config: TrainConfig, data_dir: Path | list[Path], output_dir: Path
+    ) -> None:
         self.config = config
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)

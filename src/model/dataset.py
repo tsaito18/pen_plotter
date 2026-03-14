@@ -22,13 +22,17 @@ class StrokeDataset(Dataset):
                 い_0.json
     """
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path | list[Path]) -> None:
         self.samples: list[tuple[str, Path]] = []
-        data_dir = Path(data_dir)
-        for char_dir in sorted(data_dir.iterdir()):
-            if char_dir.is_dir():
-                for f in sorted(char_dir.glob("*.json")):
-                    self.samples.append((char_dir.name, f))
+        dirs = data_dir if isinstance(data_dir, list) else [data_dir]
+        for d in dirs:
+            d = Path(d)
+            if not d.is_dir():
+                continue
+            for char_dir in sorted(d.iterdir()):
+                if char_dir.is_dir():
+                    for f in sorted(char_dir.glob("*.json")):
+                        self.samples.append((char_dir.name, f))
 
     def __len__(self) -> int:
         return len(self.samples)

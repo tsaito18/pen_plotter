@@ -17,7 +17,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--data-dir",
         type=Path,
         default=Path("data/strokes"),
-        help="Directory containing stroke samples",
+        help="Directory containing stroke samples (KanjiVG)",
+    )
+    parser.add_argument(
+        "--user-dir",
+        type=Path,
+        default=Path("data/user_strokes"),
+        help="Directory containing user stroke samples",
     )
     parser.add_argument(
         "--output-dir",
@@ -37,15 +43,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> dict:
     args = parse_args(argv)
-    if not args.data_dir.exists():
-        print(f"Error: data directory not found: {args.data_dir}")
+    data_dirs = []
+    if args.data_dir.exists():
+        data_dirs.append(args.data_dir)
+    if args.user_dir.exists():
+        data_dirs.append(args.user_dir)
+    if not data_dirs:
+        print(f"Error: no data directories found ({args.data_dir}, {args.user_dir})")
         print("Run 'python3 scripts/prepare_kanjivg.py --download' first to get training data.")
         sys.exit(1)
-    json_files = list(args.data_dir.rglob("*.json"))
-    if not json_files:
-        print(f"Error: no stroke data found in {args.data_dir}")
-        print("Run 'python3 scripts/prepare_kanjivg.py --download' first to get training data.")
+    total_json = sum(len(list(d.rglob("*.json"))) for d in data_dirs)
+    if total_json == 0:
+        print("Error: no stroke data found in any data directory")
         sys.exit(1)
+    print(f"Data sources: {', '.join(str(d) for d in data_dirs)} ({total_json} files)")
     config = TrainConfig(
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -56,7 +67,7 @@ def main(argv: list[str] | None = None) -> dict:
         num_mixtures=args.num_mixtures,
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    trainer = Trainer(config=config, data_dir=args.data_dir, output_dir=args.output_dir)
+    trainer = Trainer(config=config, data_dir=data_dirs, output_dir=args.output_dir)
     result = trainer.train()
     print(f"Training complete. Final loss: {result['losses'][-1]:.4f}")
     print(f"Checkpoint saved to: {args.output_dir / 'checkpoint.pt'}")

@@ -16,8 +16,8 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data/strokes"),
-        help="保存先ディレクトリ (default: data/strokes)",
+        default=Path("data/user_strokes"),
+        help="保存先ディレクトリ (default: data/user_strokes)",
     )
     parser.add_argument("--port", type=int, default=8080, help="ポート番号 (default: 8080)")
     args = parser.parse_args()

@@ -9,6 +9,7 @@ build/
 
 # Data
 data/strokes/
+data/user_strokes/
 data/models/
 
 # G-code
