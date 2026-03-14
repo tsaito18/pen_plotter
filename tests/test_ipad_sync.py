@@ -5,7 +5,8 @@ import urllib.request
 
 import pytest
 
-from src.collector.ipad_sync import StrokeCollectorApp
+from src.collector.data_format import StrokePoint, StrokeSample
+from src.collector.ipad_sync import GUIDED_CHARS, StrokeCollectorApp
 
 
 class TestStrokeCollectorApp:
@@ -69,3 +70,71 @@ class TestStrokeCollectorApp:
         chars = app.list_saved_characters()
         assert "あ" in chars
         assert "い" in chars
+
+
+class TestGuidedCollection:
+    def _make_sample(self, char: str) -> StrokeSample:
+        return StrokeSample(
+            character=char,
+            strokes=[
+                [
+                    StrokePoint(x=0, y=0, pressure=1.0, timestamp=0),
+                    StrokePoint(x=1, y=1, pressure=1.0, timestamp=10),
+                ]
+            ],
+        )
+
+    def test_guided_chars_defined(self):
+        assert isinstance(GUIDED_CHARS, list)
+        assert len(GUIDED_CHARS) >= 200
+        assert "あ" in GUIDED_CHARS
+        assert "ア" in GUIDED_CHARS
+        assert "一" in GUIDED_CHARS
+        assert "0" in GUIDED_CHARS
+
+    def test_get_progress_empty(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        progress = app.get_progress()
+        assert progress["total"] == len(GUIDED_CHARS)
+        assert progress["completed"] == 0
+        assert progress["current_char"] == GUIDED_CHARS[0]
+        assert progress["current_index"] == 0
+        assert progress["samples_for_current"] == 0
+        assert progress["target_samples"] == 3
+
+    def test_get_progress_with_samples(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        sample = self._make_sample(GUIDED_CHARS[0])
+        app.save_stroke(sample)
+        progress = app.get_progress()
+        assert progress["samples_for_current"] == 1
+        assert progress["current_char"] == GUIDED_CHARS[0]
+        assert progress["completed"] == 0
+
+    def test_get_progress_char_completed(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        for _ in range(3):
+            sample = self._make_sample(GUIDED_CHARS[0])
+            app.save_stroke(sample)
+            time.sleep(0.001)
+        progress = app.get_progress()
+        assert progress["completed"] == 1
+        assert progress["current_char"] == GUIDED_CHARS[1]
+        assert progress["current_index"] == 1
+
+    def test_progress_endpoint(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        t = threading.Thread(target=app.serve, daemon=True)
+        t.start()
+        time.sleep(0.3)
+
+        url = f"http://127.0.0.1:{app.port}/api/progress"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        assert "total" in data
+        assert "completed" in data
+        assert "current_char" in data
+        assert "current_index" in data
+        assert "samples_for_current" in data
+        assert "target_samples" in data
+        assert data["current_char"] == GUIDED_CHARS[0]
