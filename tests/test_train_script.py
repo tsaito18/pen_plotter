@@ -115,7 +115,7 @@ class TestMain:
         assert "Checkpoint saved" in captured.out
 
     def test_main_missing_data_dir(self, tmp_path):
-        with pytest.raises(Exception):
+        with pytest.raises(SystemExit):
             main(
                 [
                     "--data-dir",

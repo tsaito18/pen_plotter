@@ -37,6 +37,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> dict:
     args = parse_args(argv)
+    if not args.data_dir.exists():
+        print(f"Error: data directory not found: {args.data_dir}")
+        print("Run 'python3 scripts/prepare_kanjivg.py --download' first to get training data.")
+        sys.exit(1)
+    json_files = list(args.data_dir.rglob("*.json"))
+    if not json_files:
+        print(f"Error: no stroke data found in {args.data_dir}")
+        print("Run 'python3 scripts/prepare_kanjivg.py --download' first to get training data.")
+        sys.exit(1)
     config = TrainConfig(
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -46,6 +55,7 @@ def main(argv: list[str] | None = None) -> dict:
         hidden_dim=args.hidden_dim,
         num_mixtures=args.num_mixtures,
     )
+    args.output_dir.mkdir(parents=True, exist_ok=True)
     trainer = Trainer(config=config, data_dir=args.data_dir, output_dir=args.output_dir)
     result = trainer.train()
     print(f"Training complete. Final loss: {result['losses'][-1]:.4f}")
