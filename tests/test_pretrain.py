@@ -7,7 +7,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from src.model.pretrain import PairedStrokeDataset, PretrainConfig, Pretrainer, collate_paired
+from src.model.pretrain import (
+    CASIAPairedDataset,
+    PairedStrokeDataset,
+    PretrainConfig,
+    Pretrainer,
+    collate_paired,
+)
 
 
 def _make_paired_data(
@@ -182,3 +188,100 @@ class TestPretrainer:
         assert "style_encoder_state_dict" in ckpt
         assert "char_encoder_state_dict" in ckpt
         assert "config" in ckpt
+
+
+def _make_pot_sample_v1(char: str, strokes: list[list[tuple[int, int]]]) -> bytes:
+    """V1形式の.potサンプルバイナリを生成するヘルパー。"""
+    import struct
+
+    tag = char.encode("gbk")
+    stroke_data = b""
+    for stroke in strokes:
+        for x, y in stroke:
+            stroke_data += struct.pack("<hh", x, y)
+        stroke_data += struct.pack("<hh", -1, 0)
+    stroke_data += struct.pack("<hh", -1, -1)
+    total = 4 + len(tag) + 2 + len(stroke_data)
+    return struct.pack("<I", total) + tag + struct.pack("<H", len(strokes)) + stroke_data
+
+
+def _make_ref_json(char: str) -> str:
+    """KanjiVG参照用JSONを生成するヘルパー。"""
+    stroke = [{"x": float(j) * 0.3, "y": float(j) * 0.7} for j in range(10)]
+    return json.dumps({"character": char, "strokes": [stroke], "metadata": {}})
+
+
+class TestCASIAPairedDataset:
+    def _create_pot_file(self, pot_dir: Path, chars_strokes: dict) -> Path:
+        """テスト用.potファイルを作成する。"""
+        pot_dir.mkdir(parents=True, exist_ok=True)
+        pot_path = pot_dir / "test.pot"
+        data = b""
+        for char, strokes in chars_strokes.items():
+            data += _make_pot_sample_v1(char, strokes)
+        pot_path.write_bytes(data)
+        return pot_path
+
+    def _create_ref_dir(self, ref_dir: Path, chars: list[str]) -> None:
+        """テスト用参照ディレクトリを作成する。"""
+        for ch in chars:
+            d = ref_dir / ch
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{ch}_0.json").write_text(_make_ref_json(ch), encoding="utf-8")
+
+    def test_creation(self, tmp_path):
+        pot_dir = tmp_path / "pot"
+        ref_dir = tmp_path / "ref"
+
+        sample_strokes = {
+            "\u5927": [[(100, 200), (150, 250), (200, 300)]],
+            "\u5c0f": [[(50, 50), (100, 100)]],
+        }
+        self._create_pot_file(pot_dir, sample_strokes)
+        self._create_ref_dir(ref_dir, ["\u5927", "\u5c0f"])
+
+        ds = CASIAPairedDataset(pot_dir, ref_dir)
+        assert len(ds) > 0
+
+    def test_getitem_format(self, tmp_path):
+        pot_dir = tmp_path / "pot"
+        ref_dir = tmp_path / "ref"
+
+        sample_strokes = {
+            "\u5927": [[(100, 200), (150, 250), (200, 300)]],
+        }
+        self._create_pot_file(pot_dir, sample_strokes)
+        self._create_ref_dir(ref_dir, ["\u5927"])
+
+        ds = CASIAPairedDataset(pot_dir, ref_dir)
+        item = ds[0]
+
+        assert "strokes" in item
+        assert "reference" in item
+        assert "character" in item
+        assert item["strokes"].ndim == 2
+        assert item["strokes"].shape[1] == 3
+        assert item["reference"].ndim == 2
+        assert item["reference"].shape[1] == 2
+        assert item["character"] == "\u5927"
+        assert (item["strokes"][:, 2] == 1.0).all()
+
+    def test_only_matched_chars(self, tmp_path):
+        """refに存在しない文字はデータセットから除外される。"""
+        pot_dir = tmp_path / "pot"
+        ref_dir = tmp_path / "ref"
+
+        sample_strokes = {
+            "\u5927": [[(100, 200), (150, 250)]],
+            "\u5c0f": [[(50, 50), (100, 100)]],
+            "\u4e2d": [[(10, 20), (30, 40)]],
+        }
+        self._create_pot_file(pot_dir, sample_strokes)
+        self._create_ref_dir(ref_dir, ["\u5927", "\u5c0f"])
+
+        ds = CASIAPairedDataset(pot_dir, ref_dir)
+        chars_in_dataset = {ds[i]["character"] for i in range(len(ds))}
+        assert "\u5927" in chars_in_dataset
+        assert "\u5c0f" in chars_in_dataset
+        assert "\u4e2d" not in chars_in_dataset
+        assert len(ds) == 2

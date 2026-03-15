@@ -24,6 +24,13 @@ KANJIVG_URL = (
     "https://github.com/KanjiVG/kanjivg/releases/download/r20240807/kanjivg-20240807.xml.gz"
 )
 
+_WINDOWS_FORBIDDEN = set(r'\/:*?"<>|')
+
+
+def _is_valid_filename_char(character: str) -> bool:
+    """Windowsファイルシステムで使用可能な文字かチェック。"""
+    return character not in _WINDOWS_FORBIDDEN
+
 
 def hex_filename_to_char(stem: str) -> str:
     """16進コードポイント文字列からUnicode文字に変換。"""
@@ -105,6 +112,10 @@ def convert_single_svg(
         logger.warning("16進コードポイントとして解析不可: %s", stem)
         return None
 
+    if not _is_valid_filename_char(character):
+        logger.debug("ファイル名に使用不可な文字をスキップ: U+%04X", ord(character))
+        return None
+
     parser = KanjiVGParser()
     raw_strokes = parser.parse_file(svg_path)
     normalized = parser.normalize(raw_strokes, target_size=target_size)
@@ -162,6 +173,9 @@ def convert_xml_to_samples(
         try:
             character = chr(int(match.group(1), 16))
         except (ValueError, OverflowError):
+            continue
+
+        if not _is_valid_filename_char(character):
             continue
 
         raw_strokes = []

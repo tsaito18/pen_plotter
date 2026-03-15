@@ -87,7 +87,8 @@ class TestSaveLoad:
         assert filepath.suffix == ".json"
 
     def test_load_samples_for_char(self, tmp_path: Path):
-        recorder = StrokeRecorder(output_dir=tmp_path)
+        out_dir = tmp_path / "test_strokes"
+        recorder = StrokeRecorder(output_dir=out_dir)
         for i in range(3):
             sample = StrokeSample(
                 character="い",

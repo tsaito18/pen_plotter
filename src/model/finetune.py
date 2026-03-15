@@ -15,6 +15,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 
 from src.model.char_encoder import CharEncoder
+from src.model.pretrain import _detect_device
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
 
@@ -103,10 +104,13 @@ class Finetuner:
         user_data_dir: Path,
         ref_dir: Path,
         output_dir: Path,
+        device: str | None = None,
+        num_workers: int = 0,
     ) -> None:
         self.config = config
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.device = _detect_device(device)
 
         checkpoint = torch.load(pretrain_checkpoint, weights_only=False, map_location="cpu")
         self.ckpt_config = checkpoint["config"]
@@ -126,6 +130,10 @@ class Finetuner:
         self.char_encoder = CharEncoder(char_dim=cfg["char_dim"])
         self.char_encoder.load_state_dict(checkpoint["char_encoder_state_dict"])
 
+        self.generator.to(self.device)
+        self.style_encoder.to(self.device)
+        self.char_encoder.to(self.device)
+
         for p in self.generator.parameters():
             p.requires_grad = False
         for p in self.char_encoder.parameters():
@@ -137,11 +145,14 @@ class Finetuner:
             batch_size=config.batch_size,
             shuffle=True,
             collate_fn=collate_finetune,
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
         )
 
         self.optimizer = torch.optim.Adam(self.style_encoder.parameters(), lr=config.learning_rate)
 
     def train(self) -> dict:
+        print(f"Device: {self.device}")
         history: dict[str, list[float]] = {"losses": []}
 
         self.generator.eval()
@@ -153,8 +164,8 @@ class Finetuner:
             n_batches = 0
 
             for batch in self.dataloader:
-                strokes = batch["strokes"]
-                ref_strokes = batch["ref_strokes"]
+                strokes = batch["strokes"].to(self.device)
+                ref_strokes = batch["ref_strokes"].to(self.device)
 
                 style = self.style_encoder(strokes)
 
@@ -186,11 +197,18 @@ class Finetuner:
             avg_loss = epoch_loss / max(n_batches, 1)
             history["losses"].append(avg_loss)
 
+        cpu = torch.device("cpu")
         torch.save(
             {
-                "generator_state_dict": self.generator.state_dict(),
-                "style_encoder_state_dict": self.style_encoder.state_dict(),
-                "char_encoder_state_dict": self.char_encoder.state_dict(),
+                "generator_state_dict": {
+                    k: v.to(cpu) for k, v in self.generator.state_dict().items()
+                },
+                "style_encoder_state_dict": {
+                    k: v.to(cpu) for k, v in self.style_encoder.state_dict().items()
+                },
+                "char_encoder_state_dict": {
+                    k: v.to(cpu) for k, v in self.char_encoder.state_dict().items()
+                },
                 "config": self.ckpt_config,
             },
             self.output_dir / "finetuned.pt",

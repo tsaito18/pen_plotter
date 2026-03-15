@@ -55,7 +55,7 @@ class TestKanjiVGParser:
 
     def test_parse_svg_file(self, tmp_path):
         svg_file = tmp_path / "test.svg"
-        svg_file.write_text(SAMPLE_SVG)
+        svg_file.write_text(SAMPLE_SVG, encoding="utf-8")
         parser = KanjiVGParser()
         strokes = parser.parse_file(svg_file)
         assert len(strokes) == 2

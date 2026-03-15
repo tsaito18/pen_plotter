@@ -23,37 +23,70 @@ class CASIAParser:
     """CASIA-OLHWDB .pot 形式のバイナリファイルを解析する。"""
 
     def parse_pot_file(self, path: Path) -> list[CASIASample]:
-        """Parse a single .pot file, returning all character samples."""
+        """Parse a single .pot file, returning all character samples.
+
+        Supports two header variants:
+        - V1 (legacy/test): 4-byte sample_size + 2-byte GBK tag + 2-byte stroke_count
+        - V2 (OLHWDB 1.x):  2-byte sample_size + 2-byte GBK tag (swapped) + 2-byte padding + 2-byte stroke_count
+        """
         data = path.read_bytes()
         samples: list[CASIASample] = []
         offset = 0
 
+        fmt = self._detect_format(data)
+
         while offset < len(data):
-            if offset + 4 > len(data):
+            if offset + 8 > len(data):
                 break
 
-            sample_size = struct.unpack_from("<I", data, offset)[0]
+            if fmt == "v2":
+                sample_size = struct.unpack_from("<H", data, offset)[0]
+            else:
+                sample_size = struct.unpack_from("<I", data, offset)[0]
+
             if sample_size < 8 or offset + sample_size > len(data):
                 break
 
             sample_data = data[offset : offset + sample_size]
             offset += sample_size
 
-            sample = self._parse_sample(sample_data)
+            sample = self._parse_sample(sample_data, fmt)
             if sample is not None:
                 samples.append(sample)
 
         return samples
 
-    def _parse_sample(self, data: bytes) -> CASIASample | None:
-        pos = 4
-        tag_bytes = data[pos : pos + 2]
-        pos += 2
+    @staticmethod
+    def _detect_format(data: bytes) -> str:
+        """ヘッダー形式を自動検出する。"""
+        if len(data) < 8:
+            return "v1"
+        size_2b = struct.unpack_from("<H", data, 0)[0]
+        size_4b = struct.unpack_from("<I", data, 0)[0]
+        if 8 <= size_2b <= len(data) and (size_4b > len(data) or size_4b < 8):
+            return "v2"
+        return "v1"
 
-        try:
-            character = tag_bytes.decode("gbk")
-        except (UnicodeDecodeError, ValueError):
-            return None
+    def _parse_sample(self, data: bytes, fmt: str = "v1") -> CASIASample | None:
+        if fmt == "v2":
+            pos = 2
+            b0, b1 = data[pos], data[pos + 1]
+            pos += 4  # skip tag (2) + padding (2)
+            if b0 == 0x00:
+                character = chr(b1)
+            else:
+                try:
+                    character = bytes([b1, b0]).decode("gbk")
+                except (UnicodeDecodeError, ValueError):
+                    return None
+        else:
+            pos = 4
+            tag_bytes = data[pos : pos + 2]
+            pos += 2
+            try:
+                character = tag_bytes.decode("gbk")
+            except (UnicodeDecodeError, ValueError):
+                return None
 
         stroke_number = struct.unpack_from("<H", data, pos)[0]
         pos += 2
@@ -95,12 +128,15 @@ class CASIAParser:
             result.append(normalized)
         return result
 
+    _WINDOWS_FORBIDDEN = set(r'\/:*?"<>|')
+
     @staticmethod
     def convert_to_stroke_samples(
         samples: list[CASIASample],
         output_dir: Path,
         target_size: float = 10.0,
         num_points: int = 32,
+        char_counters: dict[str, int] | None = None,
     ) -> int:
         """Convert CASIA samples to StrokeSample JSON files compatible with StrokeDataset.
 
@@ -109,11 +145,15 @@ class CASIAParser:
         parser = CASIAParser()
         recorder = StrokeRecorder(target_size=target_size, output_dir=output_dir)
 
-        char_counters: dict[str, int] = {}
+        if char_counters is None:
+            char_counters = {}
         count = 0
 
         for sample in samples:
             char = sample.character
+            if char in CASIAParser._WINDOWS_FORBIDDEN:
+                continue
+
             normalized = parser.normalize(sample.strokes, target_size=target_size)
 
             stroke_point_lists: list[list[StrokePoint]] = []

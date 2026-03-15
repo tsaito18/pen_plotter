@@ -39,6 +39,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--char-dim", type=int, default=128)
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--num-mixtures", type=int, default=5)
+    parser.add_argument(
+        "--pot-dir",
+        type=Path,
+        default=None,
+        help="Directory containing CASIA .pot files (alternative to --hand-dir)",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=0,
+        help="Max CASIA samples to load (0=all)",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device to use (cpu/cuda/xpu). Auto-detect if not specified.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="DataLoader worker processes (0=main process)",
+    )
     return parser.parse_args(argv)
 
 
@@ -47,24 +71,34 @@ def main(argv: list[str] | None = None) -> dict:
 
     hand_dir = args.hand_dir
     ref_dir = args.ref_dir
+    pot_dir = args.pot_dir
 
-    if not hand_dir.exists():
-        print(f"Error: hand directory not found: {hand_dir}")
-        sys.exit(1)
+    if pot_dir is not None:
+        if not pot_dir.exists():
+            print(f"Error: pot directory not found: {pot_dir}")
+            sys.exit(1)
+        pot_files = list(pot_dir.glob("*.pot"))
+        if len(pot_files) == 0:
+            print(f"Error: no .pot files found in {pot_dir}")
+            sys.exit(1)
+        print(f"CASIA data: {pot_dir} ({len(pot_files)} .pot files)")
+    else:
+        if not hand_dir.exists():
+            print(f"Error: hand directory not found: {hand_dir}")
+            sys.exit(1)
+        hand_json = len(list(hand_dir.rglob("*.json")))
+        if hand_json == 0:
+            print(f"Error: no stroke data found in {hand_dir}")
+            sys.exit(1)
+        print(f"Hand data: {hand_dir} ({hand_json} files)")
+
     if not ref_dir.exists():
         print(f"Error: reference directory not found: {ref_dir}")
         sys.exit(1)
-
-    hand_json = len(list(hand_dir.rglob("*.json")))
     ref_json = len(list(ref_dir.rglob("*.json")))
-    if hand_json == 0:
-        print(f"Error: no stroke data found in {hand_dir}")
-        sys.exit(1)
     if ref_json == 0:
         print(f"Error: no reference data found in {ref_dir}")
         sys.exit(1)
-
-    print(f"Hand data: {hand_dir} ({hand_json} files)")
     print(f"Reference data: {ref_dir} ({ref_json} files)")
 
     config = PretrainConfig(
@@ -84,6 +118,10 @@ def main(argv: list[str] | None = None) -> dict:
         hand_dir=hand_dir,
         ref_dir=ref_dir,
         output_dir=args.output_dir,
+        device=args.device,
+        pot_dir=pot_dir,
+        max_samples=args.max_samples,
+        num_workers=args.num_workers,
     )
     result = pretrainer.train()
     print(f"Pre-training complete. Final loss: {result['losses'][-1]:.4f}")

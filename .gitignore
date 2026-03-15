@@ -23,3 +23,4 @@ data/models/
 .vscode/
 *.swp
 *.swo
+data/casia_raw/

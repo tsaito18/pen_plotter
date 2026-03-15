@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 
+from src.collector.casia_parser import CASIAParser
 from src.model.char_encoder import CharEncoder
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
@@ -87,6 +89,88 @@ class PairedStrokeDataset(Dataset):
         }
 
 
+class CASIAPairedDataset(Dataset):
+    """CASIA .pot バイナリから直接読み込み、KanjiVG参照とペアリングする。
+
+    大量のJSONファイル生成を回避し、.potファイルをメモリ上で展開して使用する。
+    """
+
+    def __init__(
+        self,
+        pot_dir: Path,
+        ref_dir: Path,
+        target_size: float = 10.0,
+        num_points: int = 0,
+        max_samples: int = 0,
+    ) -> None:
+        self.target_size = target_size
+        self.num_points = num_points
+        parser = CASIAParser()
+
+        ref_dir = Path(ref_dir)
+        ref_files: dict[str, Path] = {}
+        if ref_dir.is_dir():
+            for d in ref_dir.iterdir():
+                if d.is_dir():
+                    files = sorted(d.glob("*.json"))
+                    if files:
+                        ref_files[d.name] = files[0]
+
+        pot_dir = Path(pot_dir)
+        pot_files = sorted(pot_dir.glob("*.pot"))
+        n_files = len(pot_files)
+        print(f"Loading .pot files from {pot_dir}...")
+
+        self.samples: list[tuple[str, list[np.ndarray], Path]] = []
+        char_set: set[str] = set()
+
+        for pot_file in pot_files:
+            casia_samples = parser.parse_pot_file(pot_file)
+            for sample in casia_samples:
+                ch = sample.character
+                if ch not in ref_files:
+                    continue
+                normalized = parser.normalize(sample.strokes, target_size=target_size)
+                if not normalized:
+                    continue
+                self.samples.append((ch, normalized, ref_files[ch]))
+                char_set.add(ch)
+                if 0 < max_samples <= len(self.samples):
+                    break
+            if 0 < max_samples <= len(self.samples):
+                break
+
+        print(
+            f"Loaded {len(self.samples)} samples "
+            f"({len(char_set)} characters) from {n_files} .pot files"
+        )
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> dict:
+        character, normalized_strokes, ref_path = self.samples[idx]
+
+        points = []
+        for stroke_arr in normalized_strokes:
+            for pt in stroke_arr:
+                points.append([float(pt[0]), float(pt[1]), 1.0])
+        strokes_tensor = torch.tensor(points, dtype=torch.float32)
+
+        ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
+        ref_points = []
+        for stroke in ref_data["strokes"]:
+            for pt in stroke:
+                ref_points.append([pt["x"], pt["y"]])
+        reference_tensor = torch.tensor(ref_points, dtype=torch.float32)
+
+        return {
+            "strokes": strokes_tensor,
+            "reference": reference_tensor,
+            "character": character,
+        }
+
+
 def collate_paired(batch: list[dict]) -> dict:
     """PairedStrokeDataset の可変長シーケンスをパディングしてバッチ化する。"""
     strokes = [item["strokes"] for item in batch]
@@ -105,6 +189,17 @@ def collate_paired(batch: list[dict]) -> dict:
     }
 
 
+def _detect_device(device: str | None = None) -> torch.device:
+    """利用可能なアクセラレータを自動検出する。明示指定時はそれを使用。"""
+    if device is not None:
+        return torch.device(device)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return torch.device("xpu")
+    return torch.device("cpu")
+
+
 class Pretrainer:
     """CharEncoder + StyleEncoder + StrokeGenerator を同時に事前学習する。"""
 
@@ -114,27 +209,37 @@ class Pretrainer:
         hand_dir: Path | list[Path],
         ref_dir: Path,
         output_dir: Path,
+        device: str | None = None,
+        pot_dir: Path | None = None,
+        max_samples: int = 0,
+        num_workers: int = 0,
     ) -> None:
         self.config = config
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.device = _detect_device(device)
 
-        self.dataset = PairedStrokeDataset(hand_dir, ref_dir)
+        if pot_dir is not None:
+            self.dataset = CASIAPairedDataset(pot_dir, ref_dir, max_samples=max_samples)
+        else:
+            self.dataset = PairedStrokeDataset(hand_dir, ref_dir)
         self.dataloader = DataLoader(
             self.dataset,
             batch_size=config.batch_size,
             shuffle=True,
             collate_fn=collate_paired,
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
         )
 
-        self.char_encoder = CharEncoder(char_dim=config.char_dim)
-        self.style_encoder = StyleEncoder(style_dim=config.style_dim)
+        self.char_encoder = CharEncoder(char_dim=config.char_dim).to(self.device)
+        self.style_encoder = StyleEncoder(style_dim=config.style_dim).to(self.device)
         self.generator = StrokeGenerator(
             style_dim=config.style_dim,
             char_dim=config.char_dim,
             hidden_dim=config.hidden_dim,
             num_mixtures=config.num_mixtures,
-        )
+        ).to(self.device)
 
         all_params = (
             list(self.char_encoder.parameters())
@@ -145,6 +250,7 @@ class Pretrainer:
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
 
     def train(self) -> dict:
+        print(f"Device: {self.device}")
         history: dict[str, list[float]] = {"losses": []}
         total_batches = len(self.dataloader)
 
@@ -153,8 +259,8 @@ class Pretrainer:
             n_batches = 0
 
             for batch_idx, batch in enumerate(self.dataloader):
-                strokes = batch["strokes"]
-                reference = batch["reference"]
+                strokes = batch["strokes"].to(self.device)
+                reference = batch["reference"].to(self.device)
 
                 char_embedding = self.char_encoder(reference)
                 style_vector = self.style_encoder(strokes)
@@ -196,12 +302,19 @@ class Pretrainer:
             self.scheduler.step()
             print(f"\r  Epoch {epoch + 1}/{self.config.epochs} — avg loss: {avg_loss:.4f}")
 
+        cpu = torch.device("cpu")
         torch.save(
             {
-                "generator_state_dict": self.generator.state_dict(),
-                "style_encoder_state_dict": self.style_encoder.state_dict(),
-                "char_encoder_state_dict": self.char_encoder.state_dict(),
-                "config": self.config,
+                "generator_state_dict": {
+                    k: v.to(cpu) for k, v in self.generator.state_dict().items()
+                },
+                "style_encoder_state_dict": {
+                    k: v.to(cpu) for k, v in self.style_encoder.state_dict().items()
+                },
+                "char_encoder_state_dict": {
+                    k: v.to(cpu) for k, v in self.char_encoder.state_dict().items()
+                },
+                "config": asdict(self.config),
             },
             self.output_dir / "pretrain_checkpoint.pt",
         )

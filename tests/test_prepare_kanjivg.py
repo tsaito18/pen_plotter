@@ -46,7 +46,7 @@ class TestConvertSingleSvg:
         from scripts.prepare_kanjivg import convert_single_svg
 
         svg_file = tmp_path / "0904e.svg"
-        svg_file.write_text(MINIMAL_SVG)
+        svg_file.write_text(MINIMAL_SVG, encoding="utf-8")
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
@@ -60,7 +60,7 @@ class TestConvertSingleSvg:
         from scripts.prepare_kanjivg import convert_single_svg
 
         svg_file = tmp_path / "0904e.svg"
-        svg_file.write_text(MINIMAL_SVG)
+        svg_file.write_text(MINIMAL_SVG, encoding="utf-8")
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
@@ -76,7 +76,7 @@ class TestConvertSingleSvg:
         from scripts.prepare_kanjivg import convert_single_svg
 
         svg_file = tmp_path / "0904e.svg"
-        svg_file.write_text(MINIMAL_SVG)
+        svg_file.write_text(MINIMAL_SVG, encoding="utf-8")
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
@@ -89,7 +89,7 @@ class TestConvertSingleSvg:
         from scripts.prepare_kanjivg import convert_single_svg
 
         svg_file = tmp_path / "0904e.svg"
-        svg_file.write_text(MINIMAL_SVG)
+        svg_file.write_text(MINIMAL_SVG, encoding="utf-8")
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
@@ -107,7 +107,7 @@ class TestConvertSingleSvg:
         from scripts.prepare_kanjivg import convert_single_svg
 
         svg_file = tmp_path / "0904e.svg"
-        svg_file.write_text(MINIMAL_SVG)
+        svg_file.write_text(MINIMAL_SVG, encoding="utf-8")
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
@@ -125,7 +125,7 @@ class TestConvertSingleSvg:
         from scripts.prepare_kanjivg import convert_single_svg
 
         svg_file = tmp_path / "not_hex.svg"
-        svg_file.write_text(MINIMAL_SVG)
+        svg_file.write_text(MINIMAL_SVG, encoding="utf-8")
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
@@ -136,7 +136,7 @@ class TestConvertSingleSvg:
 class TestBatchConversion:
     def _create_svg(self, directory: Path, hex_name: str) -> Path:
         svg_file = directory / f"{hex_name}.svg"
-        svg_file.write_text(MINIMAL_SVG)
+        svg_file.write_text(MINIMAL_SVG, encoding="utf-8")
         return svg_file
 
     def test_converts_multiple_files(self, tmp_path: Path):
@@ -240,7 +240,7 @@ class TestConvertXml:
         from scripts.prepare_kanjivg import convert_xml_to_samples
 
         xml_file = tmp_path / "kanjivg.xml"
-        xml_file.write_text(self.MINIMAL_XML)
+        xml_file.write_text(self.MINIMAL_XML, encoding="utf-8")
         output_dir = tmp_path / "output"
 
         count = convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
@@ -251,7 +251,7 @@ class TestConvertXml:
         from scripts.prepare_kanjivg import convert_xml_to_samples
 
         xml_file = tmp_path / "kanjivg.xml"
-        xml_file.write_text(self.MINIMAL_XML)
+        xml_file.write_text(self.MINIMAL_XML, encoding="utf-8")
         output_dir = tmp_path / "output"
 
         convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
@@ -265,7 +265,7 @@ class TestConvertXml:
         from scripts.prepare_kanjivg import convert_xml_to_samples
 
         xml_file = tmp_path / "kanjivg.xml"
-        xml_file.write_text(self.MINIMAL_XML)
+        xml_file.write_text(self.MINIMAL_XML, encoding="utf-8")
         output_dir = tmp_path / "output"
 
         convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
@@ -278,7 +278,7 @@ class TestConvertXml:
         from scripts.prepare_kanjivg import convert_xml_to_samples
 
         xml_file = tmp_path / "kanjivg.xml"
-        xml_file.write_text(self.MINIMAL_XML)
+        xml_file.write_text(self.MINIMAL_XML, encoding="utf-8")
         output_dir = tmp_path / "output"
 
         convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
@@ -296,7 +296,7 @@ class TestMetadata:
         from scripts.prepare_kanjivg import convert_single_svg
 
         svg_file = tmp_path / "0904e.svg"
-        svg_file.write_text(MINIMAL_SVG)
+        svg_file.write_text(MINIMAL_SVG, encoding="utf-8")
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 

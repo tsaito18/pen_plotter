@@ -120,6 +120,8 @@ class TestMain:
                 [
                     "--data-dir",
                     str(tmp_path / "nonexistent"),
+                    "--user-dir",
+                    str(tmp_path / "also_nonexistent"),
                     "--output-dir",
                     str(tmp_path / "output"),
                     "--epochs",

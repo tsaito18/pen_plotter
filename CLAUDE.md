@@ -96,7 +96,7 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - Phase 5 完了: サンプル収集基盤（データ形式・KanjiVGパーサー・iPad Web UI・ストローク正規化）
 - Phase 6 完了: MLモデル（スタイルエンコーダ・LSTM+MDN・訓練・推論）
 - Phase 7 部分完了: パイプライン統合（テキスト→G-code→プレビュー）、仮ストローク描画
-- 160テスト全パス
+- 265テスト全パス
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -118,13 +118,16 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 ### 手書き生成V2 方針
 - レポート提出に使える「バレない」品質が目標
 - CASIA-OLHWDB（160万サンプル）で事前訓練 → ユーザー20-30字でファインチューニング
-- Step A-G 全実装完了、GPU(XPU)対応とCASIAデータ取得が次課題
+- Step A-G 全実装完了、GPU(XPU)対応完了、CASIAデータ取得・.pot直接読み込み対応完了
 - WSLでIntel GPU未認識 → WindowsネイティブでPyTorch XPU版を使用（XPU: True確認済み）
-- pretrain.py にデバイス（CPU/XPU）指定の仕組みが未実装
+- pretrain.py/finetune.py にデバイス自動検出・--device指定を実装済み
 
-### 全体進捗（2026-03-14時点）
-- 259テスト全パス
+### 全体進捗（2026-03-15時点）
+- 265テスト全パス
 - KanjiVG 6,699文字変換済み
 - 3段階フォールバック（ML推論→KanjiVG→矩形）動作
 - ガイド付きストローク収集UI（292文字セット）実装済み
 - ユーザーサンプルは data/user_strokes/ に保存（KanjiVGデータと分離）
+- CASIA-OLHWDB .pot 直接読み込み対応（JSON中間変換不要）
+- GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
+- CASIA Pot1.0/1.1/1.2 Train/Test データ取得済み（data/casia_raw/）

@@ -41,6 +41,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=5e-4)
     parser.add_argument("--grad-clip-norm", type=float, default=5.0)
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device to use (cpu/cuda/xpu). Auto-detect if not specified.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="DataLoader worker processes (0=main process)",
+    )
     return parser.parse_args(argv)
 
 
@@ -81,6 +93,8 @@ def main(argv: list[str] | None = None) -> dict:
         user_data_dir=args.user_dir,
         ref_dir=args.ref_dir,
         output_dir=args.output_dir,
+        device=args.device,
+        num_workers=args.num_workers,
     )
 
     result = finetuner.train()
