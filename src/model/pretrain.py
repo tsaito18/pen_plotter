@@ -213,6 +213,7 @@ class Pretrainer:
         pot_dir: Path | None = None,
         max_samples: int = 0,
         num_workers: int = 0,
+        amp: bool = False,
     ) -> None:
         self.config = config
         self.output_dir = Path(output_dir)
@@ -249,8 +250,14 @@ class Pretrainer:
         self.optimizer = torch.optim.Adam(all_params, lr=config.learning_rate)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
 
+        self.amp = amp
+        if amp:
+            self.scaler = torch.amp.GradScaler(self.device.type)
+        else:
+            self.scaler = None
+
     def train(self) -> dict:
-        print(f"Device: {self.device}")
+        print(f"Device: {self.device}" + (" (AMP)" if self.amp else ""))
         history: dict[str, list[float]] = {"losses": []}
         total_batches = len(self.dataloader)
 
@@ -262,29 +269,37 @@ class Pretrainer:
                 strokes = batch["strokes"].to(self.device)
                 reference = batch["reference"].to(self.device)
 
-                char_embedding = self.char_encoder(reference)
-                style_vector = self.style_encoder(strokes)
+                with torch.amp.autocast(self.device.type, enabled=self.amp):
+                    char_embedding = self.char_encoder(reference)
+                    style_vector = self.style_encoder(strokes)
 
-                x = strokes[:, :-1]
-                target = strokes[:, 1:]
+                    x = strokes[:, :-1]
+                    target = strokes[:, 1:]
 
-                output = self.generator(x, style_vector, char_embedding)
+                    output = self.generator(x, style_vector, char_embedding)
 
-                min_len = min(output["pi"].shape[1], target.shape[1])
-                trimmed_output = {k: v[:, :min_len] for k, v in output.items()}
-                trimmed_target = target[:, :min_len]
+                    min_len = min(output["pi"].shape[1], target.shape[1])
+                    trimmed_output = {k: v[:, :min_len] for k, v in output.items()}
+                    trimmed_target = target[:, :min_len]
 
-                loss = mdn_loss(trimmed_output, trimmed_target)
+                    loss = mdn_loss(trimmed_output, trimmed_target)
 
                 self.optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(
+                all_params = (
                     list(self.char_encoder.parameters())
                     + list(self.style_encoder.parameters())
-                    + list(self.generator.parameters()),
-                    self.config.grad_clip_norm,
+                    + list(self.generator.parameters())
                 )
-                self.optimizer.step()
+                if self.scaler is not None:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(all_params, self.config.grad_clip_norm)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(all_params, self.config.grad_clip_norm)
+                    self.optimizer.step()
 
                 epoch_loss += loss.item()
                 n_batches += 1

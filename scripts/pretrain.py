@@ -63,6 +63,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0,
         help="DataLoader worker processes (0=main process)",
     )
+    parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="Enable mixed precision training",
+    )
     return parser.parse_args(argv)
 
 
@@ -122,6 +127,7 @@ def main(argv: list[str] | None = None) -> dict:
         pot_dir=pot_dir,
         max_samples=args.max_samples,
         num_workers=args.num_workers,
+        amp=args.amp,
     )
     result = pretrainer.train()
     print(f"Pre-training complete. Final loss: {result['losses'][-1]:.4f}")

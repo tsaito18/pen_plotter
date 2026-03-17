@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.stdout.reconfigure(encoding="utf-8")
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -100,7 +101,6 @@ def plot_strokes(ax: plt.Axes, strokes: list[np.ndarray], title: str) -> None:
 
     ax.set_aspect("equal")
     ax.set_title(title)
-    ax.invert_yaxis()
     ax.grid(True, alpha=0.2)
 
 
