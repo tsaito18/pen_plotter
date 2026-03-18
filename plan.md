@@ -294,8 +294,8 @@ pen_plotter/
 - [x] `src/ui/web_app.py` — Gradio Web UI（テキスト入力、プレビュー、印刷ボタン）
 - [x] 3段階フォールバック（ML推論→KanjiVG→矩形）
 - [x] V2パイプライン（CharEncoder+文字条件付き推論）統合
-- [ ] GPU(XPU)デバイス対応（pretrain.py/finetune.pyに--device引数追加）
-- [ ] CASIA-OLHWDBデータ取得・事前訓練の実行
+- [x] GPU(XPU)デバイス対応（pretrain.py/finetune.pyに--device引数実装済み、CUDA/XPU/CPU自動検出）
+- [ ] CASIA-OLHWDBデータ取得・事前訓練の実行（100kサンプル, 30エポック, num_mixtures=20で訓練中）
 - [ ] パイプライン統合テスト（実データでのエンドツーエンド）
 - [ ] 全体の品質調整（文字サイズ、間隔、速度）
 
@@ -340,11 +340,17 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - [x] G. パイプライン統合V2 (`inference.py` V1/V2自動検出 + `web_app.py`) — 9テスト
 
 ### 次のアクション
-1. **GPU対応**: pretrain.py/finetune.py に `--device xpu` オプション追加（WindowsネイティブでXPU確認済み）
-2. **CASIA取得**: 学術登録→手動ダウンロード→casia_parser.pyで変換
-3. **事前訓練実行**: GPU環境で50エポック
-4. **ユーザーサンプル収集**: collect_strokes.py（20-30文字）
-5. **ファインチューニング → プレビュー確認**
+1. ~~GPU対応~~ ✅ 完了
+2. ~~CASIA取得~~ ✅ 完了 (train 816 .pot files, test 204 .pot files)
+3. **事前訓練実行** → 実行中 (v3: delta coords + normalization + pen_state重み付け + 20 mixtures)
+4. **ユーザーサンプル収集**: collect_strokes.py（20-30文字）→ 次のステップ
+5. **ファインチューニング → プレビュー確認** → 未着手
+
+### V2 主要バグ修正履歴
+- 絶対座標→相対座標(delta)変換（Graves方式）
+- ストローク境界のpen_stateエンコード
+- mean=0, std=1正規化（チェックポイントにstats保存）
+- num_mixtures 5→20、log_softmax、rhoクランプ、pen BCE pos_weight
 
 ### GPU環境情報
 - Intel Core Ultra 7 258V (Lunar Lake) — Intel Arc 統合GPU

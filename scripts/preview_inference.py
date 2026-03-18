@@ -104,8 +104,24 @@ def plot_strokes(ax: plt.Axes, strokes: list[np.ndarray], title: str) -> None:
     ax.grid(True, alpha=0.2)
 
 
+def _configure_cjk_font() -> None:
+    """CJK対応フォントが利用可能であればmatplotlibに設定する。"""
+    import matplotlib.font_manager as fm
+
+    cjk_candidates = ["Noto Sans CJK JP", "Noto Serif CJK JP", "IPAexGothic", "TakaoPGothic"]
+    available = {f.name for f in fm.fontManager.ttflist}
+    for name in cjk_candidates:
+        if name in available:
+            plt.rcParams["font.family"] = name
+            return
+    import warnings
+
+    warnings.warn("No CJK font found — Japanese characters may not render correctly", stacklevel=2)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    _configure_cjk_font()
 
     if not args.checkpoint.exists():
         print(f"Error: checkpoint not found: {args.checkpoint}")

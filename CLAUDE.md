@@ -96,7 +96,7 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - Phase 5 完了: サンプル収集基盤（データ形式・KanjiVGパーサー・iPad Web UI・ストローク正規化）
 - Phase 6 完了: MLモデル（スタイルエンコーダ・LSTM+MDN・訓練・推論）
 - Phase 7 部分完了: パイプライン統合（テキスト→G-code→プレビュー）、仮ストローク描画
-- 265テスト全パス
+- 297テスト全パス
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -122,8 +122,8 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - WSLでIntel GPU未認識 → WindowsネイティブでPyTorch XPU版を使用（XPU: True確認済み）
 - pretrain.py/finetune.py にデバイス自動検出・--device指定を実装済み
 
-### 全体進捗（2026-03-15時点）
-- 265テスト全パス
+### 全体進捗（2026-03-18時点）
+- 297テスト全パス
 - KanjiVG 6,699文字変換済み
 - 3段階フォールバック（ML推論→KanjiVG→矩形）動作
 - ガイド付きストローク収集UI（292文字セット）実装済み
@@ -131,3 +131,5 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - CASIA-OLHWDB .pot 直接読み込み対応（JSON中間変換不要）
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 - CASIA Pot1.0/1.1/1.2 Train/Test データ取得済み（data/casia_raw/）
+- CASIA事前訓練実行中（v3: delta coords, normalization, pen_state重み付け, 20 mixtures）
+- 訓練サーバー: homesrv (i5-9600K, GTX 1050 Ti, 16GB RAM, Ubuntu) — mise + uv でパッケージ管理
