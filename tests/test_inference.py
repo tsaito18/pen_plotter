@@ -61,6 +61,10 @@ class TestStrokeInference:
             assert stroke.ndim == 2
             assert stroke.shape[1] == 2  # (x, y)
 
+    def test_no_norm_stats_for_v1(self, inference_engine):
+        """V1 checkpoint has no norm_stats."""
+        assert inference_engine.norm_stats is None
+
 
 class TestStrokeInferenceV2:
     """V2チェックポイント（CharEncoder付き）のテスト。"""
@@ -156,4 +160,110 @@ class TestStrokeInferenceV2:
             num_steps=10,
         )
         assert isinstance(strokes, list)
+        assert len(strokes) > 0
+
+
+class TestStrokeInferenceNormStats:
+    """norm_stats付きチェックポイントのテスト。"""
+
+    @pytest.fixture
+    def norm_stats(self):
+        return {
+            "mean_x": 0.5,
+            "mean_y": -0.3,
+            "std_x": 2.0,
+            "std_y": 1.5,
+        }
+
+    @pytest.fixture
+    def engine_with_norm(self, tmp_path, norm_stats):
+        generator = StrokeGenerator(input_dim=3, hidden_dim=64, style_dim=128, num_mixtures=3)
+        style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=128)
+        checkpoint = {
+            "generator_state_dict": generator.state_dict(),
+            "style_encoder_state_dict": style_enc.state_dict(),
+            "norm_stats": norm_stats,
+        }
+        ckpt_path = tmp_path / "model_norm.pt"
+        torch.save(checkpoint, ckpt_path)
+        return StrokeInference(
+            checkpoint_path=ckpt_path,
+            generator_kwargs={
+                "input_dim": 3,
+                "hidden_dim": 64,
+                "style_dim": 128,
+                "num_mixtures": 3,
+            },
+            style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 128},
+        )
+
+    def test_norm_stats_loaded(self, engine_with_norm, norm_stats):
+        """norm_stats がチェックポイントから正しく読み込まれる。"""
+        assert engine_with_norm.norm_stats is not None
+        assert engine_with_norm.norm_stats["mean_x"] == norm_stats["mean_x"]
+        assert engine_with_norm.norm_stats["std_x"] == norm_stats["std_x"]
+
+    def test_generate_with_norm_stats(self, engine_with_norm):
+        """norm_stats付きでも生成が正常に動作する。"""
+        style_sample = torch.randn(1, 15, 3)
+        strokes = engine_with_norm.generate(style_sample=style_sample, num_steps=20)
+        assert isinstance(strokes, list)
+        assert len(strokes) > 0
+        for s in strokes:
+            assert isinstance(s, np.ndarray)
+            assert s.ndim == 2
+            assert s.shape[1] == 2
+
+    def test_output_coordinates_reasonable_range(self, engine_with_norm):
+        """出力座標が発散していないことを確認。"""
+        style_sample = torch.randn(1, 15, 3)
+        torch.manual_seed(123)
+        strokes = engine_with_norm.generate(
+            style_sample=style_sample, num_steps=50, temperature=0.5
+        )
+        for s in strokes:
+            assert np.all(np.isfinite(s)), "Output contains non-finite values"
+            assert np.all(np.abs(s) < 1000), (
+                f"Output coordinates too large: max={np.abs(s).max()}"
+            )
+
+    def test_v2_with_norm_stats(self, tmp_path, norm_stats):
+        """V2チェックポイント + norm_stats の組み合わせが動作する。"""
+        char_dim = 64
+        generator = StrokeGenerator(
+            input_dim=3, hidden_dim=64, style_dim=128, char_dim=char_dim, num_mixtures=3
+        )
+        style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=128)
+        char_enc = CharEncoder(input_dim=2, hidden_dim=32, char_dim=char_dim, num_layers=1)
+        checkpoint = {
+            "generator_state_dict": generator.state_dict(),
+            "style_encoder_state_dict": style_enc.state_dict(),
+            "char_encoder_state_dict": char_enc.state_dict(),
+            "char_dim": char_dim,
+            "norm_stats": norm_stats,
+        }
+        ckpt_path = tmp_path / "v2_norm.pt"
+        torch.save(checkpoint, ckpt_path)
+
+        engine = StrokeInference(
+            checkpoint_path=ckpt_path,
+            generator_kwargs={
+                "input_dim": 3,
+                "hidden_dim": 64,
+                "style_dim": 128,
+                "num_mixtures": 3,
+            },
+            style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 128},
+        )
+        assert engine.norm_stats is not None
+        assert engine.char_encoder is not None
+
+        reference = [
+            np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64),
+        ]
+        strokes = engine.generate(
+            style_sample=torch.randn(1, 10, 3),
+            num_steps=10,
+            reference_strokes=reference,
+        )
         assert len(strokes) > 0

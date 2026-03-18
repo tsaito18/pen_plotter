@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class StrokeGenerator(nn.Module):
@@ -19,7 +20,7 @@ class StrokeGenerator(nn.Module):
         hidden_dim: int = 128,
         style_dim: int = 128,
         char_dim: int = 0,
-        num_mixtures: int = 5,
+        num_mixtures: int = 20,
         num_layers: int = 2,
     ) -> None:
         super().__init__()
@@ -71,11 +72,12 @@ class StrokeGenerator(nn.Module):
         mu_y = params[:, :, 2 * k : 3 * k]
         sigma_x = torch.exp(params[:, :, 3 * k : 4 * k]).clamp(min=1e-4)
         sigma_y = torch.exp(params[:, :, 4 * k : 5 * k]).clamp(min=1e-4)
-        rho = torch.tanh(params[:, :, 5 * k : 6 * k])
+        rho = torch.tanh(params[:, :, 5 * k : 6 * k]).clamp(-0.95, 0.95)
         pen_logit = params[:, :, 6 * k : 6 * k + 1]
 
         return {
             "pi": pi,
+            "pi_logits": params[:, :, :k],
             "mu_x": mu_x,
             "mu_y": mu_y,
             "sigma_x": sigma_x,
@@ -118,13 +120,16 @@ def mdn_loss(output: dict[str, torch.Tensor], target: torch.Tensor) -> torch.Ten
     log_exp = -z / (2 * denom)
     log_gauss = log_norm + log_exp
 
-    log_pi = torch.log(pi + 1e-8)
+    log_pi = F.log_softmax(output["pi_logits"], dim=-1)
     log_prob = torch.logsumexp(log_pi + log_gauss, dim=-1)
 
     stroke_loss = -log_prob.mean()
 
     pen_loss = nn.functional.binary_cross_entropy_with_logits(
-        pen_logit, pen_target, reduction="mean"
+        pen_logit,
+        pen_target,
+        reduction="mean",
+        pos_weight=torch.tensor([10.0], device=pen_logit.device),
     )
 
     return stroke_loss + pen_loss

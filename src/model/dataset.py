@@ -9,6 +9,8 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
+from src.model.data_utils import strokes_to_deltas
+
 
 class StrokeDataset(Dataset):
     """文字ごとのサブディレクトリからストロークJSONを読み込むデータセット。
@@ -40,11 +42,7 @@ class StrokeDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         character, filepath = self.samples[idx]
         data = json.loads(filepath.read_text(encoding="utf-8"))
-        points = []
-        for stroke in data["strokes"]:
-            for pt in stroke:
-                points.append([pt["x"], pt["y"], pt.get("pressure", 1.0)])
-        strokes_tensor = torch.tensor(points, dtype=torch.float32)
+        strokes_tensor = strokes_to_deltas(data["strokes"])
         return {"strokes": strokes_tensor, "character": character}
 
 

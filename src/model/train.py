@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
+from src.model.data_utils import compute_normalization_stats, normalize_deltas
 from src.model.dataset import StrokeDataset, collate_strokes
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
@@ -40,6 +41,9 @@ class Trainer:
             collate_fn=collate_strokes,
         )
 
+        sample_tensors = [self.dataset[i]["strokes"] for i in range(len(self.dataset))]
+        self.norm_stats = compute_normalization_stats(sample_tensors)
+
         self.generator = StrokeGenerator(
             hidden_dim=config.hidden_dim,
             style_dim=config.style_dim,
@@ -64,6 +68,7 @@ class Trainer:
 
             for batch in self.dataloader:
                 strokes = batch["strokes"]
+                strokes = normalize_deltas(strokes, self.norm_stats)
                 style = self.style_encoder(strokes)
 
                 x = strokes[:, :-1]
@@ -99,6 +104,7 @@ class Trainer:
                 "generator_state_dict": self.generator.state_dict(),
                 "style_encoder_state_dict": self.style_encoder.state_dict(),
                 "config": self.config,
+                "norm_stats": self.norm_stats,
             },
             self.output_dir / "checkpoint.pt",
         )

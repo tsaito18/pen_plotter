@@ -68,14 +68,31 @@ class TestStrokeGenerator:
         x = torch.randn(1, 5, 3)
         style = torch.randn(1, 128)
         output = model(x, style)
-        assert output["pi"].shape[0] == 1
+        assert output["pi"].shape == (1, 5, 20)
+
+    def test_pi_logits_in_output(self, model):
+        x = torch.randn(2, 10, 3)
+        style = torch.randn(2, 128)
+        output = model(x, style)
+        assert "pi_logits" in output
+        assert output["pi_logits"].shape == (2, 10, 5)
+
+    def test_rho_clamped(self, model):
+        model.eval()
+        x = torch.randn(2, 10, 3)
+        style = torch.randn(2, 128)
+        output = model(x, style)
+        assert (output["rho"] >= -0.95).all()
+        assert (output["rho"] <= 0.95).all()
 
 
 class TestMDNLoss:
     def test_loss_is_scalar(self):
         batch, seq_len, n_mix = 4, 10, 5
+        pi_logits = torch.randn(batch, seq_len, n_mix)
         output = {
-            "pi": torch.softmax(torch.randn(batch, seq_len, n_mix), dim=-1),
+            "pi": torch.softmax(pi_logits, dim=-1),
+            "pi_logits": pi_logits,
             "mu_x": torch.randn(batch, seq_len, n_mix),
             "mu_y": torch.randn(batch, seq_len, n_mix),
             "sigma_x": torch.exp(torch.randn(batch, seq_len, n_mix)),
@@ -90,8 +107,10 @@ class TestMDNLoss:
 
     def test_loss_is_finite(self):
         batch, seq_len, n_mix = 2, 5, 3
+        pi_logits = torch.randn(batch, seq_len, n_mix)
         output = {
-            "pi": torch.softmax(torch.randn(batch, seq_len, n_mix), dim=-1),
+            "pi": torch.softmax(pi_logits, dim=-1),
+            "pi_logits": pi_logits,
             "mu_x": torch.randn(batch, seq_len, n_mix),
             "mu_y": torch.randn(batch, seq_len, n_mix),
             "sigma_x": torch.exp(torch.randn(batch, seq_len, n_mix)).clamp(min=1e-4),
@@ -104,11 +123,37 @@ class TestMDNLoss:
         assert torch.isfinite(loss)
 
 
+    def test_pen_up_loss_weighted(self):
+        """pen_up（正例）の誤分類がpen_downより高い損失を生むことを確認。"""
+        batch, seq_len, n_mix = 2, 5, 3
+        pi_logits = torch.randn(batch, seq_len, n_mix)
+        base_output = {
+            "pi": torch.softmax(pi_logits, dim=-1),
+            "pi_logits": pi_logits,
+            "mu_x": torch.zeros(batch, seq_len, n_mix),
+            "mu_y": torch.zeros(batch, seq_len, n_mix),
+            "sigma_x": torch.ones(batch, seq_len, n_mix),
+            "sigma_y": torch.ones(batch, seq_len, n_mix),
+            "rho": torch.zeros(batch, seq_len, n_mix),
+            "pen_logit": torch.full((batch, seq_len, 1), -5.0),
+        }
+        target_pen_up = torch.zeros(batch, seq_len, 3)
+        target_pen_up[:, :, 2] = 1.0
+        target_pen_down = torch.zeros(batch, seq_len, 3)
+        target_pen_down[:, :, 2] = 0.0
+
+        loss_miss_pen_up = mdn_loss(base_output, target_pen_up)
+        loss_miss_pen_down = mdn_loss(base_output, target_pen_down)
+        assert loss_miss_pen_up > loss_miss_pen_down
+
+
 class TestStrokeGeneratorCharEmbedding:
     """char_embedding 対応のテスト。"""
 
     def test_char_dim_zero_backward_compatible(self):
-        model = StrokeGenerator(input_dim=3, hidden_dim=128, style_dim=128, char_dim=0)
+        model = StrokeGenerator(
+            input_dim=3, hidden_dim=128, style_dim=128, char_dim=0, num_mixtures=5
+        )
         x = torch.randn(4, 20, 3)
         style = torch.randn(4, 128)
         output = model(x, style)
@@ -128,14 +173,18 @@ class TestStrokeGeneratorCharEmbedding:
         assert output["pen_logit"].shape == (4, 20, 1)
 
     def test_char_dim_nonzero_requires_embedding(self):
-        model = StrokeGenerator(input_dim=3, hidden_dim=128, style_dim=128, char_dim=128)
+        model = StrokeGenerator(
+            input_dim=3, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
+        )
         x = torch.randn(2, 10, 3)
         style = torch.randn(2, 128)
         with pytest.raises(ValueError, match="char_embedding required"):
             model(x, style)
 
     def test_char_dim_zero_ignores_embedding(self):
-        model = StrokeGenerator(input_dim=3, hidden_dim=128, style_dim=128, char_dim=0)
+        model = StrokeGenerator(
+            input_dim=3, hidden_dim=128, style_dim=128, char_dim=0, num_mixtures=5
+        )
         x = torch.randn(2, 10, 3)
         style = torch.randn(2, 128)
         char_emb = torch.randn(2, 128)

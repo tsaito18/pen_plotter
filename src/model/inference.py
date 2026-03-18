@@ -25,6 +25,15 @@ class StrokeInference:
 
         is_v2 = "char_encoder_state_dict" in checkpoint
         gen_kwargs = dict(generator_kwargs or {})
+        style_enc_kwargs = dict(style_encoder_kwargs or {})
+
+        config = checkpoint.get("config", {})
+        config_to_gen = {"hidden_dim", "style_dim", "num_mixtures"}
+        for key in config_to_gen:
+            if key in config and key not in gen_kwargs:
+                gen_kwargs[key] = config[key]
+        if "style_dim" in config and "style_dim" not in style_enc_kwargs:
+            style_enc_kwargs["style_dim"] = config["style_dim"]
 
         self.char_encoder = None
         if is_v2:
@@ -53,7 +62,9 @@ class StrokeInference:
             self.char_encoder.eval()
 
         self.generator = StrokeGenerator(**gen_kwargs)
-        self.style_encoder = StyleEncoder(**(style_encoder_kwargs or {}))
+        self.style_encoder = StyleEncoder(**style_enc_kwargs)
+
+        self.norm_stats = checkpoint.get("norm_stats", None)
 
         self.generator.load_state_dict(checkpoint["generator_state_dict"])
         self.style_encoder.load_state_dict(checkpoint["style_encoder_state_dict"])
@@ -70,6 +81,11 @@ class StrokeInference:
         reference_strokes: list[NDArray[np.float64]] | None = None,
     ) -> list[np.ndarray]:
         """スタイルサンプルからストロークを自己回帰生成する。"""
+        if self.norm_stats is not None:
+            from src.model.data_utils import normalize_deltas
+
+            style_sample = normalize_deltas(style_sample, self.norm_stats)
+
         style = self.style_encoder(style_sample)
 
         char_embedding: torch.Tensor | None = None
@@ -109,7 +125,16 @@ class StrokeInference:
             pen_prob = torch.sigmoid(output["pen_logit"][:, -1, 0])
             pen_state = (pen_prob > 0.5).float()
 
-            points.append([dx.item(), dy.item()])
+            if self.norm_stats is not None:
+                from src.model.data_utils import denormalize_point
+
+                dx_raw, dy_raw = denormalize_point(
+                    dx.item(), dy.item(), self.norm_stats
+                )
+            else:
+                dx_raw, dy_raw = dx.item(), dy.item()
+
+            points.append([dx_raw, dy_raw])
             pen_states.append(pen_state.item())
 
             next_input = torch.tensor([[[dx.item(), dy.item(), pen_state.item()]]])

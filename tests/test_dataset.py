@@ -50,8 +50,17 @@ class TestStrokeDataset:
     def test_stroke_features(self, sample_dir):
         ds = StrokeDataset(sample_dir)
         item = ds[0]
-        # features: x, y, pressure (最低3つ)
-        assert item["strokes"].shape[1] >= 3
+        assert item["strokes"].shape[1] == 3  # dx, dy, pen_state
+
+    def test_delta_encoding(self, sample_dir):
+        """Strokes use delta coordinates and proper pen_state (0/1)."""
+        ds = StrokeDataset(sample_dir)
+        item = ds[0]
+        pen_states = item["strokes"][:, 2]
+        assert ((pen_states == 0) | (pen_states == 1)).all()
+        assert pen_states[-1] == 1.0  # last point is pen-up
+        assert item["strokes"][0, 0] == 0.0  # first delta is zero
+        assert item["strokes"][0, 1] == 0.0
 
     def test_character_label(self, sample_dir):
         ds = StrokeDataset(sample_dir)

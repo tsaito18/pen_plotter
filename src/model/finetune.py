@@ -15,6 +15,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 
 from src.model.char_encoder import CharEncoder
+from src.model.data_utils import normalize_deltas, strokes_to_deltas
 from src.model.pretrain import _detect_device
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
@@ -60,11 +61,7 @@ class FinetuneDataset(Dataset):
         character, user_path, ref_path = self.samples[idx]
 
         user_data = json.loads(user_path.read_text(encoding="utf-8"))
-        points = []
-        for stroke in user_data["strokes"]:
-            for pt in stroke:
-                points.append([pt["x"], pt["y"], pt.get("pressure", 1.0)])
-        strokes_tensor = torch.tensor(points, dtype=torch.float32)
+        strokes_tensor = strokes_to_deltas(user_data["strokes"])
 
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
         ref_points = []
@@ -114,6 +111,7 @@ class Finetuner:
 
         checkpoint = torch.load(pretrain_checkpoint, weights_only=False, map_location="cpu")
         self.ckpt_config = checkpoint["config"]
+        self.norm_stats = checkpoint.get("norm_stats", None)
 
         cfg = self.ckpt_config
         self.generator = StrokeGenerator(
@@ -155,8 +153,9 @@ class Finetuner:
         print(f"Device: {self.device}")
         history: dict[str, list[float]] = {"losses": []}
 
-        self.generator.eval()
-        self.char_encoder.eval()
+        # cuDNN RNN backward requires train mode even for frozen modules
+        self.generator.train()
+        self.char_encoder.train()
         self.style_encoder.train()
 
         for _epoch in range(self.config.epochs):
@@ -165,6 +164,8 @@ class Finetuner:
 
             for batch in self.dataloader:
                 strokes = batch["strokes"].to(self.device)
+                if self.norm_stats is not None:
+                    strokes = normalize_deltas(strokes, self.norm_stats)
                 ref_strokes = batch["ref_strokes"].to(self.device)
 
                 style = self.style_encoder(strokes)
@@ -210,6 +211,7 @@ class Finetuner:
                     k: v.to(cpu) for k, v in self.char_encoder.state_dict().items()
                 },
                 "config": self.ckpt_config,
+                "norm_stats": self.norm_stats,
             },
             self.output_dir / "finetuned.pt",
         )

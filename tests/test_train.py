@@ -45,6 +45,13 @@ class TestTrainer:
         trainer = Trainer(cfg, data_dir=data_dir, output_dir=tmp_path / "output")
         assert trainer is not None
 
+    def test_norm_stats_computed(self, data_dir, tmp_path):
+        cfg = TrainConfig(epochs=1, batch_size=2)
+        trainer = Trainer(cfg, data_dir=data_dir, output_dir=tmp_path / "output")
+        assert trainer.norm_stats is not None
+        for key in ("mean_x", "mean_y", "std_x", "std_y"):
+            assert key in trainer.norm_stats
+
     @pytest.mark.slow
     def test_train_one_epoch(self, data_dir, tmp_path):
         cfg = TrainConfig(epochs=1, batch_size=4)
@@ -62,3 +69,14 @@ class TestTrainer:
         trainer.train()
         checkpoints = list(output_dir.glob("*.pt"))
         assert len(checkpoints) >= 1
+
+    @pytest.mark.slow
+    def test_checkpoint_has_norm_stats(self, data_dir, tmp_path):
+        output_dir = tmp_path / "output"
+        cfg = TrainConfig(epochs=1, batch_size=4)
+        trainer = Trainer(cfg, data_dir=data_dir, output_dir=output_dir)
+        trainer.train()
+        ckpt = torch.load(output_dir / "checkpoint.pt", weights_only=False)
+        assert "norm_stats" in ckpt
+        for key in ("mean_x", "mean_y", "std_x", "std_y"):
+            assert key in ckpt["norm_stats"]

@@ -162,6 +162,16 @@ class TestPretrainer:
         assert pt.style_encoder is not None
         assert pt.generator is not None
 
+    def test_norm_stats_computed(self, paired_dirs, tmp_path):
+        hand_dir, ref_dir = paired_dirs
+        cfg = PretrainConfig(epochs=1, batch_size=2)
+        pt = Pretrainer(cfg, hand_dir=hand_dir, ref_dir=ref_dir, output_dir=tmp_path / "out")
+        assert pt.norm_stats is not None
+        for key in ("mean_x", "mean_y", "std_x", "std_y"):
+            assert key in pt.norm_stats
+        assert pt.norm_stats["std_x"] > 0
+        assert pt.norm_stats["std_y"] > 0
+
     @pytest.mark.slow
     def test_train_one_epoch(self, paired_dirs, tmp_path):
         hand_dir, ref_dir = paired_dirs
@@ -188,6 +198,9 @@ class TestPretrainer:
         assert "style_encoder_state_dict" in ckpt
         assert "char_encoder_state_dict" in ckpt
         assert "config" in ckpt
+        assert "norm_stats" in ckpt
+        for key in ("mean_x", "mean_y", "std_x", "std_y"):
+            assert key in ckpt["norm_stats"]
 
 
 def _make_pot_sample_v1(char: str, strokes: list[list[tuple[int, int]]]) -> bytes:
@@ -264,7 +277,10 @@ class TestCASIAPairedDataset:
         assert item["reference"].ndim == 2
         assert item["reference"].shape[1] == 2
         assert item["character"] == "\u5927"
-        assert (item["strokes"][:, 2] == 1.0).all()
+        # pen_state: 0=pen-down, 1=pen-up (last point of each stroke)
+        pen_states = item["strokes"][:, 2]
+        assert ((pen_states == 0) | (pen_states == 1)).all()
+        assert pen_states[-1] == 1.0  # last point of last stroke is pen-up
 
     def test_only_matched_chars(self, tmp_path):
         """refに存在しない文字はデータセットから除外される。"""

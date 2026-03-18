@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -13,6 +14,12 @@ from torch.utils.data import DataLoader, Dataset
 
 from src.collector.casia_parser import CASIAParser
 from src.model.char_encoder import CharEncoder
+from src.model.data_utils import (
+    compute_normalization_stats,
+    normalize_deltas,
+    strokes_to_deltas,
+    strokes_to_deltas_from_arrays,
+)
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
 
@@ -69,11 +76,7 @@ class PairedStrokeDataset(Dataset):
         character, hand_path, ref_path = self.samples[idx]
 
         hand_data = json.loads(hand_path.read_text(encoding="utf-8"))
-        points = []
-        for stroke in hand_data["strokes"]:
-            for pt in stroke:
-                points.append([pt["x"], pt["y"], pt.get("pressure", 1.0)])
-        strokes_tensor = torch.tensor(points, dtype=torch.float32)
+        strokes_tensor = strokes_to_deltas(hand_data["strokes"])
 
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
         ref_points = []
@@ -151,11 +154,7 @@ class CASIAPairedDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         character, normalized_strokes, ref_path = self.samples[idx]
 
-        points = []
-        for stroke_arr in normalized_strokes:
-            for pt in stroke_arr:
-                points.append([float(pt[0]), float(pt[1]), 1.0])
-        strokes_tensor = torch.tensor(points, dtype=torch.float32)
+        strokes_tensor = strokes_to_deltas_from_arrays(normalized_strokes)
 
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
         ref_points = []
@@ -214,6 +213,7 @@ class Pretrainer:
         max_samples: int = 0,
         num_workers: int = 0,
         amp: bool = False,
+        norm_sample_size: int = 5000,
     ) -> None:
         self.config = config
         self.output_dir = Path(output_dir)
@@ -232,6 +232,12 @@ class Pretrainer:
             num_workers=num_workers,
             persistent_workers=num_workers > 0,
         )
+
+        indices = list(range(len(self.dataset)))
+        if len(indices) > norm_sample_size:
+            indices = random.sample(indices, norm_sample_size)
+        sample_tensors = [self.dataset[i]["strokes"] for i in indices]
+        self.norm_stats = compute_normalization_stats(sample_tensors)
 
         self.char_encoder = CharEncoder(char_dim=config.char_dim).to(self.device)
         self.style_encoder = StyleEncoder(style_dim=config.style_dim).to(self.device)
@@ -267,6 +273,7 @@ class Pretrainer:
 
             for batch_idx, batch in enumerate(self.dataloader):
                 strokes = batch["strokes"].to(self.device)
+                strokes = normalize_deltas(strokes, self.norm_stats)
                 reference = batch["reference"].to(self.device)
 
                 with torch.amp.autocast(self.device.type, enabled=self.amp):
@@ -330,6 +337,7 @@ class Pretrainer:
                     k: v.to(cpu) for k, v in self.char_encoder.state_dict().items()
                 },
                 "config": asdict(self.config),
+                "norm_stats": self.norm_stats,
             },
             self.output_dir / "pretrain_checkpoint.pt",
         )

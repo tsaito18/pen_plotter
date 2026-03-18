@@ -43,7 +43,9 @@ def _make_ref_dir(base: Path, chars: list[str]) -> Path:
     return base
 
 
-def _make_pretrain_checkpoint(path: Path, config: dict | None = None) -> Path:
+def _make_pretrain_checkpoint(
+    path: Path, config: dict | None = None, norm_stats: dict | None = None
+) -> Path:
     """テスト用の事前学習済みチェックポイントを作成。"""
     cfg = config or {
         "style_dim": 128,
@@ -61,6 +63,7 @@ def _make_pretrain_checkpoint(path: Path, config: dict | None = None) -> Path:
         "style_encoder_state_dict": StyleEncoder(style_dim=cfg["style_dim"]).state_dict(),
         "char_encoder_state_dict": CharEncoder(char_dim=cfg["char_dim"]).state_dict(),
         "config": cfg,
+        "norm_stats": norm_stats,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(checkpoint, path)
@@ -104,9 +107,23 @@ class TestFinetuneDataset:
         ds = FinetuneDataset(user_dir, ref_dir)
         item = ds[0]
         assert item["strokes"].ndim == 2
-        assert item["strokes"].shape[1] == 3  # x, y, pressure
+        assert item["strokes"].shape[1] == 3  # dx, dy, pen_state
         assert item["ref_strokes"].ndim == 2
         assert item["ref_strokes"].shape[1] == 2  # x, y
+
+    def test_dataset_delta_encoding(self, tmp_path):
+        """Strokes use delta coordinates and proper pen_state (0/1)."""
+        chars = ["あ"]
+        user_dir = _make_data_dir(tmp_path / "user", chars, n_samples=1)
+        ref_dir = _make_ref_dir(tmp_path / "ref", chars)
+        ds = FinetuneDataset(user_dir, ref_dir)
+        item = ds[0]
+        pen_states = item["strokes"][:, 2]
+        assert ((pen_states == 0) | (pen_states == 1)).all()
+        assert pen_states[-1] == 1.0  # last point is pen-up
+        # first point delta is (0, 0)
+        assert item["strokes"][0, 0] == 0.0
+        assert item["strokes"][0, 1] == 0.0
 
 
 class TestFinetuner:
@@ -134,6 +151,36 @@ class TestFinetuner:
             output_dir=setup["output_dir"],
         )
         assert finetuner is not None
+
+    def test_finetuner_loads_norm_stats(self, tmp_path):
+        chars = ["あ", "い"]
+        user_dir = _make_data_dir(tmp_path / "user", chars)
+        ref_dir = _make_ref_dir(tmp_path / "ref", chars)
+        norm_stats = {"mean_x": 0.1, "mean_y": 0.2, "std_x": 1.5, "std_y": 1.3}
+        ckpt_path = _make_pretrain_checkpoint(
+            tmp_path / "ckpt" / "checkpoint.pt", norm_stats=norm_stats
+        )
+        cfg = FinetuneConfig(epochs=1)
+        finetuner = Finetuner(
+            config=cfg,
+            pretrain_checkpoint=ckpt_path,
+            user_data_dir=user_dir,
+            ref_dir=ref_dir,
+            output_dir=tmp_path / "output",
+        )
+        assert finetuner.norm_stats == norm_stats
+
+    def test_finetuner_handles_missing_norm_stats(self, setup):
+        """norm_stats がないチェックポイントでも動作する（後方互換性）。"""
+        cfg = FinetuneConfig(epochs=1)
+        finetuner = Finetuner(
+            config=cfg,
+            pretrain_checkpoint=setup["ckpt_path"],
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        assert finetuner.norm_stats is None
 
     def test_finetuner_freezes_generator(self, setup):
         cfg = FinetuneConfig(epochs=1)
@@ -186,6 +233,29 @@ class TestFinetuner:
         assert len(history["losses"]) == 1
         assert history["losses"][0] > 0
         assert (setup["output_dir"] / "finetuned.pt").exists()
+
+    @pytest.mark.slow
+    def test_finetune_checkpoint_has_norm_stats(self, tmp_path):
+        chars = ["あ", "い", "う"]
+        user_dir = _make_data_dir(tmp_path / "user", chars)
+        ref_dir = _make_ref_dir(tmp_path / "ref", chars)
+        norm_stats = {"mean_x": 0.1, "mean_y": 0.2, "std_x": 1.5, "std_y": 1.3}
+        ckpt_path = _make_pretrain_checkpoint(
+            tmp_path / "ckpt" / "checkpoint.pt", norm_stats=norm_stats
+        )
+        output_dir = tmp_path / "output"
+        cfg = FinetuneConfig(epochs=1, batch_size=4)
+        finetuner = Finetuner(
+            config=cfg,
+            pretrain_checkpoint=ckpt_path,
+            user_data_dir=user_dir,
+            ref_dir=ref_dir,
+            output_dir=output_dir,
+        )
+        finetuner.train()
+        output_ckpt = torch.load(output_dir / "finetuned.pt", weights_only=False)
+        assert "norm_stats" in output_ckpt
+        assert output_ckpt["norm_stats"] == norm_stats
 
     @pytest.mark.slow
     def test_finetune_checkpoint_compatible(self, setup):

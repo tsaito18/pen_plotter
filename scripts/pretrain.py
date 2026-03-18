@@ -38,7 +38,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--style-dim", type=int, default=128)
     parser.add_argument("--char-dim", type=int, default=128)
     parser.add_argument("--hidden-dim", type=int, default=128)
-    parser.add_argument("--num-mixtures", type=int, default=5)
+    parser.add_argument("--num-mixtures", type=int, default=20)
     parser.add_argument(
         "--pot-dir",
         type=Path,

@@ -122,14 +122,10 @@ def main(argv: list[str] | None = None) -> None:
     inference = StrokeInference(checkpoint_path=args.checkpoint)
     print("Model loaded successfully")
 
-    # StrokeInference.generate() は style_sample として (1, seq, 3) のテンソルを要求する
-    # 参照ストロークからダミーのスタイルサンプルを作成（pen_state=0 で結合）
-    style_points = []
-    for stroke in ref_strokes:
-        for pt in stroke:
-            style_points.append([pt[0], pt[1], 0.0])
-        style_points[-1][2] = 1.0  # ストローク末尾で pen up
-    style_sample = torch.tensor([style_points], dtype=torch.float32)
+    from src.model.data_utils import strokes_to_deltas_from_arrays
+
+    style_tensor = strokes_to_deltas_from_arrays(ref_strokes)
+    style_sample = style_tensor.unsqueeze(0)  # (1, N, 3)
 
     n_cols = 1 + args.num_samples
     fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5))
