@@ -127,6 +127,93 @@ def normalize_deltas(
     return result
 
 
+def reference_to_sequence(strokes: list[list[dict[str, float]]]) -> torch.Tensor:
+    """Convert dict-based reference strokes to separator-delimited sequence.
+
+    Same format as CharEncoder.strokes_to_sequence but from dict input.
+    Inserts (-1, -1) between strokes.
+
+    Returns:
+        (N, 2) tensor
+    """
+    parts: list[list[tuple[float, float]]] = []
+    for i, stroke in enumerate(strokes):
+        if len(stroke) >= 2:
+            parts.append([(pt["x"], pt["y"]) for pt in stroke])
+
+    if not parts:
+        return torch.zeros(1, 2)
+
+    segments: list[torch.Tensor] = []
+    for i, pts in enumerate(parts):
+        segments.append(torch.tensor(pts, dtype=torch.float32))
+        if i < len(parts) - 1:
+            segments.append(torch.tensor([[-1.0, -1.0]]))
+
+    return torch.cat(segments, dim=0)
+
+
+def reference_to_sequence_from_arrays(strokes: list[np.ndarray]) -> torch.Tensor:
+    """Convert numpy array strokes to separator-delimited sequence.
+
+    Returns:
+        (N, 2) tensor
+    """
+    valid = [s for s in strokes if s.shape[0] >= 2]
+
+    if not valid:
+        return torch.zeros(1, 2)
+
+    segments: list[torch.Tensor] = []
+    for i, stroke in enumerate(valid):
+        segments.append(torch.from_numpy(stroke.astype(np.float32)))
+        if i < len(valid) - 1:
+            segments.append(torch.tensor([[-1.0, -1.0]]))
+
+    return torch.cat(segments, dim=0)
+
+
+def compute_reference_stats(tensors: list[torch.Tensor]) -> dict[str, float]:
+    """Compute mean/std of reference coordinates, excluding separator values (-1).
+
+    Returns:
+        Dict with mean_x, mean_y, std_x, std_y.
+    """
+    all_x = []
+    all_y = []
+    for t in tensors:
+        mask = t[:, 0] != -1.0
+        all_x.append(t[mask, 0])
+        all_y.append(t[mask, 1])
+    all_x_cat = torch.cat(all_x)
+    all_y_cat = torch.cat(all_y)
+
+    std_x = all_x_cat.std().item() if len(all_x_cat) > 1 else 0.0
+    std_y = all_y_cat.std().item() if len(all_y_cat) > 1 else 0.0
+
+    return {
+        "mean_x": all_x_cat.mean().item(),
+        "mean_y": all_y_cat.mean().item(),
+        "std_x": max(std_x, 1e-6),
+        "std_y": max(std_y, 1e-6),
+    }
+
+
+def normalize_reference(
+    tensor: torch.Tensor, stats: dict[str, float]
+) -> torch.Tensor:
+    """Normalize reference coordinates. Separator points (-1, -1) become (0, 0).
+
+    Works with (N, 2) or (batch, N, 2).
+    """
+    result = tensor.clone()
+    sep_mask = tensor[..., 0] == -1.0
+    result[..., 0] = (tensor[..., 0] - stats["mean_x"]) / stats["std_x"]
+    result[..., 1] = (tensor[..., 1] - stats["mean_y"]) / stats["std_y"]
+    result[sep_mask] = 0.0
+    return result
+
+
 def denormalize_point(
     dx: float, dy: float, stats: dict[str, float]
 ) -> tuple[float, float]:

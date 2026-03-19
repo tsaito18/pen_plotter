@@ -31,16 +31,34 @@ class CharEncoder(nn.Module):
             bidirectional=True,
         )
         self.fc = nn.Linear(hidden_dim * 2, char_dim)
+        self._init_forget_gate_bias()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _init_forget_gate_bias(self) -> None:
+        for name, param in self.lstm.named_parameters():
+            if "bias" in name:
+                hidden_dim = param.shape[0] // 4
+                param.data[hidden_dim : 2 * hidden_dim].fill_(1.0)
+
+    def forward(
+        self, x: torch.Tensor, lengths: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """
         Args:
             x: (batch, seq_len, 2) — reference stroke coordinates
+            lengths: optional (batch,) — actual sequence lengths for packed sequences
 
         Returns:
             (batch, char_dim) — character embedding
         """
-        _, (h_n, _) = self.lstm(x)
+        if lengths is not None:
+            from torch.nn.utils.rnn import pack_padded_sequence
+
+            packed = pack_padded_sequence(
+                x, lengths.cpu(), batch_first=True, enforce_sorted=False
+            )
+            _, (h_n, _) = self.lstm(packed)
+        else:
+            _, (h_n, _) = self.lstm(x)
         # h_n: (num_layers * 2, batch, hidden_dim)
         h_forward = h_n[-2]
         h_backward = h_n[-1]

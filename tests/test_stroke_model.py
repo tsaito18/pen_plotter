@@ -2,7 +2,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from src.model.stroke_model import StrokeGenerator, mdn_loss
+from src.model.stroke_model import StrokeGenerator, embedding_variance_loss, mdn_loss
 
 
 class TestStrokeGenerator:
@@ -203,3 +203,20 @@ class TestStrokeGeneratorCharEmbedding:
         loss = mdn_loss(output, target)
         assert loss.ndim == 0
         assert torch.isfinite(loss)
+
+
+class TestEmbeddingVarianceLoss:
+    def test_constant_embeddings(self):
+        embeddings = torch.ones(8, 64)
+        loss = embedding_variance_loss(embeddings)
+        assert loss.item() > 0
+
+    def test_diverse_embeddings(self):
+        embeddings = torch.randn(8, 64) * 2.0
+        loss = embedding_variance_loss(embeddings)
+        assert loss.item() == pytest.approx(0.0, abs=0.5)
+
+    def test_single_sample(self):
+        embeddings = torch.randn(1, 64)
+        loss = embedding_variance_loss(embeddings)
+        assert loss.item() == 0.0

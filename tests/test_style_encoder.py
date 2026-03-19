@@ -49,3 +49,42 @@ class TestStyleEncoder:
     def test_has_parameters(self, encoder):
         params = list(encoder.parameters())
         assert len(params) > 0
+
+
+class TestStyleEncoderForgetGateBias:
+    def test_forget_gate_bias_initialized_to_one(self):
+        enc = StyleEncoder(input_dim=3, hidden_dim=64, style_dim=128)
+        for name, param in enc.lstm.named_parameters():
+            if "bias" in name:
+                hidden_dim = param.shape[0] // 4
+                forget_bias = param.data[hidden_dim : 2 * hidden_dim]
+                assert torch.allclose(forget_bias, torch.ones_like(forget_bias))
+
+
+class TestStyleEncoderPackedSequence:
+    @pytest.fixture
+    def encoder(self):
+        return StyleEncoder(input_dim=3, hidden_dim=64, style_dim=128)
+
+    def test_forward_without_lengths_backward_compatible(self, encoder):
+        x = torch.randn(3, 20, 3)
+        out = encoder(x)
+        assert out.shape == (3, 128)
+
+    def test_forward_with_lengths_shape(self, encoder):
+        x = torch.randn(3, 20, 3)
+        lengths = torch.tensor([20, 15, 10])
+        out = encoder(x, lengths=lengths)
+        assert out.shape == (3, 128)
+
+    def test_packed_differs_from_padded(self, encoder):
+        """Packed sequence output differs when padding is present."""
+        encoder.eval()
+        x = torch.randn(2, 20, 3)
+        x[1, 10:, :] = 0.0
+        lengths = torch.tensor([20, 10])
+
+        out_no_pack = encoder(x)
+        out_packed = encoder(x, lengths=lengths)
+        assert torch.allclose(out_no_pack[0], out_packed[0], atol=1e-6)
+        assert not torch.allclose(out_no_pack[1], out_packed[1], atol=1e-5)

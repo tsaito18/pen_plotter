@@ -81,7 +81,7 @@ class TestStrokeInferenceV2:
             "generator_state_dict": generator.state_dict(),
             "style_encoder_state_dict": style_enc.state_dict(),
             "char_encoder_state_dict": char_enc.state_dict(),
-            "char_dim": char_dim,
+            "config": {"char_dim": char_dim, "hidden_dim": 64, "style_dim": 128, "num_mixtures": 3},
         }
         ckpt_path = tmp_path / "v2_model.pt"
         torch.save(checkpoint, ckpt_path)
@@ -227,6 +227,41 @@ class TestStrokeInferenceNormStats:
                 f"Output coordinates too large: max={np.abs(s).max()}"
             )
 
+    def test_ref_norm_stats_loaded(self, tmp_path, norm_stats):
+        """ref_norm_stats is loaded from checkpoint."""
+        ref_norm_stats = {"mean_x": 1.0, "mean_y": 2.0, "std_x": 3.0, "std_y": 4.0}
+        char_dim = 64
+        generator = StrokeGenerator(
+            input_dim=3, hidden_dim=64, style_dim=128, char_dim=char_dim, num_mixtures=3
+        )
+        style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=128)
+        char_enc = CharEncoder(input_dim=2, hidden_dim=32, char_dim=char_dim, num_layers=1)
+        checkpoint = {
+            "generator_state_dict": generator.state_dict(),
+            "style_encoder_state_dict": style_enc.state_dict(),
+            "char_encoder_state_dict": char_enc.state_dict(),
+            "config": {"char_dim": char_dim, "hidden_dim": 64, "style_dim": 128, "num_mixtures": 3},
+            "norm_stats": norm_stats,
+            "ref_norm_stats": ref_norm_stats,
+        }
+        ckpt_path = tmp_path / "v2_refnorm.pt"
+        torch.save(checkpoint, ckpt_path)
+
+        engine = StrokeInference(
+            checkpoint_path=ckpt_path,
+            generator_kwargs={"input_dim": 3, "hidden_dim": 64, "style_dim": 128, "num_mixtures": 3},
+            style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 128},
+        )
+        assert engine.ref_norm_stats == ref_norm_stats
+
+        reference = [np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64)]
+        strokes = engine.generate(
+            style_sample=torch.randn(1, 10, 3),
+            num_steps=10,
+            reference_strokes=reference,
+        )
+        assert len(strokes) > 0
+
     def test_v2_with_norm_stats(self, tmp_path, norm_stats):
         """V2チェックポイント + norm_stats の組み合わせが動作する。"""
         char_dim = 64
@@ -239,7 +274,7 @@ class TestStrokeInferenceNormStats:
             "generator_state_dict": generator.state_dict(),
             "style_encoder_state_dict": style_enc.state_dict(),
             "char_encoder_state_dict": char_enc.state_dict(),
-            "char_dim": char_dim,
+            "config": {"char_dim": char_dim, "hidden_dim": 64, "style_dim": 128, "num_mixtures": 3},
             "norm_stats": norm_stats,
         }
         ckpt_path = tmp_path / "v2_norm.pt"

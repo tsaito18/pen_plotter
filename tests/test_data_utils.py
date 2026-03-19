@@ -8,8 +8,12 @@ import torch
 
 from src.model.data_utils import (
     compute_normalization_stats,
+    compute_reference_stats,
     denormalize_point,
     normalize_deltas,
+    normalize_reference,
+    reference_to_sequence,
+    reference_to_sequence_from_arrays,
     strokes_to_deltas,
     strokes_to_deltas_from_arrays,
 )
@@ -173,3 +177,91 @@ class TestNormalization:
         normalized = normalize_deltas(t, stats)
         assert normalized.shape == t.shape
         torch.testing.assert_close(normalized[:, :, 2], t[:, :, 2])
+
+
+class TestReferenceToSequence:
+    def test_reference_to_sequence(self) -> None:
+        strokes = [
+            [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}],
+            [{"x": 2.0, "y": 2.0}, {"x": 3.0, "y": 3.0}],
+        ]
+        result = reference_to_sequence(strokes)
+        # 2 points + separator + 2 points = 5
+        assert result.shape == (5, 2)
+        assert result.dtype == torch.float32
+        # separator at index 2
+        torch.testing.assert_close(result[2], torch.tensor([-1.0, -1.0]))
+        torch.testing.assert_close(result[0], torch.tensor([0.0, 0.0]))
+        torch.testing.assert_close(result[4], torch.tensor([3.0, 3.0]))
+
+    def test_reference_to_sequence_from_arrays(self) -> None:
+        strokes = [
+            np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+            np.array([[2.0, 2.0], [3.0, 3.0]], dtype=np.float32),
+        ]
+        result = reference_to_sequence_from_arrays(strokes)
+        assert result.shape == (5, 2)
+        torch.testing.assert_close(result[2], torch.tensor([-1.0, -1.0]))
+
+    def test_reference_to_sequence_matches_char_encoder(self) -> None:
+        from src.model.char_encoder import CharEncoder
+
+        arr_strokes = [
+            np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]], dtype=np.float64),
+            np.array([[5.0, 5.0], [6.0, 6.0]], dtype=np.float64),
+        ]
+        expected = CharEncoder.strokes_to_sequence(arr_strokes)
+        expected_tensor = torch.from_numpy(expected.astype(np.float32))
+
+        dict_strokes = [
+            [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 2.0}],
+            [{"x": 5.0, "y": 5.0}, {"x": 6.0, "y": 6.0}],
+        ]
+        result = reference_to_sequence(dict_strokes)
+        torch.testing.assert_close(result, expected_tensor)
+
+    def test_reference_to_sequence_single_point_stroke_skipped(self) -> None:
+        strokes = [
+            [{"x": 0.0, "y": 0.0}],  # single point, skipped
+            [{"x": 2.0, "y": 2.0}, {"x": 3.0, "y": 3.0}],
+        ]
+        result = reference_to_sequence(strokes)
+        assert result.shape == (2, 2)
+
+
+class TestReferenceNormalization:
+    def test_compute_reference_stats(self) -> None:
+        t1 = torch.tensor([[1.0, 2.0], [-1.0, -1.0], [3.0, 4.0]])
+        t2 = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
+        stats = compute_reference_stats([t1, t2])
+
+        valid_x = torch.tensor([1.0, 3.0, 5.0, 7.0])
+        valid_y = torch.tensor([2.0, 4.0, 6.0, 8.0])
+        assert stats["mean_x"] == pytest.approx(valid_x.mean().item())
+        assert stats["mean_y"] == pytest.approx(valid_y.mean().item())
+        assert stats["std_x"] == pytest.approx(valid_x.std().item())
+        assert stats["std_y"] == pytest.approx(valid_y.std().item())
+
+    def test_normalize_reference(self) -> None:
+        t = torch.tensor([[1.0, 2.0], [-1.0, -1.0], [3.0, 4.0]])
+        stats = compute_reference_stats([t])
+        normalized = normalize_reference(t, stats)
+
+        assert normalized.shape == t.shape
+        # separator becomes (0, 0)
+        torch.testing.assert_close(normalized[1], torch.tensor([0.0, 0.0]))
+        # non-separator points are normalized
+        assert normalized[0, 0].item() != t[0, 0].item()
+
+    def test_normalize_reference_batch(self) -> None:
+        batch = torch.tensor([
+            [[1.0, 2.0], [-1.0, -1.0], [3.0, 4.0]],
+            [[5.0, 6.0], [7.0, 8.0], [-1.0, -1.0]],
+        ])
+        stats = compute_reference_stats([batch[0], batch[1]])
+        normalized = normalize_reference(batch, stats)
+
+        assert normalized.shape == batch.shape
+        # separators become (0, 0)
+        torch.testing.assert_close(normalized[0, 1], torch.tensor([0.0, 0.0]))
+        torch.testing.assert_close(normalized[1, 2], torch.tensor([0.0, 0.0]))

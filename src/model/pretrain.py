@@ -16,11 +16,14 @@ from src.collector.casia_parser import CASIAParser
 from src.model.char_encoder import CharEncoder
 from src.model.data_utils import (
     compute_normalization_stats,
+    compute_reference_stats,
     normalize_deltas,
+    normalize_reference,
+    reference_to_sequence,
     strokes_to_deltas,
     strokes_to_deltas_from_arrays,
 )
-from src.model.stroke_model import StrokeGenerator, mdn_loss
+from src.model.stroke_model import StrokeGenerator, embedding_variance_loss, mdn_loss
 from src.model.style_encoder import StyleEncoder
 
 
@@ -69,6 +72,10 @@ class PairedStrokeDataset(Dataset):
                 for f in sorted(char_dir.glob("*.json")):
                     self.samples.append((ch, f, ref_files[ch]))
 
+        self.char_to_indices: dict[str, list[int]] = {}
+        for i, (ch, _, _) in enumerate(self.samples):
+            self.char_to_indices.setdefault(ch, []).append(i)
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -78,15 +85,23 @@ class PairedStrokeDataset(Dataset):
         hand_data = json.loads(hand_path.read_text(encoding="utf-8"))
         strokes_tensor = strokes_to_deltas(hand_data["strokes"])
 
+        same_char = self.char_to_indices[character]
+        candidates = [i for i in same_char if i != idx]
+        if candidates:
+            style_idx = random.choice(candidates)
+            _, style_path, _ = self.samples[style_idx]
+            style_data = json.loads(style_path.read_text(encoding="utf-8"))
+            style_tensor = strokes_to_deltas(style_data["strokes"])
+        else:
+            style_tensor = strokes_tensor.clone()
+            style_tensor[:, :2] += torch.randn_like(style_tensor[:, :2]) * 0.1
+
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
-        ref_points = []
-        for stroke in ref_data["strokes"]:
-            for pt in stroke:
-                ref_points.append([pt["x"], pt["y"]])
-        reference_tensor = torch.tensor(ref_points, dtype=torch.float32)
+        reference_tensor = reference_to_sequence(ref_data["strokes"])
 
         return {
             "strokes": strokes_tensor,
+            "style_strokes": style_tensor,
             "reference": reference_tensor,
             "character": character,
         }
@@ -148,6 +163,10 @@ class CASIAPairedDataset(Dataset):
             f"({len(char_set)} characters) from {n_files} .pot files"
         )
 
+        self.char_to_indices: dict[str, list[int]] = {}
+        for i, (ch, _, _) in enumerate(self.samples):
+            self.char_to_indices.setdefault(ch, []).append(i)
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -156,15 +175,22 @@ class CASIAPairedDataset(Dataset):
 
         strokes_tensor = strokes_to_deltas_from_arrays(normalized_strokes)
 
+        same_char = self.char_to_indices[character]
+        candidates = [i for i in same_char if i != idx]
+        if candidates:
+            style_idx = random.choice(candidates)
+            _, style_strokes_raw, _ = self.samples[style_idx]
+            style_tensor = strokes_to_deltas_from_arrays(style_strokes_raw)
+        else:
+            style_tensor = strokes_tensor.clone()
+            style_tensor[:, :2] += torch.randn_like(style_tensor[:, :2]) * 0.1
+
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
-        ref_points = []
-        for stroke in ref_data["strokes"]:
-            for pt in stroke:
-                ref_points.append([pt["x"], pt["y"]])
-        reference_tensor = torch.tensor(ref_points, dtype=torch.float32)
+        reference_tensor = reference_to_sequence(ref_data["strokes"])
 
         return {
             "strokes": strokes_tensor,
+            "style_strokes": style_tensor,
             "reference": reference_tensor,
             "character": character,
         }
@@ -173,16 +199,21 @@ class CASIAPairedDataset(Dataset):
 def collate_paired(batch: list[dict]) -> dict:
     """PairedStrokeDataset の可変長シーケンスをパディングしてバッチ化する。"""
     strokes = [item["strokes"] for item in batch]
+    style_strokes = [item["style_strokes"] for item in batch]
     references = [item["reference"] for item in batch]
     lengths = torch.tensor([s.shape[0] for s in strokes])
+    style_lengths = torch.tensor([s.shape[0] for s in style_strokes])
     ref_lengths = torch.tensor([r.shape[0] for r in references])
     padded_strokes = pad_sequence(strokes, batch_first=True, padding_value=0.0)
+    padded_style = pad_sequence(style_strokes, batch_first=True, padding_value=0.0)
     padded_refs = pad_sequence(references, batch_first=True, padding_value=0.0)
     characters = [item["character"] for item in batch]
     return {
         "strokes": padded_strokes,
+        "style_strokes": padded_style,
         "reference": padded_refs,
         "lengths": lengths,
+        "style_lengths": style_lengths,
         "ref_lengths": ref_lengths,
         "characters": characters,
     }
@@ -239,6 +270,9 @@ class Pretrainer:
         sample_tensors = [self.dataset[i]["strokes"] for i in indices]
         self.norm_stats = compute_normalization_stats(sample_tensors)
 
+        ref_tensors = [self.dataset[i]["reference"] for i in indices]
+        self.ref_norm_stats = compute_reference_stats(ref_tensors)
+
         self.char_encoder = CharEncoder(char_dim=config.char_dim).to(self.device)
         self.style_encoder = StyleEncoder(style_dim=config.style_dim).to(self.device)
         self.generator = StrokeGenerator(
@@ -248,12 +282,11 @@ class Pretrainer:
             num_mixtures=config.num_mixtures,
         ).to(self.device)
 
-        all_params = (
-            list(self.char_encoder.parameters())
-            + list(self.style_encoder.parameters())
-            + list(self.generator.parameters())
-        )
-        self.optimizer = torch.optim.Adam(all_params, lr=config.learning_rate)
+        self.optimizer = torch.optim.Adam([
+            {"params": self.generator.parameters(), "lr": config.learning_rate},
+            {"params": self.char_encoder.parameters(), "lr": config.learning_rate * 3},
+            {"params": self.style_encoder.parameters(), "lr": config.learning_rate * 3},
+        ])
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
 
         self.amp = amp
@@ -274,11 +307,20 @@ class Pretrainer:
             for batch_idx, batch in enumerate(self.dataloader):
                 strokes = batch["strokes"].to(self.device)
                 strokes = normalize_deltas(strokes, self.norm_stats)
+
+                style_strokes = batch["style_strokes"].to(self.device)
+                style_strokes = normalize_deltas(style_strokes, self.norm_stats)
+
                 reference = batch["reference"].to(self.device)
+                reference = normalize_reference(reference, self.ref_norm_stats)
+
+                lengths = batch["lengths"]
+                style_lengths = batch["style_lengths"]
+                ref_lengths = batch["ref_lengths"]
 
                 with torch.amp.autocast(self.device.type, enabled=self.amp):
-                    char_embedding = self.char_encoder(reference)
-                    style_vector = self.style_encoder(strokes)
+                    char_embedding = self.char_encoder(reference, lengths=ref_lengths)
+                    style_vector = self.style_encoder(style_strokes, lengths=style_lengths)
 
                     x = strokes[:, :-1]
                     target = strokes[:, 1:]
@@ -289,14 +331,15 @@ class Pretrainer:
                     trimmed_output = {k: v[:, :min_len] for k, v in output.items()}
                     trimmed_target = target[:, :min_len]
 
-                    loss = mdn_loss(trimmed_output, trimmed_target)
+                    loss_mdn = mdn_loss(trimmed_output, trimmed_target)
+                    loss_char_var = embedding_variance_loss(char_embedding)
+                    loss_style_var = embedding_variance_loss(style_vector)
+                    loss = loss_mdn + 0.1 * (loss_char_var + loss_style_var)
 
                 self.optimizer.zero_grad()
-                all_params = (
-                    list(self.char_encoder.parameters())
-                    + list(self.style_encoder.parameters())
-                    + list(self.generator.parameters())
-                )
+                all_params = [
+                    p for group in self.optimizer.param_groups for p in group["params"]
+                ]
                 if self.scaler is not None:
                     self.scaler.scale(loss).backward()
                     self.scaler.unscale_(self.optimizer)
@@ -338,6 +381,7 @@ class Pretrainer:
                 },
                 "config": asdict(self.config),
                 "norm_stats": self.norm_stats,
+                "ref_norm_stats": self.ref_norm_stats,
             },
             self.output_dir / "pretrain_checkpoint.pt",
         )

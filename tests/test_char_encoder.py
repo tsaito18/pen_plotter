@@ -46,6 +46,47 @@ class TestCharEncoder:
         assert not torch.allclose(e1, e2)
 
 
+class TestCharEncoderForgetGateBias:
+    def test_forget_gate_bias_initialized_to_one(self):
+        enc = CharEncoder(input_dim=2, hidden_dim=64, char_dim=64)
+        for name, param in enc.lstm.named_parameters():
+            if "bias" in name:
+                hidden_dim = param.shape[0] // 4
+                forget_bias = param.data[hidden_dim : 2 * hidden_dim]
+                assert torch.allclose(forget_bias, torch.ones_like(forget_bias))
+
+
+class TestCharEncoderPackedSequence:
+    @pytest.fixture
+    def encoder(self):
+        return CharEncoder(input_dim=2, hidden_dim=64, char_dim=64)
+
+    def test_forward_without_lengths_backward_compatible(self, encoder):
+        x = torch.randn(3, 20, 2)
+        out = encoder(x)
+        assert out.shape == (3, 64)
+
+    def test_forward_with_lengths_shape(self, encoder):
+        x = torch.randn(3, 20, 2)
+        lengths = torch.tensor([20, 15, 10])
+        out = encoder(x, lengths=lengths)
+        assert out.shape == (3, 64)
+
+    def test_packed_differs_from_padded(self, encoder):
+        """Packed sequence output differs when padding is present."""
+        encoder.eval()
+        x = torch.randn(2, 20, 2)
+        x[1, 10:, :] = 0.0  # simulate padding after length 10
+        lengths = torch.tensor([20, 10])
+
+        out_no_pack = encoder(x)
+        out_packed = encoder(x, lengths=lengths)
+        # First sample (full length) should be identical
+        assert torch.allclose(out_no_pack[0], out_packed[0], atol=1e-6)
+        # Second sample (has padding) should differ
+        assert not torch.allclose(out_no_pack[1], out_packed[1], atol=1e-5)
+
+
 class TestStrokesToSequence:
     def test_strokes_to_sequence_basic(self):
         s1 = np.array([[0.0, 0.0], [1.0, 1.0]])

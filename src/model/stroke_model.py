@@ -133,3 +133,21 @@ def mdn_loss(output: dict[str, torch.Tensor], target: torch.Tensor) -> torch.Ten
     )
 
     return stroke_loss + pen_loss
+
+
+def embedding_variance_loss(
+    embeddings: torch.Tensor, min_variance: float = 1.0
+) -> torch.Tensor:
+    """Penalize low variance in batch embeddings to prevent encoder collapse.
+
+    Args:
+        embeddings: (batch, dim)
+        min_variance: target minimum variance per dimension
+
+    Returns:
+        Scalar loss: mean of max(0, min_variance - var) across dimensions
+    """
+    if embeddings.shape[0] < 2:
+        return torch.tensor(0.0, device=embeddings.device)
+    var = embeddings.var(dim=0)
+    return torch.clamp(min_variance - var, min=0).mean()

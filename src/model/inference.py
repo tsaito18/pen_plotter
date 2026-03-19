@@ -36,10 +36,11 @@ class StrokeInference:
             style_enc_kwargs["style_dim"] = config["style_dim"]
 
         self.char_encoder = None
+        self.ref_norm_stats = checkpoint.get("ref_norm_stats", None)
         if is_v2:
             from src.model.char_encoder import CharEncoder
 
-            char_dim = checkpoint.get("char_dim", 128)
+            char_dim = config.get("char_dim", 128)
             gen_kwargs["char_dim"] = char_dim
 
             char_enc_sd = checkpoint["char_encoder_state_dict"]
@@ -95,11 +96,20 @@ class StrokeInference:
 
                 seq = CharEncoder.strokes_to_sequence(reference_strokes)
                 seq_tensor = torch.tensor(seq, dtype=torch.float32).unsqueeze(0)
+                if self.ref_norm_stats is not None:
+                    from src.model.data_utils import normalize_reference
+
+                    seq_tensor = normalize_reference(seq_tensor, self.ref_norm_stats)
                 char_embedding = self.char_encoder(seq_tensor)
             else:
                 char_embedding = torch.zeros(1, self.generator.char_dim)
 
-        current = torch.zeros(1, 1, 3)
+        if self.norm_stats is not None:
+            init_dx = -self.norm_stats["mean_x"] / self.norm_stats["std_x"]
+            init_dy = -self.norm_stats["mean_y"] / self.norm_stats["std_y"]
+            current = torch.tensor([[[init_dx, init_dy, 0.0]]])
+        else:
+            current = torch.zeros(1, 1, 3)
         points: list[list[float]] = []
         pen_states: list[float] = []
 

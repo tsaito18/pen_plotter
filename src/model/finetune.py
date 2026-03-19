@@ -15,7 +15,12 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 
 from src.model.char_encoder import CharEncoder
-from src.model.data_utils import normalize_deltas, strokes_to_deltas
+from src.model.data_utils import (
+    normalize_deltas,
+    normalize_reference,
+    reference_to_sequence,
+    strokes_to_deltas,
+)
 from src.model.pretrain import _detect_device
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
@@ -64,11 +69,7 @@ class FinetuneDataset(Dataset):
         strokes_tensor = strokes_to_deltas(user_data["strokes"])
 
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
-        ref_points = []
-        for stroke in ref_data["strokes"]:
-            for pt in stroke:
-                ref_points.append([pt["x"], pt["y"]])
-        ref_tensor = torch.tensor(ref_points, dtype=torch.float32)
+        ref_tensor = reference_to_sequence(ref_data["strokes"])
 
         return {
             "strokes": strokes_tensor,
@@ -81,12 +82,16 @@ def collate_finetune(batch: list[dict]) -> dict:
     """ユーザーストロークと参照ストロークをそれぞれパディングしてバッチ化。"""
     strokes = [item["strokes"] for item in batch]
     refs = [item["ref_strokes"] for item in batch]
+    lengths = torch.tensor([s.shape[0] for s in strokes])
+    ref_lengths = torch.tensor([r.shape[0] for r in refs])
     padded_strokes = pad_sequence(strokes, batch_first=True, padding_value=0.0)
     padded_refs = pad_sequence(refs, batch_first=True, padding_value=0.0)
     characters = [item["character"] for item in batch]
     return {
         "strokes": padded_strokes,
         "ref_strokes": padded_refs,
+        "lengths": lengths,
+        "ref_lengths": ref_lengths,
         "characters": characters,
     }
 
@@ -112,6 +117,7 @@ class Finetuner:
         checkpoint = torch.load(pretrain_checkpoint, weights_only=False, map_location="cpu")
         self.ckpt_config = checkpoint["config"]
         self.norm_stats = checkpoint.get("norm_stats", None)
+        self.ref_norm_stats = checkpoint.get("ref_norm_stats", None)
 
         cfg = self.ckpt_config
         self.generator = StrokeGenerator(
@@ -167,11 +173,16 @@ class Finetuner:
                 if self.norm_stats is not None:
                     strokes = normalize_deltas(strokes, self.norm_stats)
                 ref_strokes = batch["ref_strokes"].to(self.device)
+                if self.ref_norm_stats is not None:
+                    ref_strokes = normalize_reference(ref_strokes, self.ref_norm_stats)
 
-                style = self.style_encoder(strokes)
+                lengths = batch["lengths"]
+                ref_lengths = batch["ref_lengths"]
+
+                style = self.style_encoder(strokes, lengths=lengths)
 
                 with torch.no_grad():
-                    char_emb = self.char_encoder(ref_strokes)
+                    char_emb = self.char_encoder(ref_strokes, lengths=ref_lengths)
 
                 x = strokes[:, :-1]
                 target = strokes[:, 1:]
@@ -212,6 +223,7 @@ class Finetuner:
                 },
                 "config": self.ckpt_config,
                 "norm_stats": self.norm_stats,
+                "ref_norm_stats": self.ref_norm_stats,
             },
             self.output_dir / "finetuned.pt",
         )

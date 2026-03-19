@@ -25,15 +25,33 @@ class StyleEncoder(nn.Module):
         )
         # Bi-LSTM の出力は hidden_dim * 2
         self.fc = nn.Linear(hidden_dim * 2, style_dim)
+        self._init_forget_gate_bias()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _init_forget_gate_bias(self) -> None:
+        for name, param in self.lstm.named_parameters():
+            if "bias" in name:
+                hidden_dim = param.shape[0] // 4
+                param.data[hidden_dim : 2 * hidden_dim].fill_(1.0)
+
+    def forward(
+        self, x: torch.Tensor, lengths: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """
         Args:
             x: (batch, seq_len, input_dim)
+            lengths: optional (batch,) — actual sequence lengths for packed sequences
         Returns:
             style: (batch, style_dim)
         """
-        _, (h_n, _) = self.lstm(x)
+        if lengths is not None:
+            from torch.nn.utils.rnn import pack_padded_sequence
+
+            packed = pack_padded_sequence(
+                x, lengths.cpu(), batch_first=True, enforce_sorted=False
+            )
+            _, (h_n, _) = self.lstm(packed)
+        else:
+            _, (h_n, _) = self.lstm(x)
         # h_n: (num_layers * 2, batch, hidden_dim)
         h_forward = h_n[-2]  # 最後のレイヤーの forward
         h_backward = h_n[-1]  # 最後のレイヤーの backward

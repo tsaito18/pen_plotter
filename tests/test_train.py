@@ -71,6 +71,15 @@ class TestTrainer:
         assert len(checkpoints) >= 1
 
     @pytest.mark.slow
+    def test_train_passes_lengths_to_style_encoder(self, data_dir, tmp_path):
+        """Verify that training completes with lengths being passed to style_encoder."""
+        cfg = TrainConfig(epochs=1, batch_size=4)
+        trainer = Trainer(cfg, data_dir=data_dir, output_dir=tmp_path / "output")
+        history = trainer.train()
+        assert len(history["losses"]) == 1
+        assert history["losses"][0] > 0
+
+    @pytest.mark.slow
     def test_checkpoint_has_norm_stats(self, data_dir, tmp_path):
         output_dir = tmp_path / "output"
         cfg = TrainConfig(epochs=1, batch_size=4)

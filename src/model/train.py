@@ -69,7 +69,8 @@ class Trainer:
             for batch in self.dataloader:
                 strokes = batch["strokes"]
                 strokes = normalize_deltas(strokes, self.norm_stats)
-                style = self.style_encoder(strokes)
+                lengths = batch["lengths"]
+                style = self.style_encoder(strokes, lengths=lengths)
 
                 x = strokes[:, :-1]
                 target = strokes[:, 1:]

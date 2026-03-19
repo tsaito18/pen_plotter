@@ -89,15 +89,52 @@ class TestPairedStrokeDataset:
         assert "う" not in chars_in_dataset
 
     def test_getitem(self, tmp_path):
-        hand_dir, ref_dir = _make_paired_data(tmp_path, chars=("あ",), n_samples=1, n_points=10)
+        hand_dir, ref_dir = _make_paired_data(tmp_path, chars=("あ",), n_samples=2, n_points=10)
         ds = PairedStrokeDataset(hand_dir, ref_dir)
         item = ds[0]
         assert "strokes" in item
+        assert "style_strokes" in item
         assert "reference" in item
         assert "character" in item
         assert item["strokes"].shape == (10, 3)
+        assert item["style_strokes"].shape[1] == 3
         assert item["reference"].shape[1] == 2
         assert item["character"] == "あ"
+
+    def test_style_strokes_differ_from_strokes(self, tmp_path):
+        """style_strokes should come from a different sample than strokes."""
+        hand_dir, ref_dir = _make_paired_data(tmp_path, chars=("あ",), n_samples=3, n_points=10)
+        ds = PairedStrokeDataset(hand_dir, ref_dir)
+        assert len(ds.char_to_indices["あ"]) == 3
+
+    def test_reference_has_separators(self, tmp_path):
+        """reference_to_sequence inserts (-1,-1) separators between strokes."""
+        hand_dir = tmp_path / "hand"
+        ref_dir = tmp_path / "ref"
+        ch = "あ"
+        # hand data
+        stroke = [{"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": 0.0}
+                  for j in range(5)]
+        data = {"character": ch, "strokes": [stroke], "metadata": {}}
+        d = hand_dir / ch
+        d.mkdir(parents=True, exist_ok=True)
+        import json as _json
+        (d / f"{ch}_0.json").write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        # ref data with 2 strokes
+        s1 = [{"x": float(j), "y": float(j)} for j in range(3)]
+        s2 = [{"x": float(j + 5), "y": float(j + 5)} for j in range(4)]
+        ref_data = {"character": ch, "strokes": [s1, s2], "metadata": {}}
+        rd = ref_dir / ch
+        rd.mkdir(parents=True, exist_ok=True)
+        (rd / f"{ch}_0.json").write_text(_json.dumps(ref_data, ensure_ascii=False), encoding="utf-8")
+        ds = PairedStrokeDataset(hand_dir, ref_dir)
+        item = ds[0]
+        ref = item["reference"]
+        # 3 points + separator + 4 points = 8
+        assert ref.shape == (8, 2)
+        # separator at index 3
+        assert ref[3, 0].item() == -1.0
+        assert ref[3, 1].item() == -1.0
 
     def test_multi_hand_dirs(self, tmp_path):
         """hand_dir がリストの場合も動作する。"""
@@ -133,19 +170,22 @@ class TestPairedStrokeDataset:
 class TestCollatePaired:
     def test_collate(self, tmp_path):
         hand_dir, ref_dir = _make_paired_data(
-            tmp_path, chars=("あ", "い"), n_samples=1, n_points=10
+            tmp_path, chars=("あ", "い"), n_samples=2, n_points=10
         )
         ds = PairedStrokeDataset(hand_dir, ref_dir)
         batch = [ds[i] for i in range(len(ds))]
         collated = collate_paired(batch)
 
-        assert collated["strokes"].shape[0] == 2
+        assert collated["strokes"].shape[0] == 4
         assert collated["strokes"].shape[2] == 3
-        assert collated["reference"].shape[0] == 2
+        assert collated["style_strokes"].shape[0] == 4
+        assert collated["style_strokes"].shape[2] == 3
+        assert collated["reference"].shape[0] == 4
         assert collated["reference"].shape[2] == 2
-        assert len(collated["lengths"]) == 2
-        assert len(collated["ref_lengths"]) == 2
-        assert len(collated["characters"]) == 2
+        assert len(collated["lengths"]) == 4
+        assert len(collated["style_lengths"]) == 4
+        assert len(collated["ref_lengths"]) == 4
+        assert len(collated["characters"]) == 4
 
 
 class TestPretrainer:
@@ -171,6 +211,16 @@ class TestPretrainer:
             assert key in pt.norm_stats
         assert pt.norm_stats["std_x"] > 0
         assert pt.norm_stats["std_y"] > 0
+
+    def test_ref_norm_stats_computed(self, paired_dirs, tmp_path):
+        hand_dir, ref_dir = paired_dirs
+        cfg = PretrainConfig(epochs=1, batch_size=2)
+        pt = Pretrainer(cfg, hand_dir=hand_dir, ref_dir=ref_dir, output_dir=tmp_path / "out")
+        assert pt.ref_norm_stats is not None
+        for key in ("mean_x", "mean_y", "std_x", "std_y"):
+            assert key in pt.ref_norm_stats
+        assert pt.ref_norm_stats["std_x"] > 0
+        assert pt.ref_norm_stats["std_y"] > 0
 
     @pytest.mark.slow
     def test_train_one_epoch(self, paired_dirs, tmp_path):
@@ -201,6 +251,9 @@ class TestPretrainer:
         assert "norm_stats" in ckpt
         for key in ("mean_x", "mean_y", "std_x", "std_y"):
             assert key in ckpt["norm_stats"]
+        assert "ref_norm_stats" in ckpt
+        for key in ("mean_x", "mean_y", "std_x", "std_y"):
+            assert key in ckpt["ref_norm_stats"]
 
 
 def _make_pot_sample_v1(char: str, strokes: list[list[tuple[int, int]]]) -> bytes:
@@ -270,17 +323,19 @@ class TestCASIAPairedDataset:
         item = ds[0]
 
         assert "strokes" in item
+        assert "style_strokes" in item
         assert "reference" in item
         assert "character" in item
         assert item["strokes"].ndim == 2
         assert item["strokes"].shape[1] == 3
+        assert item["style_strokes"].ndim == 2
+        assert item["style_strokes"].shape[1] == 3
         assert item["reference"].ndim == 2
         assert item["reference"].shape[1] == 2
         assert item["character"] == "\u5927"
-        # pen_state: 0=pen-down, 1=pen-up (last point of each stroke)
         pen_states = item["strokes"][:, 2]
         assert ((pen_states == 0) | (pen_states == 1)).all()
-        assert pen_states[-1] == 1.0  # last point of last stroke is pen-up
+        assert pen_states[-1] == 1.0
 
     def test_only_matched_chars(self, tmp_path):
         """refに存在しない文字はデータセットから除外される。"""
