@@ -112,6 +112,9 @@ class StrokeInference:
         for stroke_idx in range(num_ref_strokes):
             stroke_index_tensor = torch.tensor([stroke_idx])
 
+            ref_stroke_len = len(reference_strokes[stroke_idx]) if reference_strokes else num_steps
+            max_stroke_steps = min(int(ref_stroke_len * 1.5), num_steps)
+
             if self.norm_stats is not None:
                 init_dx = -self.norm_stats["mean_x"] / self.norm_stats["std_x"]
                 init_dy = -self.norm_stats["mean_y"] / self.norm_stats["std_y"]
@@ -121,7 +124,7 @@ class StrokeInference:
 
             points: list[list[float]] = []
 
-            for _ in range(num_steps):
+            for _ in range(max_stroke_steps):
                 output = self.generator(
                     current, style,
                     char_embedding=char_embedding,
@@ -170,6 +173,13 @@ class StrokeInference:
                     cx += dx_val
                     cy += dy_val
                     stroke_points.append([cx, cy])
+
+                if reference_strokes is not None and stroke_idx < len(reference_strokes):
+                    ref_start = reference_strokes[stroke_idx][0]
+                    for pt in stroke_points:
+                        pt[0] += ref_start[0]
+                        pt[1] += ref_start[1]
+
                 all_strokes.append(np.array(stroke_points))
 
         if not all_strokes:
