@@ -35,6 +35,8 @@ class StrokeInference:
         if "style_dim" in config and "style_dim" not in style_enc_kwargs:
             style_enc_kwargs["style_dim"] = config["style_dim"]
 
+        gen_kwargs.setdefault("input_dim", 2)
+
         self.char_encoder = None
         self.ref_norm_stats = checkpoint.get("ref_norm_stats", None)
         if is_v2:
@@ -81,7 +83,7 @@ class StrokeInference:
         temperature: float = 1.0,
         reference_strokes: list[NDArray[np.float64]] | None = None,
     ) -> list[np.ndarray]:
-        """スタイルサンプルからストロークを自己回帰生成する。"""
+        """スタイルサンプルからストロークをストローク単位で自己回帰生成する。"""
         if self.norm_stats is not None:
             from src.model.data_utils import normalize_deltas
 
@@ -104,70 +106,73 @@ class StrokeInference:
             else:
                 char_embedding = torch.zeros(1, self.generator.char_dim)
 
-        if self.norm_stats is not None:
-            init_dx = -self.norm_stats["mean_x"] / self.norm_stats["std_x"]
-            init_dy = -self.norm_stats["mean_y"] / self.norm_stats["std_y"]
-            current = torch.tensor([[[init_dx, init_dy, 0.0]]])
-        else:
-            current = torch.zeros(1, 1, 3)
-        points: list[list[float]] = []
-        pen_states: list[float] = []
+        num_ref_strokes = len(reference_strokes) if reference_strokes is not None else 1
+        all_strokes: list[np.ndarray] = []
 
-        for _ in range(num_steps):
-            output = self.generator(current, style, char_embedding=char_embedding)
-
-            pi = output["pi"][:, -1] / temperature
-            pi = torch.softmax(pi, dim=-1)
-
-            k = torch.multinomial(pi, 1).squeeze(-1)
-
-            mu_x = output["mu_x"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
-            mu_y = output["mu_y"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
-            sigma_x = output["sigma_x"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
-            sigma_y = output["sigma_y"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
-            rho = output["rho"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
-
-            z1 = torch.randn_like(mu_x)
-            z2 = torch.randn_like(mu_y)
-            dx = mu_x + sigma_x * z1
-            dy = mu_y + sigma_y * (rho * z1 + torch.sqrt(1 - rho**2 + 1e-6) * z2)
-
-            pen_prob = torch.sigmoid(output["pen_logit"][:, -1, 0])
-            pen_state = (pen_prob > 0.5).float()
+        for stroke_idx in range(num_ref_strokes):
+            stroke_index_tensor = torch.tensor([stroke_idx])
 
             if self.norm_stats is not None:
-                from src.model.data_utils import denormalize_point
+                init_dx = -self.norm_stats["mean_x"] / self.norm_stats["std_x"]
+                init_dy = -self.norm_stats["mean_y"] / self.norm_stats["std_y"]
+                current = torch.tensor([[[init_dx, init_dy]]])
+            else:
+                current = torch.zeros(1, 1, 2)
 
-                dx_raw, dy_raw = denormalize_point(
-                    dx.item(), dy.item(), self.norm_stats
+            points: list[list[float]] = []
+
+            for _ in range(num_steps):
+                output = self.generator(
+                    current, style,
+                    char_embedding=char_embedding,
+                    stroke_index=stroke_index_tensor,
                 )
-            else:
-                dx_raw, dy_raw = dx.item(), dy.item()
 
-            points.append([dx_raw, dy_raw])
-            pen_states.append(pen_state.item())
+                pi = output["pi"][:, -1] / temperature
+                pi = torch.softmax(pi, dim=-1)
 
-            next_input = torch.tensor([[[dx.item(), dy.item(), pen_state.item()]]])
-            current = torch.cat([current, next_input], dim=1)
+                k = torch.multinomial(pi, 1).squeeze(-1)
 
-        strokes: list[np.ndarray] = []
-        current_stroke: list[list[float]] = []
-        cumulative_x, cumulative_y = 0.0, 0.0
+                mu_x = output["mu_x"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
+                mu_y = output["mu_y"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
+                sigma_x = output["sigma_x"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
+                sigma_y = output["sigma_y"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
+                rho = output["rho"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
 
-        for (dx, dy), pen in zip(points, pen_states):
-            cumulative_x += dx
-            cumulative_y += dy
-            if pen < 0.5:
-                current_stroke.append([cumulative_x, cumulative_y])
-            else:
-                if len(current_stroke) >= 2:
-                    strokes.append(np.array(current_stroke))
-                current_stroke = []
+                z1 = torch.randn_like(mu_x)
+                z2 = torch.randn_like(mu_y)
+                dx = mu_x + sigma_x * z1
+                dy = mu_y + sigma_y * (rho * z1 + torch.sqrt(1 - rho**2 + 1e-6) * z2)
 
-        if len(current_stroke) >= 2:
-            strokes.append(np.array(current_stroke))
+                eos_prob = torch.sigmoid(output["eos_logit"][:, -1, 0])
 
-        if not strokes:
-            strokes = [np.array(points)]
+                if self.norm_stats is not None:
+                    from src.model.data_utils import denormalize_point
 
-        return strokes
+                    dx_raw, dy_raw = denormalize_point(
+                        dx.item(), dy.item(), self.norm_stats
+                    )
+                else:
+                    dx_raw, dy_raw = dx.item(), dy.item()
+
+                points.append([dx_raw, dy_raw])
+
+                if eos_prob > 0.5:
+                    break
+
+                next_input = torch.tensor([[[dx.item(), dy.item()]]])
+                current = torch.cat([current, next_input], dim=1)
+
+            if len(points) >= 2:
+                stroke_points = []
+                cx, cy = 0.0, 0.0
+                for dx_val, dy_val in points:
+                    cx += dx_val
+                    cy += dy_val
+                    stroke_points.append([cx, cy])
+                all_strokes.append(np.array(stroke_points))
+
+        if not all_strokes:
+            all_strokes = [np.array([[0.0, 0.0], [1.0, 1.0]])]
+
+        return all_strokes

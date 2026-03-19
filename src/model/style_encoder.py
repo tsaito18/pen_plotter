@@ -25,6 +25,7 @@ class StyleEncoder(nn.Module):
         )
         # Bi-LSTM の出力は hidden_dim * 2
         self.fc = nn.Linear(hidden_dim * 2, style_dim)
+        self.norm = nn.LayerNorm(style_dim)
         self._init_forget_gate_bias()
 
     def _init_forget_gate_bias(self) -> None:
@@ -56,5 +57,5 @@ class StyleEncoder(nn.Module):
         h_forward = h_n[-2]  # 最後のレイヤーの forward
         h_backward = h_n[-1]  # 最後のレイヤーの backward
         h_cat = torch.cat([h_forward, h_backward], dim=1)
-        style = self.fc(h_cat)
+        style = self.norm(self.fc(h_cat))
         return style

@@ -8,7 +8,10 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from src.model.data_utils import compute_normalization_stats, normalize_deltas
+from src.model.data_utils import (
+    normalize_deltas,
+    normalize_deltas_2d,
+)
 from src.model.dataset import StrokeDataset, collate_strokes
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
@@ -41,10 +44,13 @@ class Trainer:
             collate_fn=collate_strokes,
         )
 
-        sample_tensors = [self.dataset[i]["strokes"] for i in range(len(self.dataset))]
-        self.norm_stats = compute_normalization_stats(sample_tensors)
+        sample_tensors = [self.dataset[i]["stroke_deltas"] for i in range(len(self.dataset))]
+        from src.model.data_utils import compute_normalization_stats_2d
+
+        self.norm_stats = compute_normalization_stats_2d(sample_tensors)
 
         self.generator = StrokeGenerator(
+            input_dim=2,
             hidden_dim=config.hidden_dim,
             style_dim=config.style_dim,
             num_mixtures=config.num_mixtures,
@@ -67,22 +73,33 @@ class Trainer:
             n_batches = 0
 
             for batch in self.dataloader:
-                strokes = batch["strokes"]
-                strokes = normalize_deltas(strokes, self.norm_stats)
-                lengths = batch["lengths"]
-                style = self.style_encoder(strokes, lengths=lengths)
+                stroke_deltas = batch["stroke_deltas"]
+                stroke_deltas_norm = normalize_deltas_2d(stroke_deltas, self.norm_stats)
 
-                x = strokes[:, :-1]
-                target = strokes[:, 1:]
+                eos = batch["eos"]
+                stroke_indices = batch["stroke_indices"]
 
-                output = self.generator(x, style)
+                style_strokes = batch["style_strokes"]
+                style_strokes = normalize_deltas(style_strokes, self.norm_stats)
 
-                # output と target のシーケンス長を揃える
-                min_len = min(output["pi"].shape[1], target.shape[1])
+                style_lengths = batch["style_lengths"]
+                style = self.style_encoder(style_strokes, lengths=style_lengths)
+
+                x = stroke_deltas_norm[:, :-1]
+                target_xy = stroke_deltas_norm[:, 1:]
+                target_eos = eos[:, 1:]
+
+                output = self.generator(
+                    x, style, stroke_index=stroke_indices,
+                )
+
+                min_len = min(output["pi"].shape[1], target_xy.shape[1])
                 trimmed_output = {k: v[:, :min_len] for k, v in output.items()}
-                trimmed_target = target[:, :min_len]
+                trimmed_xy = target_xy[:, :min_len]
+                trimmed_eos = target_eos[:, :min_len]
 
-                loss = mdn_loss(trimmed_output, trimmed_target)
+                stroke_loss, eos_loss = mdn_loss(trimmed_output, trimmed_xy, trimmed_eos)
+                loss = stroke_loss + 0.5 * eos_loss
 
                 self.optimizer.zero_grad()
                 loss.backward()

@@ -8,12 +8,15 @@ import torch
 
 from src.model.data_utils import (
     compute_normalization_stats,
+    compute_normalization_stats_2d,
     compute_reference_stats,
     denormalize_point,
     normalize_deltas,
+    normalize_deltas_2d,
     normalize_reference,
     reference_to_sequence,
     reference_to_sequence_from_arrays,
+    stroke_to_deltas_2d,
     strokes_to_deltas,
     strokes_to_deltas_from_arrays,
 )
@@ -127,6 +130,25 @@ class TestStrokesToDeltasFromArrays:
         torch.testing.assert_close(result_dict, result_array)
 
 
+class TestStrokeToDeltas2D:
+    def test_basic(self) -> None:
+        points = np.array([[0, 0], [1, 2], [4, 3]], dtype=np.float32)
+        result = stroke_to_deltas_2d(points)
+        assert result.shape == (3, 2)
+        expected = torch.tensor(
+            [[0, 0], [1, 2], [3, 1]],
+            dtype=torch.float32,
+        )
+        torch.testing.assert_close(result, expected)
+
+    def test_single_point(self) -> None:
+        points = np.array([[5, 5]], dtype=np.float32)
+        result = stroke_to_deltas_2d(points)
+        assert result.shape == (1, 2)
+        assert result[0, 0] == 0.0
+        assert result[0, 1] == 0.0
+
+
 class TestNormalization:
     def test_compute_stats(self) -> None:
         t1 = torch.tensor([[1.0, 2.0, 0], [3.0, 4.0, 1]])
@@ -177,6 +199,42 @@ class TestNormalization:
         normalized = normalize_deltas(t, stats)
         assert normalized.shape == t.shape
         torch.testing.assert_close(normalized[:, :, 2], t[:, :, 2])
+
+
+class TestNormalization2D:
+    def test_compute_stats_2d(self) -> None:
+        t1 = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        t2 = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
+        stats = compute_normalization_stats_2d([t1, t2])
+
+        all_dx = torch.tensor([1.0, 3.0, 5.0, 7.0])
+        all_dy = torch.tensor([2.0, 4.0, 6.0, 8.0])
+        assert stats["mean_x"] == pytest.approx(all_dx.mean().item())
+        assert stats["mean_y"] == pytest.approx(all_dy.mean().item())
+
+    def test_normalize_2d(self) -> None:
+        t = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
+        stats = {"mean_x": 2.0, "mean_y": 3.0, "std_x": 1.0, "std_y": 1.0}
+        normalized = normalize_deltas_2d(t, stats)
+        expected = torch.tensor([[-1.0, -1.0], [1.0, 1.0]], dtype=torch.float32)
+        torch.testing.assert_close(normalized, expected)
+
+    def test_normalize_2d_batched(self) -> None:
+        t = torch.randn(4, 10, 2)
+        stats = compute_normalization_stats_2d([t[i] for i in range(4)])
+        normalized = normalize_deltas_2d(t, stats)
+        assert normalized.shape == t.shape
+
+    def test_roundtrip_2d(self) -> None:
+        t = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
+        stats = compute_normalization_stats_2d([t])
+        normalized = normalize_deltas_2d(t, stats)
+        for i in range(t.shape[0]):
+            dx, dy = denormalize_point(
+                normalized[i, 0].item(), normalized[i, 1].item(), stats
+            )
+            assert dx == pytest.approx(t[i, 0].item(), abs=1e-5)
+            assert dy == pytest.approx(t[i, 1].item(), abs=1e-5)
 
 
 class TestReferenceToSequence:

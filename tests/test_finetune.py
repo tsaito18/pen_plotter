@@ -58,6 +58,7 @@ def _make_pretrain_checkpoint(
     }
     checkpoint = {
         "generator_state_dict": StrokeGenerator(
+            input_dim=2,
             char_dim=cfg["char_dim"],
             hidden_dim=cfg["hidden_dim"],
             style_dim=cfg["style_dim"],
@@ -96,10 +97,11 @@ class TestFinetuneDataset:
         ref_dir = _make_ref_dir(tmp_path / "ref", ["あ", "い"])
         ds = FinetuneDataset(user_dir, ref_dir)
         assert len(ds) > 0
-        # "う" has no ref, so only "あ" and "い" pairs
         for i in range(len(ds)):
             item = ds[i]
-            assert "strokes" in item
+            assert "stroke_deltas" in item
+            assert "eos" in item
+            assert "stroke_index" in item
             assert "ref_strokes" in item
             assert "character" in item
             assert item["character"] in ["あ", "い"]
@@ -110,10 +112,15 @@ class TestFinetuneDataset:
         ref_dir = _make_ref_dir(tmp_path / "ref", chars)
         ds = FinetuneDataset(user_dir, ref_dir)
         item = ds[0]
-        assert item["strokes"].ndim == 2
-        assert item["strokes"].shape[1] == 3  # dx, dy, pen_state
+        assert item["stroke_deltas"].ndim == 2
+        assert item["stroke_deltas"].shape[1] == 2
+        assert item["eos"].ndim == 2
+        assert item["eos"].shape[1] == 1
+        assert item["eos"][-1, 0] == 1.0
         assert item["ref_strokes"].ndim == 2
-        assert item["ref_strokes"].shape[1] == 2  # x, y
+        assert item["ref_strokes"].shape[1] == 2
+        assert item["style_strokes"].ndim == 2
+        assert item["style_strokes"].shape[1] == 3
 
     def test_collate_has_lengths(self, tmp_path):
         chars = ["あ"]
@@ -122,9 +129,11 @@ class TestFinetuneDataset:
         ds = FinetuneDataset(user_dir, ref_dir)
         batch = [ds[i] for i in range(len(ds))]
         collated = collate_finetune(batch)
-        assert "lengths" in collated
+        assert "stroke_lengths" in collated
         assert "ref_lengths" in collated
-        assert len(collated["lengths"]) == 2
+        assert "style_lengths" in collated
+        assert "stroke_indices" in collated
+        assert len(collated["stroke_lengths"]) == 2
         assert len(collated["ref_lengths"]) == 2
 
     def test_reference_has_separators(self, tmp_path):
@@ -134,14 +143,12 @@ class TestFinetuneDataset:
         ch = "あ"
         user_dir = tmp_path / "user"
         ref_dir = tmp_path / "ref"
-        # user data
         d = user_dir / ch
         d.mkdir(parents=True, exist_ok=True)
         stroke = [{"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": 0.0}
                   for j in range(5)]
         data = {"character": ch, "strokes": [stroke], "metadata": {}}
         (d / f"{ch}_0.json").write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        # ref data with 2 strokes
         s1 = [{"x": float(j), "y": float(j)} for j in range(3)]
         s2 = [{"x": float(j + 5), "y": float(j + 5)} for j in range(4)]
         ref_data = {"character": ch, "strokes": [s1, s2], "metadata": {}}
@@ -157,18 +164,17 @@ class TestFinetuneDataset:
         assert ref[3, 1].item() == -1.0
 
     def test_dataset_delta_encoding(self, tmp_path):
-        """Strokes use delta coordinates and proper pen_state (0/1)."""
+        """Strokes use delta coordinates with EOS."""
         chars = ["あ"]
         user_dir = _make_data_dir(tmp_path / "user", chars, n_samples=1)
         ref_dir = _make_ref_dir(tmp_path / "ref", chars)
         ds = FinetuneDataset(user_dir, ref_dir)
         item = ds[0]
-        pen_states = item["strokes"][:, 2]
-        assert ((pen_states == 0) | (pen_states == 1)).all()
-        assert pen_states[-1] == 1.0  # last point is pen-up
-        # first point delta is (0, 0)
-        assert item["strokes"][0, 0] == 0.0
-        assert item["strokes"][0, 1] == 0.0
+        assert item["stroke_deltas"][0, 0] == 0.0
+        assert item["stroke_deltas"][0, 1] == 0.0
+        assert item["eos"][-1, 0] == 1.0
+        if item["eos"].shape[0] > 1:
+            assert item["eos"][0, 0] == 0.0
 
 
 class TestFinetuner:
@@ -349,7 +355,6 @@ class TestFinetuner:
         ]:
             assert key in output_ckpt, f"Missing key: {key}"
 
-        # Generator weights should be unchanged (frozen)
         for k in input_ckpt["generator_state_dict"]:
             assert torch.equal(
                 input_ckpt["generator_state_dict"][k],

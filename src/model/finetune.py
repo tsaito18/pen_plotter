@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader, Dataset
 from src.model.char_encoder import CharEncoder
 from src.model.data_utils import (
     normalize_deltas,
+    normalize_deltas_2d,
     normalize_reference,
     reference_to_sequence,
     strokes_to_deltas,
@@ -37,11 +38,12 @@ class FinetuneConfig:
 class FinetuneDataset(Dataset):
     """ユーザーサンプルと参照ストロークのペアデータセット。
 
+    各ストロークが個別のサンプルとなる（ストローク単位生成）。
     user_dirとref_dirの両方に存在する文字のみをペアリングする。
     """
 
     def __init__(self, user_dir: Path, ref_dir: Path) -> None:
-        self.samples: list[tuple[str, Path, Path]] = []
+        self.char_samples: list[tuple[str, Path, Path]] = []
         user_dir = Path(user_dir)
         ref_dir = Path(ref_dir)
 
@@ -57,40 +59,78 @@ class FinetuneDataset(Dataset):
             for char_dir in sorted(user_dir.iterdir()):
                 if char_dir.is_dir() and char_dir.name in ref_chars:
                     for f in sorted(char_dir.glob("*.json")):
-                        self.samples.append((char_dir.name, f, ref_chars[char_dir.name]))
+                        self.char_samples.append((char_dir.name, f, ref_chars[char_dir.name]))
+
+        self.samples: list[tuple[int, int, int]] = []
+        for char_idx, (ch, user_path, _) in enumerate(self.char_samples):
+            user_data = json.loads(user_path.read_text(encoding="utf-8"))
+            n_strokes = len(user_data["strokes"])
+            for stroke_idx in range(n_strokes):
+                stroke = user_data["strokes"][stroke_idx]
+                if len(stroke) >= 2:
+                    self.samples.append((char_idx, stroke_idx, n_strokes))
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict:
-        character, user_path, ref_path = self.samples[idx]
+        char_idx, stroke_idx, num_strokes = self.samples[idx]
+        character, user_path, ref_path = self.char_samples[char_idx]
 
         user_data = json.loads(user_path.read_text(encoding="utf-8"))
-        strokes_tensor = strokes_to_deltas(user_data["strokes"])
+        stroke_points = user_data["strokes"][stroke_idx]
+
+        pts = [(pt["x"], pt["y"]) for pt in stroke_points]
+        deltas = torch.zeros(len(pts), 2, dtype=torch.float32)
+        for i in range(1, len(pts)):
+            deltas[i, 0] = pts[i][0] - pts[i - 1][0]
+            deltas[i, 1] = pts[i][1] - pts[i - 1][1]
+
+        eos = torch.zeros(len(pts), 1, dtype=torch.float32)
+        eos[-1, 0] = 1.0
+
+        style_tensor = strokes_to_deltas(user_data["strokes"])
 
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
         ref_tensor = reference_to_sequence(ref_data["strokes"])
 
         return {
-            "strokes": strokes_tensor,
+            "stroke_deltas": deltas,
+            "eos": eos,
+            "stroke_index": stroke_idx,
+            "num_strokes": num_strokes,
             "ref_strokes": ref_tensor,
             "character": character,
+            "style_strokes": style_tensor,
         }
 
 
 def collate_finetune(batch: list[dict]) -> dict:
     """ユーザーストロークと参照ストロークをそれぞれパディングしてバッチ化。"""
-    strokes = [item["strokes"] for item in batch]
+    stroke_deltas = [item["stroke_deltas"] for item in batch]
+    eos_list = [item["eos"] for item in batch]
+    style_strokes = [item["style_strokes"] for item in batch]
     refs = [item["ref_strokes"] for item in batch]
-    lengths = torch.tensor([s.shape[0] for s in strokes])
+
+    stroke_lengths = torch.tensor([s.shape[0] for s in stroke_deltas])
+    style_lengths = torch.tensor([s.shape[0] for s in style_strokes])
     ref_lengths = torch.tensor([r.shape[0] for r in refs])
-    padded_strokes = pad_sequence(strokes, batch_first=True, padding_value=0.0)
+    stroke_indices = torch.tensor([item["stroke_index"] for item in batch])
+
+    padded_deltas = pad_sequence(stroke_deltas, batch_first=True, padding_value=0.0)
+    padded_eos = pad_sequence(eos_list, batch_first=True, padding_value=0.0)
+    padded_style = pad_sequence(style_strokes, batch_first=True, padding_value=0.0)
     padded_refs = pad_sequence(refs, batch_first=True, padding_value=0.0)
+
     characters = [item["character"] for item in batch]
     return {
-        "strokes": padded_strokes,
+        "stroke_deltas": padded_deltas,
+        "eos": padded_eos,
+        "stroke_indices": stroke_indices,
+        "style_strokes": padded_style,
         "ref_strokes": padded_refs,
-        "lengths": lengths,
+        "stroke_lengths": stroke_lengths,
+        "style_lengths": style_lengths,
         "ref_lengths": ref_lengths,
         "characters": characters,
     }
@@ -121,6 +161,7 @@ class Finetuner:
 
         cfg = self.ckpt_config
         self.generator = StrokeGenerator(
+            input_dim=2,
             char_dim=cfg["char_dim"],
             hidden_dim=cfg["hidden_dim"],
             style_dim=cfg["style_dim"],
@@ -159,7 +200,6 @@ class Finetuner:
         print(f"Device: {self.device}")
         history: dict[str, list[float]] = {"losses": []}
 
-        # cuDNN RNN backward requires train mode even for frozen modules
         self.generator.train()
         self.char_encoder.train()
         self.style_encoder.train()
@@ -169,31 +209,48 @@ class Finetuner:
             n_batches = 0
 
             for batch in self.dataloader:
-                strokes = batch["strokes"].to(self.device)
+                stroke_deltas = batch["stroke_deltas"].to(self.device)
+                eos = batch["eos"].to(self.device)
+                stroke_indices = batch["stroke_indices"].to(self.device)
+
                 if self.norm_stats is not None:
-                    strokes = normalize_deltas(strokes, self.norm_stats)
+                    stroke_deltas_norm = normalize_deltas_2d(stroke_deltas, self.norm_stats)
+                else:
+                    stroke_deltas_norm = stroke_deltas
+
+                style_strokes = batch["style_strokes"].to(self.device)
+                if self.norm_stats is not None:
+                    style_strokes = normalize_deltas(style_strokes, self.norm_stats)
+
                 ref_strokes = batch["ref_strokes"].to(self.device)
                 if self.ref_norm_stats is not None:
                     ref_strokes = normalize_reference(ref_strokes, self.ref_norm_stats)
 
-                lengths = batch["lengths"]
+                style_lengths = batch["style_lengths"]
                 ref_lengths = batch["ref_lengths"]
 
-                style = self.style_encoder(strokes, lengths=lengths)
+                style = self.style_encoder(style_strokes, lengths=style_lengths)
 
                 with torch.no_grad():
                     char_emb = self.char_encoder(ref_strokes, lengths=ref_lengths)
 
-                x = strokes[:, :-1]
-                target = strokes[:, 1:]
+                x = stroke_deltas_norm[:, :-1]
+                target_xy = stroke_deltas_norm[:, 1:]
+                target_eos = eos[:, 1:]
 
-                output = self.generator(x, style, char_embedding=char_emb)
+                output = self.generator(
+                    x, style,
+                    char_embedding=char_emb,
+                    stroke_index=stroke_indices,
+                )
 
-                min_len = min(output["pi"].shape[1], target.shape[1])
+                min_len = min(output["pi"].shape[1], target_xy.shape[1])
                 trimmed_output = {k: v[:, :min_len] for k, v in output.items()}
-                trimmed_target = target[:, :min_len]
+                trimmed_xy = target_xy[:, :min_len]
+                trimmed_eos = target_eos[:, :min_len]
 
-                loss = mdn_loss(trimmed_output, trimmed_target)
+                stroke_loss, eos_loss = mdn_loss(trimmed_output, trimmed_xy, trimmed_eos)
+                loss = stroke_loss + 0.5 * eos_loss
 
                 self.optimizer.zero_grad()
                 loss.backward()

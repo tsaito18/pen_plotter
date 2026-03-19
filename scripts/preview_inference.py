@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from src.model.data_utils import strokes_to_deltas_from_arrays
 
-    style_tensor = strokes_to_deltas_from_arrays(ref_strokes)
+    style_tensor = strokes_to_deltas_from_arrays(ref_strokes)  # (N, 3) with pen_state for StyleEncoder
     style_sample = style_tensor.unsqueeze(0)  # (1, N, 3)
 
     n_cols = 1 + args.num_samples

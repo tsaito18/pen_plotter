@@ -12,7 +12,7 @@ from src.model.style_encoder import StyleEncoder
 class TestStrokeInference:
     @pytest.fixture
     def inference_engine(self, tmp_path):
-        generator = StrokeGenerator(input_dim=3, hidden_dim=64, style_dim=128, num_mixtures=3)
+        generator = StrokeGenerator(input_dim=2, hidden_dim=64, style_dim=128, num_mixtures=3)
         style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=128)
 
         checkpoint = {
@@ -25,7 +25,7 @@ class TestStrokeInference:
         return StrokeInference(
             checkpoint_path=ckpt_path,
             generator_kwargs={
-                "input_dim": 3,
+                "input_dim": 2,
                 "hidden_dim": 64,
                 "style_dim": 128,
                 "num_mixtures": 3,
@@ -55,7 +55,14 @@ class TestStrokeInference:
         import numpy as np
 
         style_sample = torch.randn(1, 15, 3)
-        strokes = inference_engine.generate(style_sample=style_sample, num_steps=5)
+        reference = [
+            np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64),
+            np.array([[0.2, 0.8], [0.8, 0.2]], dtype=np.float64),
+        ]
+        strokes = inference_engine.generate(
+            style_sample=style_sample, num_steps=20,
+            reference_strokes=reference,
+        )
         for stroke in strokes:
             assert isinstance(stroke, np.ndarray)
             assert stroke.ndim == 2
@@ -65,6 +72,21 @@ class TestStrokeInference:
         """V1 checkpoint has no norm_stats."""
         assert inference_engine.norm_stats is None
 
+    def test_stroke_count_matches_reference(self, inference_engine):
+        """Number of generated strokes should match reference stroke count."""
+        style_sample = torch.randn(1, 20, 3)
+        reference = [
+            np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64),
+            np.array([[0.2, 0.8], [0.8, 0.2], [0.5, 0.5]], dtype=np.float64),
+            np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        ]
+        strokes = inference_engine.generate(
+            style_sample=style_sample,
+            num_steps=20,
+            reference_strokes=reference,
+        )
+        assert len(strokes) <= 3
+
 
 class TestStrokeInferenceV2:
     """V2チェックポイント（CharEncoder付き）のテスト。"""
@@ -73,7 +95,7 @@ class TestStrokeInferenceV2:
     def v2_checkpoint_path(self, tmp_path):
         char_dim = 64
         generator = StrokeGenerator(
-            input_dim=3, hidden_dim=64, style_dim=128, char_dim=char_dim, num_mixtures=3
+            input_dim=2, hidden_dim=64, style_dim=128, char_dim=char_dim, num_mixtures=3
         )
         style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=128)
         char_enc = CharEncoder(input_dim=2, hidden_dim=32, char_dim=char_dim, num_layers=1)
@@ -92,7 +114,7 @@ class TestStrokeInferenceV2:
         return StrokeInference(
             checkpoint_path=v2_checkpoint_path,
             generator_kwargs={
-                "input_dim": 3,
+                "input_dim": 2,
                 "hidden_dim": 64,
                 "style_dim": 128,
                 "num_mixtures": 3,
@@ -126,7 +148,7 @@ class TestStrokeInferenceV2:
 
     def test_v1_checkpoint_still_works(self, tmp_path):
         """V1チェックポイント（char_encoder無し）が従来通り動作する。"""
-        generator = StrokeGenerator(input_dim=3, hidden_dim=64, style_dim=128, num_mixtures=3)
+        generator = StrokeGenerator(input_dim=2, hidden_dim=64, style_dim=128, num_mixtures=3)
         style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=128)
         checkpoint = {
             "generator_state_dict": generator.state_dict(),
@@ -138,7 +160,7 @@ class TestStrokeInferenceV2:
         engine = StrokeInference(
             checkpoint_path=ckpt_path,
             generator_kwargs={
-                "input_dim": 3,
+                "input_dim": 2,
                 "hidden_dim": 64,
                 "style_dim": 128,
                 "num_mixtures": 3,
@@ -177,7 +199,7 @@ class TestStrokeInferenceNormStats:
 
     @pytest.fixture
     def engine_with_norm(self, tmp_path, norm_stats):
-        generator = StrokeGenerator(input_dim=3, hidden_dim=64, style_dim=128, num_mixtures=3)
+        generator = StrokeGenerator(input_dim=2, hidden_dim=64, style_dim=128, num_mixtures=3)
         style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=128)
         checkpoint = {
             "generator_state_dict": generator.state_dict(),
@@ -189,7 +211,7 @@ class TestStrokeInferenceNormStats:
         return StrokeInference(
             checkpoint_path=ckpt_path,
             generator_kwargs={
-                "input_dim": 3,
+                "input_dim": 2,
                 "hidden_dim": 64,
                 "style_dim": 128,
                 "num_mixtures": 3,
@@ -206,7 +228,13 @@ class TestStrokeInferenceNormStats:
     def test_generate_with_norm_stats(self, engine_with_norm):
         """norm_stats付きでも生成が正常に動作する。"""
         style_sample = torch.randn(1, 15, 3)
-        strokes = engine_with_norm.generate(style_sample=style_sample, num_steps=20)
+        reference = [
+            np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64),
+        ]
+        strokes = engine_with_norm.generate(
+            style_sample=style_sample, num_steps=20,
+            reference_strokes=reference,
+        )
         assert isinstance(strokes, list)
         assert len(strokes) > 0
         for s in strokes:
@@ -218,8 +246,12 @@ class TestStrokeInferenceNormStats:
         """出力座標が発散していないことを確認。"""
         style_sample = torch.randn(1, 15, 3)
         torch.manual_seed(123)
+        reference = [
+            np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64),
+        ]
         strokes = engine_with_norm.generate(
-            style_sample=style_sample, num_steps=50, temperature=0.5
+            style_sample=style_sample, num_steps=50, temperature=0.5,
+            reference_strokes=reference,
         )
         for s in strokes:
             assert np.all(np.isfinite(s)), "Output contains non-finite values"
@@ -232,7 +264,7 @@ class TestStrokeInferenceNormStats:
         ref_norm_stats = {"mean_x": 1.0, "mean_y": 2.0, "std_x": 3.0, "std_y": 4.0}
         char_dim = 64
         generator = StrokeGenerator(
-            input_dim=3, hidden_dim=64, style_dim=128, char_dim=char_dim, num_mixtures=3
+            input_dim=2, hidden_dim=64, style_dim=128, char_dim=char_dim, num_mixtures=3
         )
         style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=128)
         char_enc = CharEncoder(input_dim=2, hidden_dim=32, char_dim=char_dim, num_layers=1)
@@ -249,7 +281,7 @@ class TestStrokeInferenceNormStats:
 
         engine = StrokeInference(
             checkpoint_path=ckpt_path,
-            generator_kwargs={"input_dim": 3, "hidden_dim": 64, "style_dim": 128, "num_mixtures": 3},
+            generator_kwargs={"input_dim": 2, "hidden_dim": 64, "style_dim": 128, "num_mixtures": 3},
             style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 128},
         )
         assert engine.ref_norm_stats == ref_norm_stats
@@ -266,7 +298,7 @@ class TestStrokeInferenceNormStats:
         """V2チェックポイント + norm_stats の組み合わせが動作する。"""
         char_dim = 64
         generator = StrokeGenerator(
-            input_dim=3, hidden_dim=64, style_dim=128, char_dim=char_dim, num_mixtures=3
+            input_dim=2, hidden_dim=64, style_dim=128, char_dim=char_dim, num_mixtures=3
         )
         style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=128)
         char_enc = CharEncoder(input_dim=2, hidden_dim=32, char_dim=char_dim, num_layers=1)
@@ -283,7 +315,7 @@ class TestStrokeInferenceNormStats:
         engine = StrokeInference(
             checkpoint_path=ckpt_path,
             generator_kwargs={
-                "input_dim": 3,
+                "input_dim": 2,
                 "hidden_dim": 64,
                 "style_dim": 128,
                 "num_mixtures": 3,

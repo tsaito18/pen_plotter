@@ -27,7 +27,6 @@ def _make_paired_data(
     ref_dir = base_dir / "ref"
     for ch in chars:
         for i in range(n_samples):
-            # 手書きデータ (x, y, pressure)
             stroke = [
                 {"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": float(j * 10)}
                 for j in range(n_points)
@@ -39,7 +38,6 @@ def _make_paired_data(
                 json.dumps(data, ensure_ascii=False), encoding="utf-8"
             )
 
-        # 参照データ (x, y のみ — KanjiVG 形式)
         ref_stroke = [
             {"x": float(j) * 0.8, "y": float(j) * 0.3, "pressure": 1.0, "timestamp": 0.0}
             for j in range(n_points)
@@ -69,21 +67,21 @@ class TestPairedStrokeDataset:
     def test_creation(self, tmp_path):
         hand_dir, ref_dir = _make_paired_data(tmp_path, chars=("あ", "い"), n_samples=3)
         ds = PairedStrokeDataset(hand_dir, ref_dir)
-        # 2 chars * 3 samples each = 6
+        # Each char has 1 stroke * 3 samples = 3 stroke-level samples per char = 6 total
         assert len(ds) == 6
 
     def test_only_common_chars(self, tmp_path):
         """hand にあるが ref にない文字は除外される。"""
         hand_dir, ref_dir = _make_paired_data(tmp_path, chars=("あ", "い"), n_samples=2)
-        # hand に「う」を追加するが ref には追加しない
         extra_dir = hand_dir / "う"
         extra_dir.mkdir(parents=True, exist_ok=True)
-        stroke = [{"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0}]
+        stroke = [{"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0},
+                  {"x": 1.0, "y": 1.0, "pressure": 1.0, "timestamp": 10.0}]
         data = {"character": "う", "strokes": [stroke], "metadata": {}}
         (extra_dir / "う_0.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
         ds = PairedStrokeDataset(hand_dir, ref_dir)
-        # 「う」は ref に存在しないので除外 → 2 chars * 2 samples = 4
+        # 2 chars * 2 samples * 1 stroke each = 4
         assert len(ds) == 4
         chars_in_dataset = {ds[i]["character"] for i in range(len(ds))}
         assert "う" not in chars_in_dataset
@@ -92,11 +90,17 @@ class TestPairedStrokeDataset:
         hand_dir, ref_dir = _make_paired_data(tmp_path, chars=("あ",), n_samples=2, n_points=10)
         ds = PairedStrokeDataset(hand_dir, ref_dir)
         item = ds[0]
-        assert "strokes" in item
+        assert "stroke_deltas" in item
+        assert "eos" in item
+        assert "stroke_index" in item
+        assert "num_strokes" in item
         assert "style_strokes" in item
         assert "reference" in item
         assert "character" in item
-        assert item["strokes"].shape == (10, 3)
+        assert item["stroke_deltas"].shape == (10, 2)
+        assert item["eos"].shape == (10, 1)
+        assert item["eos"][-1, 0] == 1.0
+        assert item["stroke_index"] == 0
         assert item["style_strokes"].shape[1] == 3
         assert item["reference"].shape[1] == 2
         assert item["character"] == "あ"
@@ -112,7 +116,6 @@ class TestPairedStrokeDataset:
         hand_dir = tmp_path / "hand"
         ref_dir = tmp_path / "ref"
         ch = "あ"
-        # hand data
         stroke = [{"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": 0.0}
                   for j in range(5)]
         data = {"character": ch, "strokes": [stroke], "metadata": {}}
@@ -120,7 +123,6 @@ class TestPairedStrokeDataset:
         d.mkdir(parents=True, exist_ok=True)
         import json as _json
         (d / f"{ch}_0.json").write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        # ref data with 2 strokes
         s1 = [{"x": float(j), "y": float(j)} for j in range(3)]
         s2 = [{"x": float(j + 5), "y": float(j + 5)} for j in range(4)]
         ref_data = {"character": ch, "strokes": [s1, s2], "metadata": {}}
@@ -132,7 +134,6 @@ class TestPairedStrokeDataset:
         ref = item["reference"]
         # 3 points + separator + 4 points = 8
         assert ref.shape == (8, 2)
-        # separator at index 3
         assert ref[3, 0].item() == -1.0
         assert ref[3, 1].item() == -1.0
 
@@ -146,7 +147,8 @@ class TestPairedStrokeDataset:
             for hdir in (hand1, hand2):
                 d = hdir / ch
                 d.mkdir(parents=True, exist_ok=True)
-                stroke = [{"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0}]
+                stroke = [{"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0},
+                          {"x": 1.0, "y": 1.0, "pressure": 1.0, "timestamp": 10.0}]
                 data = {"character": ch, "strokes": [stroke], "metadata": {}}
                 (d / f"{ch}_0.json").write_text(
                     json.dumps(data, ensure_ascii=False), encoding="utf-8"
@@ -156,7 +158,8 @@ class TestPairedStrokeDataset:
             rd.mkdir(parents=True, exist_ok=True)
             ref_data = {
                 "character": ch,
-                "strokes": [[{"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0}]],
+                "strokes": [[{"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0},
+                              {"x": 1.0, "y": 1.0, "pressure": 1.0, "timestamp": 10.0}]],
                 "metadata": {},
             }
             (rd / f"{ch}_0.json").write_text(
@@ -165,6 +168,30 @@ class TestPairedStrokeDataset:
 
         ds = PairedStrokeDataset([hand1, hand2], ref_dir)
         assert len(ds) == 2
+
+    def test_multi_stroke_character(self, tmp_path):
+        """Multi-stroke character creates multiple samples."""
+        hand_dir = tmp_path / "hand"
+        ref_dir = tmp_path / "ref"
+        ch = "あ"
+        s1 = [{"x": float(j), "y": float(j)} for j in range(5)]
+        s2 = [{"x": float(j + 10), "y": float(j + 10)} for j in range(4)]
+        data = {"character": ch, "strokes": [s1, s2], "metadata": {}}
+        d = hand_dir / ch
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{ch}_0.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+        ref_data = {"character": ch, "strokes": [s1, s2], "metadata": {}}
+        rd = ref_dir / ch
+        rd.mkdir(parents=True, exist_ok=True)
+        (rd / f"{ch}_0.json").write_text(json.dumps(ref_data, ensure_ascii=False), encoding="utf-8")
+
+        ds = PairedStrokeDataset(hand_dir, ref_dir)
+        assert len(ds) == 2  # 2 strokes = 2 samples
+        assert ds[0]["stroke_index"] == 0
+        assert ds[1]["stroke_index"] == 1
+        assert ds[0]["num_strokes"] == 2
+        assert ds[1]["num_strokes"] == 2
 
 
 class TestCollatePaired:
@@ -176,15 +203,18 @@ class TestCollatePaired:
         batch = [ds[i] for i in range(len(ds))]
         collated = collate_paired(batch)
 
-        assert collated["strokes"].shape[0] == 4
-        assert collated["strokes"].shape[2] == 3
+        assert collated["stroke_deltas"].shape[0] == 4
+        assert collated["stroke_deltas"].shape[2] == 2
+        assert collated["eos"].shape[0] == 4
+        assert collated["eos"].shape[2] == 1
         assert collated["style_strokes"].shape[0] == 4
         assert collated["style_strokes"].shape[2] == 3
         assert collated["reference"].shape[0] == 4
         assert collated["reference"].shape[2] == 2
-        assert len(collated["lengths"]) == 4
+        assert len(collated["stroke_lengths"]) == 4
         assert len(collated["style_lengths"]) == 4
         assert len(collated["ref_lengths"]) == 4
+        assert "stroke_indices" in collated
         assert len(collated["characters"]) == 4
 
 
@@ -322,20 +352,23 @@ class TestCASIAPairedDataset:
         ds = CASIAPairedDataset(pot_dir, ref_dir)
         item = ds[0]
 
-        assert "strokes" in item
+        assert "stroke_deltas" in item
+        assert "eos" in item
+        assert "stroke_index" in item
+        assert "num_strokes" in item
         assert "style_strokes" in item
         assert "reference" in item
         assert "character" in item
-        assert item["strokes"].ndim == 2
-        assert item["strokes"].shape[1] == 3
+        assert item["stroke_deltas"].ndim == 2
+        assert item["stroke_deltas"].shape[1] == 2
+        assert item["eos"].ndim == 2
+        assert item["eos"].shape[1] == 1
+        assert item["eos"][-1, 0] == 1.0
         assert item["style_strokes"].ndim == 2
         assert item["style_strokes"].shape[1] == 3
         assert item["reference"].ndim == 2
         assert item["reference"].shape[1] == 2
         assert item["character"] == "\u5927"
-        pen_states = item["strokes"][:, 2]
-        assert ((pen_states == 0) | (pen_states == 1)).all()
-        assert pen_states[-1] == 1.0
 
     def test_only_matched_chars(self, tmp_path):
         """refに存在しない文字はデータセットから除外される。"""

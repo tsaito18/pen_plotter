@@ -31,6 +31,7 @@ class CharEncoder(nn.Module):
             bidirectional=True,
         )
         self.fc = nn.Linear(hidden_dim * 2, char_dim)
+        self.norm = nn.LayerNorm(char_dim)
         self._init_forget_gate_bias()
 
     def _init_forget_gate_bias(self) -> None:
@@ -63,7 +64,7 @@ class CharEncoder(nn.Module):
         h_forward = h_n[-2]
         h_backward = h_n[-1]
         h_cat = torch.cat([h_forward, h_backward], dim=1)
-        return self.fc(h_cat)
+        return self.norm(self.fc(h_cat))
 
     @staticmethod
     def strokes_to_sequence(strokes: list[NDArray[np.float64]]) -> NDArray[np.float64]:

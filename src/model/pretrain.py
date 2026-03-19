@@ -15,11 +15,12 @@ from torch.utils.data import DataLoader, Dataset
 from src.collector.casia_parser import CASIAParser
 from src.model.char_encoder import CharEncoder
 from src.model.data_utils import (
-    compute_normalization_stats,
     compute_reference_stats,
     normalize_deltas,
+    normalize_deltas_2d,
     normalize_reference,
     reference_to_sequence,
+    stroke_to_deltas_2d,
     strokes_to_deltas,
     strokes_to_deltas_from_arrays,
 )
@@ -42,12 +43,13 @@ class PretrainConfig:
 class PairedStrokeDataset(Dataset):
     """手書きストロークと対応するKanjiVG参照ストロークのペアを提供する。
 
+    各ストロークが個別のサンプルとなる（ストローク単位生成）。
     hand_dir 内の文字サブディレクトリと ref_dir 内の文字サブディレクトリを
     照合し、両方に存在する文字のみをデータセットに含める。
     """
 
     def __init__(self, hand_dir: Path | list[Path], ref_dir: Path) -> None:
-        self.samples: list[tuple[str, Path, Path]] = []  # (char, hand_path, ref_file_path)
+        self.char_samples: list[tuple[str, Path, Path]] = []
         hand_dirs = hand_dir if isinstance(hand_dir, list) else [hand_dir]
 
         ref_dir = Path(ref_dir)
@@ -70,47 +72,67 @@ class PairedStrokeDataset(Dataset):
                 if ch not in ref_files:
                     continue
                 for f in sorted(char_dir.glob("*.json")):
-                    self.samples.append((ch, f, ref_files[ch]))
+                    self.char_samples.append((ch, f, ref_files[ch]))
 
         self.char_to_indices: dict[str, list[int]] = {}
-        for i, (ch, _, _) in enumerate(self.samples):
+        for i, (ch, _, _) in enumerate(self.char_samples):
             self.char_to_indices.setdefault(ch, []).append(i)
+
+        self.samples: list[tuple[int, int, int]] = []
+        for char_idx, (ch, hand_path, _) in enumerate(self.char_samples):
+            hand_data = json.loads(hand_path.read_text(encoding="utf-8"))
+            n_strokes = len(hand_data["strokes"])
+            for stroke_idx in range(n_strokes):
+                stroke = hand_data["strokes"][stroke_idx]
+                if len(stroke) >= 2:
+                    self.samples.append((char_idx, stroke_idx, n_strokes))
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict:
-        character, hand_path, ref_path = self.samples[idx]
+        char_idx, stroke_idx, num_strokes = self.samples[idx]
+        character, hand_path, ref_path = self.char_samples[char_idx]
 
         hand_data = json.loads(hand_path.read_text(encoding="utf-8"))
-        strokes_tensor = strokes_to_deltas(hand_data["strokes"])
+        stroke_points = hand_data["strokes"][stroke_idx]
 
+        pts = [(pt["x"], pt["y"]) for pt in stroke_points]
+        deltas = torch.zeros(len(pts), 2, dtype=torch.float32)
+        for i in range(1, len(pts)):
+            deltas[i, 0] = pts[i][0] - pts[i - 1][0]
+            deltas[i, 1] = pts[i][1] - pts[i - 1][1]
+
+        eos = torch.zeros(len(pts), 1, dtype=torch.float32)
+        eos[-1, 0] = 1.0
+
+        style_tensor = strokes_to_deltas(hand_data["strokes"])
         same_char = self.char_to_indices[character]
-        candidates = [i for i in same_char if i != idx]
+        candidates = [i for i in same_char if i != char_idx]
         if candidates:
-            style_idx = random.choice(candidates)
-            _, style_path, _ = self.samples[style_idx]
+            style_char_idx = random.choice(candidates)
+            _, style_path, _ = self.char_samples[style_char_idx]
             style_data = json.loads(style_path.read_text(encoding="utf-8"))
             style_tensor = strokes_to_deltas(style_data["strokes"])
-        else:
-            style_tensor = strokes_tensor.clone()
-            style_tensor[:, :2] += torch.randn_like(style_tensor[:, :2]) * 0.1
 
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
         reference_tensor = reference_to_sequence(ref_data["strokes"])
 
         return {
-            "strokes": strokes_tensor,
-            "style_strokes": style_tensor,
+            "stroke_deltas": deltas,
+            "eos": eos,
+            "stroke_index": stroke_idx,
+            "num_strokes": num_strokes,
             "reference": reference_tensor,
             "character": character,
+            "style_strokes": style_tensor,
         }
 
 
 class CASIAPairedDataset(Dataset):
     """CASIA .pot バイナリから直接読み込み、KanjiVG参照とペアリングする。
 
-    大量のJSONファイル生成を回避し、.potファイルをメモリ上で展開して使用する。
+    各ストロークが個別のサンプルとなる（ストローク単位生成）。
     """
 
     def __init__(
@@ -139,8 +161,9 @@ class CASIAPairedDataset(Dataset):
         n_files = len(pot_files)
         print(f"Loading .pot files from {pot_dir}...")
 
-        self.samples: list[tuple[str, list[np.ndarray], Path]] = []
+        self.char_samples: list[tuple[str, list[np.ndarray], Path]] = []
         char_set: set[str] = set()
+        total_stroke_samples = 0
 
         for pot_file in pot_files:
             casia_samples = parser.parse_pot_file(pot_file)
@@ -151,68 +174,93 @@ class CASIAPairedDataset(Dataset):
                 normalized = parser.normalize(sample.strokes, target_size=target_size)
                 if not normalized:
                     continue
-                self.samples.append((ch, normalized, ref_files[ch]))
+                valid_strokes = [s for s in normalized if len(s) >= 2]
+                if not valid_strokes:
+                    continue
+                self.char_samples.append((ch, normalized, ref_files[ch]))
                 char_set.add(ch)
-                if 0 < max_samples <= len(self.samples):
+                total_stroke_samples += len(valid_strokes)
+                if 0 < max_samples <= total_stroke_samples:
                     break
-            if 0 < max_samples <= len(self.samples):
+            if 0 < max_samples <= total_stroke_samples:
                 break
 
-        print(
-            f"Loaded {len(self.samples)} samples "
-            f"({len(char_set)} characters) from {n_files} .pot files"
-        )
-
         self.char_to_indices: dict[str, list[int]] = {}
-        for i, (ch, _, _) in enumerate(self.samples):
+        for i, (ch, _, _) in enumerate(self.char_samples):
             self.char_to_indices.setdefault(ch, []).append(i)
+
+        self.samples: list[tuple[int, int, int]] = []
+        for char_idx, (ch, stroke_arrays, _) in enumerate(self.char_samples):
+            for stroke_idx, stroke_arr in enumerate(stroke_arrays):
+                if len(stroke_arr) >= 2:
+                    self.samples.append((char_idx, stroke_idx, len(stroke_arrays)))
+
+        print(
+            f"Loaded {len(self.samples)} stroke samples "
+            f"({len(self.char_samples)} characters, {len(char_set)} unique) "
+            f"from {n_files} .pot files"
+        )
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict:
-        character, normalized_strokes, ref_path = self.samples[idx]
+        char_idx, stroke_idx, num_strokes = self.samples[idx]
+        character, normalized_strokes, ref_path = self.char_samples[char_idx]
 
-        strokes_tensor = strokes_to_deltas_from_arrays(normalized_strokes)
+        stroke_arr = normalized_strokes[stroke_idx]
+        deltas = stroke_to_deltas_2d(stroke_arr)
 
+        eos = torch.zeros(len(stroke_arr), 1, dtype=torch.float32)
+        eos[-1, 0] = 1.0
+
+        style_tensor = strokes_to_deltas_from_arrays(normalized_strokes)
         same_char = self.char_to_indices[character]
-        candidates = [i for i in same_char if i != idx]
+        candidates = [i for i in same_char if i != char_idx]
         if candidates:
-            style_idx = random.choice(candidates)
-            _, style_strokes_raw, _ = self.samples[style_idx]
+            style_char_idx = random.choice(candidates)
+            _, style_strokes_raw, _ = self.char_samples[style_char_idx]
             style_tensor = strokes_to_deltas_from_arrays(style_strokes_raw)
-        else:
-            style_tensor = strokes_tensor.clone()
-            style_tensor[:, :2] += torch.randn_like(style_tensor[:, :2]) * 0.1
 
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
         reference_tensor = reference_to_sequence(ref_data["strokes"])
 
         return {
-            "strokes": strokes_tensor,
-            "style_strokes": style_tensor,
+            "stroke_deltas": deltas,
+            "eos": eos,
+            "stroke_index": stroke_idx,
+            "num_strokes": num_strokes,
             "reference": reference_tensor,
             "character": character,
+            "style_strokes": style_tensor,
         }
 
 
 def collate_paired(batch: list[dict]) -> dict:
     """PairedStrokeDataset の可変長シーケンスをパディングしてバッチ化する。"""
-    strokes = [item["strokes"] for item in batch]
+    stroke_deltas = [item["stroke_deltas"] for item in batch]
+    eos_list = [item["eos"] for item in batch]
     style_strokes = [item["style_strokes"] for item in batch]
     references = [item["reference"] for item in batch]
-    lengths = torch.tensor([s.shape[0] for s in strokes])
+
+    stroke_lengths = torch.tensor([s.shape[0] for s in stroke_deltas])
     style_lengths = torch.tensor([s.shape[0] for s in style_strokes])
     ref_lengths = torch.tensor([r.shape[0] for r in references])
-    padded_strokes = pad_sequence(strokes, batch_first=True, padding_value=0.0)
+    stroke_indices = torch.tensor([item["stroke_index"] for item in batch])
+
+    padded_deltas = pad_sequence(stroke_deltas, batch_first=True, padding_value=0.0)
+    padded_eos = pad_sequence(eos_list, batch_first=True, padding_value=0.0)
     padded_style = pad_sequence(style_strokes, batch_first=True, padding_value=0.0)
     padded_refs = pad_sequence(references, batch_first=True, padding_value=0.0)
+
     characters = [item["character"] for item in batch]
     return {
-        "strokes": padded_strokes,
+        "stroke_deltas": padded_deltas,
+        "eos": padded_eos,
+        "stroke_indices": stroke_indices,
         "style_strokes": padded_style,
         "reference": padded_refs,
-        "lengths": lengths,
+        "stroke_lengths": stroke_lengths,
         "style_lengths": style_lengths,
         "ref_lengths": ref_lengths,
         "characters": characters,
@@ -267,8 +315,10 @@ class Pretrainer:
         indices = list(range(len(self.dataset)))
         if len(indices) > norm_sample_size:
             indices = random.sample(indices, norm_sample_size)
-        sample_tensors = [self.dataset[i]["strokes"] for i in indices]
-        self.norm_stats = compute_normalization_stats(sample_tensors)
+        sample_tensors = [self.dataset[i]["stroke_deltas"] for i in indices]
+        from src.model.data_utils import compute_normalization_stats_2d
+
+        self.norm_stats = compute_normalization_stats_2d(sample_tensors)
 
         ref_tensors = [self.dataset[i]["reference"] for i in indices]
         self.ref_norm_stats = compute_reference_stats(ref_tensors)
@@ -276,6 +326,7 @@ class Pretrainer:
         self.char_encoder = CharEncoder(char_dim=config.char_dim).to(self.device)
         self.style_encoder = StyleEncoder(style_dim=config.style_dim).to(self.device)
         self.generator = StrokeGenerator(
+            input_dim=2,
             style_dim=config.style_dim,
             char_dim=config.char_dim,
             hidden_dim=config.hidden_dim,
@@ -305,8 +356,11 @@ class Pretrainer:
             n_batches = 0
 
             for batch_idx, batch in enumerate(self.dataloader):
-                strokes = batch["strokes"].to(self.device)
-                strokes = normalize_deltas(strokes, self.norm_stats)
+                stroke_deltas = batch["stroke_deltas"].to(self.device)
+                stroke_deltas_norm = normalize_deltas_2d(stroke_deltas, self.norm_stats)
+
+                eos = batch["eos"].to(self.device)
+                stroke_indices = batch["stroke_indices"].to(self.device)
 
                 style_strokes = batch["style_strokes"].to(self.device)
                 style_strokes = normalize_deltas(style_strokes, self.norm_stats)
@@ -314,7 +368,6 @@ class Pretrainer:
                 reference = batch["reference"].to(self.device)
                 reference = normalize_reference(reference, self.ref_norm_stats)
 
-                lengths = batch["lengths"]
                 style_lengths = batch["style_lengths"]
                 ref_lengths = batch["ref_lengths"]
 
@@ -322,19 +375,25 @@ class Pretrainer:
                     char_embedding = self.char_encoder(reference, lengths=ref_lengths)
                     style_vector = self.style_encoder(style_strokes, lengths=style_lengths)
 
-                    x = strokes[:, :-1]
-                    target = strokes[:, 1:]
+                    x = stroke_deltas_norm[:, :-1]
+                    target_xy = stroke_deltas_norm[:, 1:]
+                    target_eos = eos[:, 1:]
 
-                    output = self.generator(x, style_vector, char_embedding)
+                    output = self.generator(
+                        x, style_vector,
+                        char_embedding=char_embedding,
+                        stroke_index=stroke_indices,
+                    )
 
-                    min_len = min(output["pi"].shape[1], target.shape[1])
+                    min_len = min(output["pi"].shape[1], target_xy.shape[1])
                     trimmed_output = {k: v[:, :min_len] for k, v in output.items()}
-                    trimmed_target = target[:, :min_len]
+                    trimmed_xy = target_xy[:, :min_len]
+                    trimmed_eos = target_eos[:, :min_len]
 
-                    loss_mdn = mdn_loss(trimmed_output, trimmed_target)
+                    stroke_loss, eos_loss = mdn_loss(trimmed_output, trimmed_xy, trimmed_eos)
                     loss_char_var = embedding_variance_loss(char_embedding)
                     loss_style_var = embedding_variance_loss(style_vector)
-                    loss = loss_mdn + 0.1 * (loss_char_var + loss_style_var)
+                    loss = stroke_loss + 1.0 * eos_loss + 1.0 * (loss_char_var + loss_style_var)
 
                 self.optimizer.zero_grad()
                 all_params = [

@@ -9,7 +9,7 @@ class TestStrokeGenerator:
     @pytest.fixture
     def model(self):
         return StrokeGenerator(
-            input_dim=3,
+            input_dim=2,
             hidden_dim=128,
             style_dim=128,
             num_mixtures=5,
@@ -17,28 +17,23 @@ class TestStrokeGenerator:
 
     def test_forward_shape(self, model):
         batch, seq_len = 4, 20
-        x = torch.randn(batch, seq_len, 3)
+        x = torch.randn(batch, seq_len, 2)
         style = torch.randn(batch, 128)
-        output = model(x, style)
-        # output は MDN パラメータ: pi, mu_x, mu_y, sigma_x, sigma_y, rho, pen_logit
-        # pi: (batch, seq_len, num_mixtures)
-        # mu: (batch, seq_len, num_mixtures) x2
-        # sigma: (batch, seq_len, num_mixtures) x2
-        # rho: (batch, seq_len, num_mixtures)
-        # pen_logit: (batch, seq_len, 1)
+        stroke_index = torch.zeros(batch, dtype=torch.long)
+        output = model(x, style, stroke_index=stroke_index)
         assert "pi" in output
         assert "mu_x" in output
         assert "mu_y" in output
         assert "sigma_x" in output
         assert "sigma_y" in output
         assert "rho" in output
-        assert "pen_logit" in output
+        assert "eos_logit" in output
         assert output["pi"].shape == (batch, seq_len, 5)
-        assert output["pen_logit"].shape == (batch, seq_len, 1)
+        assert output["eos_logit"].shape == (batch, seq_len, 1)
 
     def test_pi_sums_to_one(self, model):
         model.eval()
-        x = torch.randn(2, 10, 3)
+        x = torch.randn(2, 10, 2)
         style = torch.randn(2, 128)
         output = model(x, style)
         pi_sum = output["pi"].sum(dim=-1)
@@ -46,7 +41,7 @@ class TestStrokeGenerator:
 
     def test_sigma_positive(self, model):
         model.eval()
-        x = torch.randn(2, 10, 3)
+        x = torch.randn(2, 10, 2)
         style = torch.randn(2, 128)
         output = model(x, style)
         assert (output["sigma_x"] > 0).all()
@@ -54,7 +49,7 @@ class TestStrokeGenerator:
 
     def test_rho_bounded(self, model):
         model.eval()
-        x = torch.randn(2, 10, 3)
+        x = torch.randn(2, 10, 2)
         style = torch.randn(2, 128)
         output = model(x, style)
         assert (output["rho"] > -1).all()
@@ -65,13 +60,13 @@ class TestStrokeGenerator:
 
     def test_default_construction(self):
         model = StrokeGenerator()
-        x = torch.randn(1, 5, 3)
+        x = torch.randn(1, 5, 2)
         style = torch.randn(1, 128)
         output = model(x, style)
         assert output["pi"].shape == (1, 5, 20)
 
     def test_pi_logits_in_output(self, model):
-        x = torch.randn(2, 10, 3)
+        x = torch.randn(2, 10, 2)
         style = torch.randn(2, 128)
         output = model(x, style)
         assert "pi_logits" in output
@@ -79,15 +74,23 @@ class TestStrokeGenerator:
 
     def test_rho_clamped(self, model):
         model.eval()
-        x = torch.randn(2, 10, 3)
+        x = torch.randn(2, 10, 2)
         style = torch.randn(2, 128)
         output = model(x, style)
         assert (output["rho"] >= -0.95).all()
         assert (output["rho"] <= 0.95).all()
 
+    def test_stroke_index_affects_output(self, model):
+        model.eval()
+        x = torch.randn(1, 10, 2)
+        style = torch.randn(1, 128)
+        out_a = model(x, style, stroke_index=torch.tensor([0]))
+        out_b = model(x, style, stroke_index=torch.tensor([5]))
+        assert not torch.allclose(out_a["mu_x"], out_b["mu_x"], atol=1e-6)
+
 
 class TestMDNLoss:
-    def test_loss_is_scalar(self):
+    def test_loss_returns_tuple(self):
         batch, seq_len, n_mix = 4, 10, 5
         pi_logits = torch.randn(batch, seq_len, n_mix)
         output = {
@@ -98,12 +101,15 @@ class TestMDNLoss:
             "sigma_x": torch.exp(torch.randn(batch, seq_len, n_mix)),
             "sigma_y": torch.exp(torch.randn(batch, seq_len, n_mix)),
             "rho": torch.tanh(torch.randn(batch, seq_len, n_mix)),
-            "pen_logit": torch.randn(batch, seq_len, 1),
+            "eos_logit": torch.randn(batch, seq_len, 1),
         }
-        target = torch.randn(batch, seq_len, 3)  # dx, dy, pen_state
-        loss = mdn_loss(output, target)
-        assert loss.ndim == 0  # scalar
-        assert loss.item() > 0
+        target_xy = torch.randn(batch, seq_len, 2)
+        target_eos = torch.zeros(batch, seq_len, 1)
+        stroke_loss, eos_loss = mdn_loss(output, target_xy, target_eos)
+        assert stroke_loss.ndim == 0
+        assert eos_loss.ndim == 0
+        assert torch.isfinite(stroke_loss)
+        assert torch.isfinite(eos_loss)
 
     def test_loss_is_finite(self):
         batch, seq_len, n_mix = 2, 5, 3
@@ -116,15 +122,16 @@ class TestMDNLoss:
             "sigma_x": torch.exp(torch.randn(batch, seq_len, n_mix)).clamp(min=1e-4),
             "sigma_y": torch.exp(torch.randn(batch, seq_len, n_mix)).clamp(min=1e-4),
             "rho": torch.tanh(torch.randn(batch, seq_len, n_mix)) * 0.9,
-            "pen_logit": torch.randn(batch, seq_len, 1),
+            "eos_logit": torch.randn(batch, seq_len, 1),
         }
-        target = torch.randn(batch, seq_len, 3)
-        loss = mdn_loss(output, target)
-        assert torch.isfinite(loss)
+        target_xy = torch.randn(batch, seq_len, 2)
+        target_eos = torch.zeros(batch, seq_len, 1)
+        stroke_loss, eos_loss = mdn_loss(output, target_xy, target_eos)
+        assert torch.isfinite(stroke_loss)
+        assert torch.isfinite(eos_loss)
 
-
-    def test_pen_up_loss_weighted(self):
-        """pen_up（正例）の誤分類がpen_downより高い損失を生むことを確認。"""
+    def test_eos_loss_weighted(self):
+        """EOS（正例）の誤分類がnon-EOSより高い損失を生むことを確認。"""
         batch, seq_len, n_mix = 2, 5, 3
         pi_logits = torch.randn(batch, seq_len, n_mix)
         base_output = {
@@ -135,16 +142,15 @@ class TestMDNLoss:
             "sigma_x": torch.ones(batch, seq_len, n_mix),
             "sigma_y": torch.ones(batch, seq_len, n_mix),
             "rho": torch.zeros(batch, seq_len, n_mix),
-            "pen_logit": torch.full((batch, seq_len, 1), -5.0),
+            "eos_logit": torch.full((batch, seq_len, 1), -5.0),
         }
-        target_pen_up = torch.zeros(batch, seq_len, 3)
-        target_pen_up[:, :, 2] = 1.0
-        target_pen_down = torch.zeros(batch, seq_len, 3)
-        target_pen_down[:, :, 2] = 0.0
+        target_xy = torch.zeros(batch, seq_len, 2)
+        target_eos_positive = torch.ones(batch, seq_len, 1)
+        target_eos_negative = torch.zeros(batch, seq_len, 1)
 
-        loss_miss_pen_up = mdn_loss(base_output, target_pen_up)
-        loss_miss_pen_down = mdn_loss(base_output, target_pen_down)
-        assert loss_miss_pen_up > loss_miss_pen_down
+        _, eos_loss_positive = mdn_loss(base_output, target_xy, target_eos_positive)
+        _, eos_loss_negative = mdn_loss(base_output, target_xy, target_eos_negative)
+        assert eos_loss_positive > eos_loss_negative
 
 
 class TestStrokeGeneratorCharEmbedding:
@@ -152,40 +158,40 @@ class TestStrokeGeneratorCharEmbedding:
 
     def test_char_dim_zero_backward_compatible(self):
         model = StrokeGenerator(
-            input_dim=3, hidden_dim=128, style_dim=128, char_dim=0, num_mixtures=5
+            input_dim=2, hidden_dim=128, style_dim=128, char_dim=0, num_mixtures=5
         )
-        x = torch.randn(4, 20, 3)
+        x = torch.randn(4, 20, 2)
         style = torch.randn(4, 128)
         output = model(x, style)
         assert output["pi"].shape == (4, 20, 5)
-        assert output["pen_logit"].shape == (4, 20, 1)
+        assert output["eos_logit"].shape == (4, 20, 1)
 
     def test_char_dim_nonzero_output_shape(self):
         model = StrokeGenerator(
-            input_dim=3, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
+            input_dim=2, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
         )
-        x = torch.randn(4, 20, 3)
+        x = torch.randn(4, 20, 2)
         style = torch.randn(4, 128)
         char_emb = torch.randn(4, 128)
         output = model(x, style, char_embedding=char_emb)
         assert output["pi"].shape == (4, 20, 5)
         assert output["mu_x"].shape == (4, 20, 5)
-        assert output["pen_logit"].shape == (4, 20, 1)
+        assert output["eos_logit"].shape == (4, 20, 1)
 
     def test_char_dim_nonzero_requires_embedding(self):
         model = StrokeGenerator(
-            input_dim=3, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
+            input_dim=2, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
         )
-        x = torch.randn(2, 10, 3)
+        x = torch.randn(2, 10, 2)
         style = torch.randn(2, 128)
         with pytest.raises(ValueError, match="char_embedding required"):
             model(x, style)
 
     def test_char_dim_zero_ignores_embedding(self):
         model = StrokeGenerator(
-            input_dim=3, hidden_dim=128, style_dim=128, char_dim=0, num_mixtures=5
+            input_dim=2, hidden_dim=128, style_dim=128, char_dim=0, num_mixtures=5
         )
-        x = torch.randn(2, 10, 3)
+        x = torch.randn(2, 10, 2)
         style = torch.randn(2, 128)
         char_emb = torch.randn(2, 128)
         output = model(x, style, char_embedding=char_emb)
@@ -193,16 +199,33 @@ class TestStrokeGeneratorCharEmbedding:
 
     def test_loss_with_char_embedding(self):
         model = StrokeGenerator(
-            input_dim=3, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
+            input_dim=2, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
         )
-        x = torch.randn(4, 20, 3)
+        x = torch.randn(4, 20, 2)
         style = torch.randn(4, 128)
         char_emb = torch.randn(4, 128)
-        target = torch.randn(4, 20, 3)
+        target_xy = torch.randn(4, 20, 2)
+        target_eos = torch.zeros(4, 20, 1)
         output = model(x, style, char_embedding=char_emb)
-        loss = mdn_loss(output, target)
-        assert loss.ndim == 0
-        assert torch.isfinite(loss)
+        stroke_loss, eos_loss = mdn_loss(output, target_xy, target_eos)
+        assert stroke_loss.ndim == 0
+        assert eos_loss.ndim == 0
+        assert torch.isfinite(stroke_loss)
+        assert torch.isfinite(eos_loss)
+
+    def test_char_embedding_affects_output(self):
+        """Different char_embeddings should produce different outputs."""
+        model = StrokeGenerator(
+            input_dim=2, hidden_dim=128, style_dim=128, char_dim=128, num_mixtures=5
+        )
+        model.eval()
+        x = torch.randn(1, 10, 2)
+        style = torch.randn(1, 128)
+        char_emb_a = torch.randn(1, 128)
+        char_emb_b = torch.randn(1, 128)
+        out_a = model(x, style, char_embedding=char_emb_a)
+        out_b = model(x, style, char_embedding=char_emb_b)
+        assert not torch.allclose(out_a["mu_x"], out_b["mu_x"], atol=1e-6)
 
 
 class TestEmbeddingVarianceLoss:

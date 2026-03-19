@@ -231,3 +231,68 @@ def denormalize_point(
         dx * stats["std_x"] + stats["mean_x"],
         dy * stats["std_y"] + stats["mean_y"],
     )
+
+
+def stroke_to_deltas_2d(points: list | np.ndarray) -> torch.Tensor:
+    """Convert a single stroke's absolute points to (N, 2) delta tensor [dx, dy].
+
+    Args:
+        points: Array-like of shape (N, 2) with [x, y] columns.
+
+    Returns:
+        Tensor of shape (N, 2) with [dx, dy] columns.
+    """
+    if isinstance(points, np.ndarray):
+        pts = points
+    else:
+        pts = np.array(points, dtype=np.float32)
+
+    n = len(pts)
+    result = torch.zeros(n, 2, dtype=torch.float32)
+    for i in range(1, n):
+        result[i, 0] = float(pts[i, 0] - pts[i - 1, 0])
+        result[i, 1] = float(pts[i, 1] - pts[i - 1, 1])
+    return result
+
+
+def normalize_deltas_2d(
+    tensor: torch.Tensor, stats: dict[str, float]
+) -> torch.Tensor:
+    """Normalize 2D deltas (no pen_state column).
+
+    Args:
+        tensor: Shape (N, 2) or (batch, N, 2).
+        stats: Dict from compute_normalization_stats.
+
+    Returns:
+        Normalized tensor of same shape.
+    """
+    result = tensor.clone()
+    result[..., 0] = (tensor[..., 0] - stats["mean_x"]) / stats["std_x"]
+    result[..., 1] = (tensor[..., 1] - stats["mean_y"]) / stats["std_y"]
+    return result
+
+
+def compute_normalization_stats_2d(
+    tensors: list[torch.Tensor],
+) -> dict[str, float]:
+    """Compute mean and std of dx/dy from 2-column delta tensors.
+
+    Args:
+        tensors: List of (N, 2) tensors.
+
+    Returns:
+        Dict with keys "mean_x", "mean_y", "std_x", "std_y".
+    """
+    all_dx = torch.cat([t[:, 0] for t in tensors])
+    all_dy = torch.cat([t[:, 1] for t in tensors])
+
+    std_x = all_dx.std().item() if len(all_dx) > 1 else 0.0
+    std_y = all_dy.std().item() if len(all_dy) > 1 else 0.0
+
+    return {
+        "mean_x": all_dx.mean().item(),
+        "mean_y": all_dy.mean().item(),
+        "std_x": max(std_x, 1e-6),
+        "std_y": max(std_y, 1e-6),
+    }
