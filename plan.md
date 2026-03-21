@@ -295,7 +295,7 @@ pen_plotter/
 - [x] 3段階フォールバック（ML推論→KanjiVG→矩形）
 - [x] V2パイプライン（CharEncoder+文字条件付き推論）統合
 - [x] GPU(XPU)デバイス対応（pretrain.py/finetune.pyに--device引数実装済み、CUDA/XPU/CPU自動検出）
-- [ ] CASIA-OLHWDBデータ取得・事前訓練の実行（100kサンプル, 30エポック, num_mixtures=20で訓練中）
+- [ ] CASIA-OLHWDB事前訓練（ストローク単位生成アーキテクチャで100k samples, 80 epochs完了。300k samples訓練をColab Pro (A100)で実行中）
 - [ ] パイプライン統合テスト（実データでのエンドツーエンド）
 - [ ] 全体の品質調整（文字サイズ、間隔、速度）
 
@@ -342,7 +342,7 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 ### 次のアクション
 1. ~~GPU対応~~ ✅ 完了
 2. ~~CASIA取得~~ ✅ 完了 (train 816 .pot files, test 204 .pot files)
-3. **事前訓練実行** → 実行中 (v3: delta coords + normalization + pen_state重み付け + 20 mixtures)
+3. **事前訓練** → Colab Pro (A100) で300k samples, 80 epochs実行中
 4. **ユーザーサンプル収集**: collect_strokes.py（20-30文字）→ 次のステップ
 5. **ファインチューニング → プレビュー確認** → 未着手
 
@@ -351,6 +351,10 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - ストローク境界のpen_stateエンコード
 - mean=0, std=1正規化（チェックポイントにstats保存）
 - num_mixtures 5→20、log_softmax、rhoクランプ、pen BCE pos_weight
+- エンコーダ崩壊修正（style分離, embedding_variance_loss, packed sequences, LayerNorm, forget gate bias=1.0）
+- pen_state問題→ストローク単位生成に全面改修
+- char_embeddingをLSTM初期hidden stateに注入
+- ストローク位置のオフセット、長さ制限
 
 ### GPU環境情報
 - Intel Core Ultra 7 258V (Lunar Lake) — Intel Arc 統合GPU
@@ -358,6 +362,8 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - **Windowsネイティブ**: PyTorch XPU版で `torch.xpu.is_available() = True` 確認済み
 - IPEX (Intel Extension for PyTorch) はWindows非対応、PyTorch XPU版単体で使用
 - Python 3.12 (uv venv)、WSLからのファイルアクセス: `\\wsl$\Ubuntu\home\taiga\Personal\pen_plotter`
+- **homesrv**: i5-9600K, GTX 1050 Ti 4GB, CUDA 12.1, PyTorch 2.5.1
+- **Colab Pro**: A100 40GB, AMP対応
 
 ---
 

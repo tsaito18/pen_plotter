@@ -33,12 +33,14 @@
 - `src/ui/` — Gradio Web UI
 - `scripts/` — CLI スクリプト群
 
-### MLモデル V2アーキテクチャ（文字条件付き生成）
+### MLモデル V2アーキテクチャ（文字条件付きストローク単位生成）
 ```
 CharEncoder(KanjiVG_skeleton) → char_embedding（何の文字か）
 StyleEncoder(user_samples) → style_vector（どんな書き癖か）
-StrokeGenerator(char_embedding + style_vector) → strokes
+StrokeGenerator(char_embedding + style_vector) → strokes（ストローク単位で生成）
 ```
+- ストローク単位生成: 文字全体ではなく1ストロークずつ生成し結合
+- char_embeddingをLSTM初期hidden stateに注入
 - 事前訓練: CASIA-OLHWDB or KanjiVGで CharEncoder + Generator を訓練
 - ファインチューニング: ユーザー20-30文字で StyleEncoder のみ更新（Generator凍結）
 - V1チェックポイント（char_dimなし）との後方互換性あり
@@ -96,7 +98,8 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - Phase 5 完了: サンプル収集基盤（データ形式・KanjiVGパーサー・iPad Web UI・ストローク正規化）
 - Phase 6 完了: MLモデル（スタイルエンコーダ・LSTM+MDN・訓練・推論）
 - Phase 7 部分完了: パイプライン統合（テキスト→G-code→プレビュー）、仮ストローク描画
-- 297テスト全パス
+- CASIA事前訓練: ストローク単位生成アーキテクチャで100k samples, 80 epochs完了。300k samples訓練をColab Pro (A100)で実行中
+- 335テスト全パス
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -122,8 +125,8 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - WSLでIntel GPU未認識 → WindowsネイティブでPyTorch XPU版を使用（XPU: True確認済み）
 - pretrain.py/finetune.py にデバイス自動検出・--device指定を実装済み
 
-### 全体進捗（2026-03-18時点）
-- 297テスト全パス
+### 全体進捗（2026-03-21時点）
+- 335テスト全パス
 - KanjiVG 6,699文字変換済み
 - 3段階フォールバック（ML推論→KanjiVG→矩形）動作
 - ガイド付きストローク収集UI（292文字セット）実装済み
@@ -131,5 +134,7 @@ StrokeGenerator(char_embedding + style_vector) → strokes
 - CASIA-OLHWDB .pot 直接読み込み対応（JSON中間変換不要）
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 - CASIA Pot1.0/1.1/1.2 Train/Test データ取得済み（data/casia_raw/）
-- CASIA事前訓練実行中（v3: delta coords, normalization, pen_state重み付け, 20 mixtures）
-- 訓練サーバー: homesrv (i5-9600K, GTX 1050 Ti, 16GB RAM, Ubuntu) — mise + uv でパッケージ管理
+- ストローク単位生成アーキテクチャに全面改修済み（pen_head分離、LayerNormエンコーダ）
+- CASIA事前訓練: 100k samples, 80 epochs完了。300k samples訓練をColab Pro (A100)で実行中
+- 訓練サーバー: homesrv (i5-9600K, GTX 1050 Ti 4GB, CUDA 12.1, PyTorch 2.5.1) — mise + uv でパッケージ管理
+- Colab Pro: A100 40GB, AMP対応
