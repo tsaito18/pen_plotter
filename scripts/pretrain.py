@@ -68,6 +68,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Enable mixed precision training",
     )
+    parser.add_argument(
+        "--model-version",
+        type=str,
+        default="v3",
+        choices=["v2", "v3"],
+        help="Model architecture version (v2=LSTM+MDN, v3=deformation)",
+    )
     return parser.parse_args(argv)
 
 
@@ -106,29 +113,52 @@ def main(argv: list[str] | None = None) -> dict:
         sys.exit(1)
     print(f"Reference data: {ref_dir} ({ref_json} files)")
 
-    config = PretrainConfig(
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        grad_clip_norm=args.grad_clip_norm,
-        style_dim=args.style_dim,
-        char_dim=args.char_dim,
-        hidden_dim=args.hidden_dim,
-        num_mixtures=args.num_mixtures,
-    )
-
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    pretrainer = Pretrainer(
-        config=config,
-        hand_dir=hand_dir,
-        ref_dir=ref_dir,
-        output_dir=args.output_dir,
-        device=args.device,
-        pot_dir=pot_dir,
-        max_samples=args.max_samples,
-        num_workers=args.num_workers,
-        amp=args.amp,
-    )
+
+    if args.model_version == "v3":
+        from src.model.pretrain import DeformationConfig, DeformationPretrainer
+
+        config_v3 = DeformationConfig(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            grad_clip_norm=args.grad_clip_norm,
+            style_dim=args.style_dim,
+            hidden_dim=args.hidden_dim,
+        )
+        pretrainer = DeformationPretrainer(
+            config=config_v3,
+            ref_dir=ref_dir,
+            output_dir=args.output_dir,
+            device=args.device,
+            pot_dir=pot_dir,
+            max_samples=args.max_samples,
+            num_workers=args.num_workers,
+            amp=args.amp,
+        )
+    else:
+        config = PretrainConfig(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            grad_clip_norm=args.grad_clip_norm,
+            style_dim=args.style_dim,
+            char_dim=args.char_dim,
+            hidden_dim=args.hidden_dim,
+            num_mixtures=args.num_mixtures,
+        )
+        pretrainer = Pretrainer(
+            config=config,
+            hand_dir=hand_dir,
+            ref_dir=ref_dir,
+            output_dir=args.output_dir,
+            device=args.device,
+            pot_dir=pot_dir,
+            max_samples=args.max_samples,
+            num_workers=args.num_workers,
+            amp=args.amp,
+        )
+
     result = pretrainer.train()
     print(f"Pre-training complete. Final loss: {result['losses'][-1]:.4f}")
     print(f"Checkpoint saved to: {args.output_dir / 'pretrain_checkpoint.pt'}")

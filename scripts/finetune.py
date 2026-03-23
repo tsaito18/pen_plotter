@@ -80,6 +80,12 @@ def main(argv: list[str] | None = None) -> dict:
     print(f"User data: {args.user_dir} ({user_json} files)")
     print(f"Reference: {args.ref_dir}")
 
+    import torch
+
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    is_v3 = "deformer_state_dict" in checkpoint
+    del checkpoint
+
     config = FinetuneConfig(
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -87,15 +93,29 @@ def main(argv: list[str] | None = None) -> dict:
         grad_clip_norm=args.grad_clip_norm,
     )
 
-    finetuner = Finetuner(
-        config=config,
-        pretrain_checkpoint=args.checkpoint,
-        user_data_dir=args.user_dir,
-        ref_dir=args.ref_dir,
-        output_dir=args.output_dir,
-        device=args.device,
-        num_workers=args.num_workers,
-    )
+    if is_v3:
+        from src.model.finetune import DeformationFinetuner
+
+        print("Detected V3 (deformation) checkpoint")
+        finetuner = DeformationFinetuner(
+            config=config,
+            pretrain_checkpoint=args.checkpoint,
+            user_data_dir=args.user_dir,
+            ref_dir=args.ref_dir,
+            output_dir=args.output_dir,
+            device=args.device,
+            num_workers=args.num_workers,
+        )
+    else:
+        finetuner = Finetuner(
+            config=config,
+            pretrain_checkpoint=args.checkpoint,
+            user_data_dir=args.user_dir,
+            ref_dir=args.ref_dir,
+            output_dir=args.output_dir,
+            device=args.device,
+            num_workers=args.num_workers,
+        )
 
     result = finetuner.train()
     print(f"Fine-tuning complete. Final loss: {result['losses'][-1]:.4f}")

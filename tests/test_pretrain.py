@@ -8,10 +8,14 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from src.model.pretrain import (
+    CASIADeformationDataset,
     CASIAPairedDataset,
+    DeformationConfig,
+    DeformationPretrainer,
     PairedStrokeDataset,
     PretrainConfig,
     Pretrainer,
+    collate_deformation,
     collate_paired,
 )
 
@@ -389,3 +393,116 @@ class TestCASIAPairedDataset:
         assert "\u5c0f" in chars_in_dataset
         assert "\u4e2d" not in chars_in_dataset
         assert len(ds) == 2
+
+
+class TestCASIADeformationDataset:
+    def _create_pot_file(self, pot_dir, chars_strokes):
+        pot_dir.mkdir(parents=True, exist_ok=True)
+        pot_path = pot_dir / "test.pot"
+        data = b""
+        for char, strokes in chars_strokes.items():
+            data += _make_pot_sample_v1(char, strokes)
+        pot_path.write_bytes(data)
+        return pot_path
+
+    def _create_ref_dir(self, ref_dir, chars):
+        for ch in chars:
+            d = ref_dir / ch
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{ch}_0.json").write_text(_make_ref_json(ch), encoding="utf-8")
+
+    def test_creation(self, tmp_path):
+        pot_dir = tmp_path / "pot"
+        ref_dir = tmp_path / "ref"
+        sample_strokes = {
+            "\u5927": [[(100, 200), (150, 250), (200, 300)]],
+        }
+        self._create_pot_file(pot_dir, sample_strokes)
+        self._create_ref_dir(ref_dir, ["\u5927"])
+        ds = CASIADeformationDataset(pot_dir, ref_dir)
+        assert len(ds) > 0
+
+    def test_getitem_format(self, tmp_path):
+        pot_dir = tmp_path / "pot"
+        ref_dir = tmp_path / "ref"
+        sample_strokes = {
+            "\u5927": [[(100, 200), (150, 250), (200, 300)]],
+        }
+        self._create_pot_file(pot_dir, sample_strokes)
+        self._create_ref_dir(ref_dir, ["\u5927"])
+        ds = CASIADeformationDataset(pot_dir, ref_dir, num_points=16)
+        item = ds[0]
+        assert item["reference_points"].shape == (16, 2)
+        assert item["target_offsets"].shape == (16, 2)
+        assert isinstance(item["stroke_index"], int)
+        assert item["style_strokes"].ndim == 2
+        assert item["style_strokes"].shape[1] == 3
+        assert item["character"] == "\u5927"
+
+    def test_collate(self, tmp_path):
+        pot_dir = tmp_path / "pot"
+        ref_dir = tmp_path / "ref"
+        sample_strokes = {
+            "\u5927": [[(100, 200), (150, 250), (200, 300)]],
+            "\u5c0f": [[(50, 50), (100, 100)]],
+        }
+        self._create_pot_file(pot_dir, sample_strokes)
+        self._create_ref_dir(ref_dir, ["\u5927", "\u5c0f"])
+        ds = CASIADeformationDataset(pot_dir, ref_dir, num_points=8)
+        batch = [ds[i] for i in range(len(ds))]
+        collated = collate_deformation(batch)
+        assert collated["reference_points"].shape[0] == len(ds)
+        assert collated["reference_points"].shape[1] == 8
+        assert collated["reference_points"].shape[2] == 2
+        assert collated["target_offsets"].shape == collated["reference_points"].shape
+        assert "stroke_indices" in collated
+        assert "style_strokes" in collated
+        assert "style_lengths" in collated
+
+
+class TestDeformationPretrainer:
+    def _create_pot_file(self, pot_dir, chars_strokes):
+        pot_dir.mkdir(parents=True, exist_ok=True)
+        pot_path = pot_dir / "test.pot"
+        data = b""
+        for char, strokes in chars_strokes.items():
+            data += _make_pot_sample_v1(char, strokes)
+        pot_path.write_bytes(data)
+        return pot_path
+
+    def _create_ref_dir(self, ref_dir, chars):
+        for ch in chars:
+            d = ref_dir / ch
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{ch}_0.json").write_text(_make_ref_json(ch), encoding="utf-8")
+
+    @pytest.mark.slow
+    def test_deformation_pretrainer_trains(self, tmp_path):
+        pot_dir = tmp_path / "pot"
+        ref_dir = tmp_path / "ref"
+        chars = ["\u5927", "\u5c0f", "\u4e2d"]
+        sample_strokes = {
+            ch: [[(100 + j * 10, 200 + j * 10) for j in range(5)]] for ch in chars
+        }
+        self._create_pot_file(pot_dir, sample_strokes)
+        self._create_ref_dir(ref_dir, chars)
+
+        config = DeformationConfig(epochs=1, batch_size=2, num_points=8)
+        pretrainer = DeformationPretrainer(
+            config=config,
+            ref_dir=ref_dir,
+            output_dir=tmp_path / "out",
+            pot_dir=pot_dir,
+        )
+        history = pretrainer.train()
+        assert "losses" in history
+        assert len(history["losses"]) == 1
+        assert history["losses"][0] > 0
+
+        ckpt_path = tmp_path / "out" / "pretrain_checkpoint.pt"
+        assert ckpt_path.exists()
+        ckpt = torch.load(ckpt_path, weights_only=False)
+        assert "deformer_state_dict" in ckpt
+        assert "style_encoder_state_dict" in ckpt
+        assert "norm_stats" in ckpt
+        assert ckpt.get("version") == 3

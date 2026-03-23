@@ -307,54 +307,55 @@ pen_plotter/
 
 ---
 
-## 手書き生成 V2 アーキテクチャ
+## 手書き生成 V3 アーキテクチャ（スタイル転写）
 
-### 現状の課題と改修方針
-V1モデルは文字を区別できない（スタイルサンプルから「何かストローク」を生成するだけ）。
-V2では文字条件付き生成に改修し、レポート提出に使える品質を目指す。
+### V2 からの方針転換
+V2（LSTM+MDN自己回帰生成）はストロークをゼロから生成するアプローチだったが、
+CJK文字の複雑さに対して根本的に限界があった（300k samples, A100, 80 epochs でも文字として読めない品質）。
+V3ではKanjiVGの正しい形を前提に、スタイル転写（変形）に切り替える。
 
 ### アーキテクチャ
 ```
-CharEncoder(KanjiVG_skeleton) → char_embedding（何の文字か）
+KanjiVG参照ストローク（正しい形、N点）
+    ↓ リサンプリング（32点に統一）
 StyleEncoder(user_samples) → style_vector（どんな書き癖か）
-StrokeGenerator(char_embedding + style_vector) → strokes
+StrokeDeformer(参照点 + style_vector + stroke_index) → オフセット (N, 2)
+    ↓
+参照点 + オフセット + ノイズ → 変形済みストローク
 ```
 
+### V2との違い
+| | V2 (LSTM+MDN) | V3 (スタイル転写) |
+|---|---|---|
+| 生成方式 | 1点ずつ自己回帰 | 全点を一括予測 |
+| 文字の形 | ゼロから生成 | KanjiVG骨格を変形 |
+| 損失関数 | MDN NLL + EOS BCE | 単純なMSE |
+| モデル | LSTM+MDN (複雑) | MLP (シンプル) |
+| 訓練安定性 | 不安定（多数のバグ修正歴） | 安定（MSE回帰） |
+| CharEncoder | 必要 | 不要（参照点が直接入力） |
+
 ### 訓練戦略
-1. **事前訓練**: CASIA-OLHWDB（160万サンプル）or KanjiVG（6,699字）で CharEncoder + Generator を訓練
-2. **ファインチューニング**: ユーザー20-30文字で StyleEncoder のみ更新（Generator凍結）
+1. **事前訓練**: CASIA手書き - KanjiVG参照 のオフセットを学習
+   - ストロークをリサンプリングして点数を揃え、対応する点同士のずれを回帰
+2. **ファインチューニング**: ユーザー20-30文字で StyleEncoder のみ更新（Deformer凍結）
 
-### リアルさの要素（augmentation.py で実装済み）
-- 同一文字バリエーション: MDN温度 + ノイズ
-- 行の揺らぎ: ベースライン・文字サイズにランダム変動
-- ジッター: ストロークに微振動を加える（スムージング付き）
-- 傾き: 文字ごとにランダムな傾きを適用
+### リアルさの要素
+- ノイズ注入: 推論時にランダム摂動を加えて毎回異なる出力
+- augmentation.py: ベースライン揺らぎ、サイズ変動、ジッター、傾き（既存）
 
-### 実装ステップ（全完了）
-- [x] A. CASIA データローダー (`src/collector/casia_parser.py`) — 8テスト
-- [x] B. CharEncoder (`src/model/char_encoder.py`) — 9テスト
-- [x] C. StrokeGenerator 改修 (`src/model/stroke_model.py` char_dim追加) — 5テスト
-- [x] D. 事前訓練パイプライン (`src/model/pretrain.py` + `scripts/pretrain.py`) — 9テスト
-- [x] E. ファインチューニング (`src/model/finetune.py` + `scripts/finetune.py`) — 10テスト
-- [x] F. リアルさ追加 (`src/model/augmentation.py`) — 14テスト
-- [x] G. パイプライン統合V2 (`inference.py` V1/V2自動検出 + `web_app.py`) — 9テスト
+### 実装ステップ
+- [ ] A. リサンプリング・アライメント (`data_utils.py`) — テスト
+- [ ] B. StrokeDeformer (`stroke_deformer.py`) — テスト
+- [ ] C. 事前訓練パイプライン更新 (`pretrain.py`) — テスト
+- [ ] D. ファインチューニング更新 (`finetune.py`) — テスト
+- [ ] E. 推論更新 (`inference.py` V3検出) — テスト
+- [ ] F. プレビュー確認・品質評価
 
 ### 次のアクション
-1. ~~GPU対応~~ ✅ 完了
-2. ~~CASIA取得~~ ✅ 完了 (train 816 .pot files, test 204 .pot files)
-3. **事前訓練** → Colab Pro (A100) で300k samples, 80 epochs実行中
-4. **ユーザーサンプル収集**: collect_strokes.py（20-30文字）→ 次のステップ
-5. **ファインチューニング → プレビュー確認** → 未着手
-
-### V2 主要バグ修正履歴
-- 絶対座標→相対座標(delta)変換（Graves方式）
-- ストローク境界のpen_stateエンコード
-- mean=0, std=1正規化（チェックポイントにstats保存）
-- num_mixtures 5→20、log_softmax、rhoクランプ、pen BCE pos_weight
-- エンコーダ崩壊修正（style分離, embedding_variance_loss, packed sequences, LayerNorm, forget gate bias=1.0）
-- pen_state問題→ストローク単位生成に全面改修
-- char_embeddingをLSTM初期hidden stateに注入
-- ストローク位置のオフセット、長さ制限
+1. **V3 実装** — 上記ステップ A-E
+2. **事前訓練実行** — CASIA 300k+ サンプル
+3. **ユーザーサンプル収集** — collect_strokes.py（20-30文字）
+4. **ファインチューニング → プレビュー確認**
 
 ### GPU環境情報
 - Intel Core Ultra 7 258V (Lunar Lake) — Intel Arc 統合GPU

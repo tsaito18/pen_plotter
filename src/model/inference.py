@@ -21,13 +21,44 @@ class StrokeInference:
         style_encoder_kwargs: dict | None = None,
     ) -> None:
         torch.serialization.add_safe_globals([TrainConfig])
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
+        is_v3 = "deformer_state_dict" in checkpoint
         is_v2 = "char_encoder_state_dict" in checkpoint
+
+        config = checkpoint.get("config", {})
+        self.norm_stats = checkpoint.get("norm_stats", None)
+
+        if is_v3:
+            from src.model.stroke_deformer import StrokeDeformer
+
+            style_dim = config.get("style_dim", 128)
+            hidden_dim = config.get("hidden_dim", 256)
+
+            self.deformer = StrokeDeformer(
+                style_dim=style_dim,
+                hidden_dim=hidden_dim,
+            )
+            self.deformer.load_state_dict(checkpoint["deformer_state_dict"])
+            self.deformer.eval()
+
+            style_enc_kwargs = dict(style_encoder_kwargs or {})
+            if "style_dim" not in style_enc_kwargs:
+                style_enc_kwargs["style_dim"] = style_dim
+            self.style_encoder = StyleEncoder(**style_enc_kwargs)
+            self.style_encoder.load_state_dict(checkpoint["style_encoder_state_dict"])
+            self.style_encoder.eval()
+
+            self.version = 3
+            self.num_points = config.get("num_points", 32)
+            self.char_encoder = None
+            self.ref_norm_stats = None
+            self.generator = None
+            return
+
         gen_kwargs = dict(generator_kwargs or {})
         style_enc_kwargs = dict(style_encoder_kwargs or {})
 
-        config = checkpoint.get("config", {})
         config_to_gen = {"hidden_dim", "style_dim", "num_mixtures"}
         for key in config_to_gen:
             if key in config and key not in gen_kwargs:
@@ -63,11 +94,12 @@ class StrokeInference:
             )
             self.char_encoder.load_state_dict(char_enc_sd)
             self.char_encoder.eval()
+            self.version = 2
+        else:
+            self.version = 1
 
         self.generator = StrokeGenerator(**gen_kwargs)
         self.style_encoder = StyleEncoder(**style_enc_kwargs)
-
-        self.norm_stats = checkpoint.get("norm_stats", None)
 
         self.generator.load_state_dict(checkpoint["generator_state_dict"])
         self.style_encoder.load_state_dict(checkpoint["style_encoder_state_dict"])
@@ -82,8 +114,12 @@ class StrokeInference:
         num_steps: int = 100,
         temperature: float = 1.0,
         reference_strokes: list[NDArray[np.float64]] | None = None,
+        noise_scale: float = 0.02,
     ) -> list[np.ndarray]:
-        """スタイルサンプルからストロークをストローク単位で自己回帰生成する。"""
+        """スタイルサンプルからストロークを生成する。V3はデフォーメーション方式。"""
+        if self.version == 3:
+            return self._generate_v3(style_sample, reference_strokes, noise_scale)
+
         if self.norm_stats is not None:
             from src.model.data_utils import normalize_deltas
 
@@ -181,6 +217,46 @@ class StrokeInference:
                         pt[1] += ref_start[1]
 
                 all_strokes.append(np.array(stroke_points))
+
+        if not all_strokes:
+            all_strokes = [np.array([[0.0, 0.0], [1.0, 1.0]])]
+
+        return all_strokes
+
+    def _generate_v3(
+        self,
+        style_sample: torch.Tensor,
+        reference_strokes: list[NDArray[np.float64]] | None,
+        noise_scale: float = 0.02,
+    ) -> list[np.ndarray]:
+        """V3: Deform reference strokes using predicted offsets."""
+        from src.model.data_utils import normalize_deltas, resample_stroke
+
+        if reference_strokes is None or len(reference_strokes) == 0:
+            return [np.array([[0.0, 0.0], [1.0, 1.0]])]
+
+        if self.norm_stats is not None:
+            style_sample = normalize_deltas(style_sample, self.norm_stats)
+
+        style = self.style_encoder(style_sample)
+
+        all_strokes: list[np.ndarray] = []
+        for i, ref_stroke in enumerate(reference_strokes):
+            if len(ref_stroke) < 2:
+                continue
+            ref_resampled = resample_stroke(
+                np.asarray(ref_stroke, dtype=np.float32), self.num_points
+            )
+            ref_tensor = torch.tensor(
+                ref_resampled, dtype=torch.float32
+            ).unsqueeze(0)
+            stroke_idx = torch.tensor([i])
+
+            offsets = self.deformer(ref_tensor, style, stroke_idx)
+            noise = torch.randn_like(offsets) * noise_scale
+            deformed = ref_tensor + offsets + noise
+
+            all_strokes.append(deformed.squeeze(0).detach().numpy())
 
         if not all_strokes:
             all_strokes = [np.array([[0.0, 0.0], [1.0, 1.0]])]

@@ -334,3 +334,73 @@ class TestStrokeInferenceNormStats:
             reference_strokes=reference,
         )
         assert len(strokes) > 0
+
+
+class TestStrokeInferenceV3:
+    """V3 deformation checkpoint tests."""
+
+    @pytest.fixture
+    def v3_checkpoint_path(self, tmp_path):
+        from src.model.stroke_deformer import StrokeDeformer
+
+        style_dim = 64
+        deformer = StrokeDeformer(style_dim=style_dim, hidden_dim=128)
+        style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=style_dim)
+        checkpoint = {
+            "deformer_state_dict": deformer.state_dict(),
+            "style_encoder_state_dict": style_enc.state_dict(),
+            "config": {"style_dim": style_dim, "hidden_dim": 128, "num_points": 16},
+            "norm_stats": {"mean_x": 0.0, "mean_y": 0.0, "std_x": 1.0, "std_y": 1.0},
+            "version": 3,
+        }
+        ckpt_path = tmp_path / "v3_model.pt"
+        torch.save(checkpoint, ckpt_path)
+        return ckpt_path
+
+    @pytest.fixture
+    def v3_engine(self, v3_checkpoint_path):
+        return StrokeInference(
+            checkpoint_path=v3_checkpoint_path,
+            style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 64},
+        )
+
+    def test_v3_detection(self, v3_engine):
+        assert v3_engine.version == 3
+        assert v3_engine.deformer is not None
+        assert v3_engine.generator is None
+        assert v3_engine.char_encoder is None
+
+    def test_v3_generation_stroke_count(self, v3_engine):
+        style_sample = torch.randn(1, 20, 3)
+        reference = [
+            np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64),
+            np.array([[0.2, 0.8], [0.8, 0.2]], dtype=np.float64),
+            np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]], dtype=np.float64),
+        ]
+        strokes = v3_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+        )
+        assert len(strokes) == 3
+        for s in strokes:
+            assert isinstance(s, np.ndarray)
+            assert s.ndim == 2
+            assert s.shape == (16, 2)
+
+    def test_v3_no_reference_returns_fallback(self, v3_engine):
+        style_sample = torch.randn(1, 10, 3)
+        strokes = v3_engine.generate(style_sample=style_sample, reference_strokes=None)
+        assert len(strokes) == 1
+
+    def test_v3_output_finite(self, v3_engine):
+        style_sample = torch.randn(1, 15, 3)
+        reference = [
+            np.array([[0.0, 0.0], [5.0, 5.0]], dtype=np.float64),
+        ]
+        strokes = v3_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+            noise_scale=0.01,
+        )
+        for s in strokes:
+            assert np.all(np.isfinite(s))

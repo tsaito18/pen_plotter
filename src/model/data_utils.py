@@ -273,6 +273,62 @@ def normalize_deltas_2d(
     return result
 
 
+def resample_stroke(points: np.ndarray, num_points: int = 32) -> np.ndarray:
+    """Resample stroke to fixed number of points via arc-length interpolation.
+
+    Args:
+        points: Array of shape (N, 2) with [x, y] columns.
+        num_points: Target number of points.
+
+    Returns:
+        Array of shape (num_points, 2).
+    """
+    if len(points) < 2:
+        return np.tile(points[0] if len(points) == 1 else np.zeros(2), (num_points, 1))
+
+    diffs = np.diff(points, axis=0)
+    seg_lengths = np.sqrt((diffs**2).sum(axis=1))
+    cum_lengths = np.concatenate([[0.0], np.cumsum(seg_lengths)])
+    total_length = cum_lengths[-1]
+
+    if total_length < 1e-12:
+        return np.tile(points[0], (num_points, 1))
+
+    target_lengths = np.linspace(0.0, total_length, num_points)
+    x_resampled = np.interp(target_lengths, cum_lengths, points[:, 0])
+    y_resampled = np.interp(target_lengths, cum_lengths, points[:, 1])
+    return np.stack([x_resampled, y_resampled], axis=1).astype(np.float32)
+
+
+def compute_stroke_offsets(
+    hand_strokes: list[np.ndarray],
+    ref_strokes: list[np.ndarray],
+    num_points: int = 32,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Compute per-point offsets between handwritten and reference strokes.
+
+    Args:
+        hand_strokes: List of handwritten stroke arrays, each (N, 2).
+        ref_strokes: List of reference stroke arrays, each (M, 2).
+        num_points: Number of points to resample each stroke to.
+
+    Returns:
+        List of (ref_resampled, offset) tuples where both are (num_points, 2).
+    """
+    n_strokes = min(len(hand_strokes), len(ref_strokes))
+    results: list[tuple[np.ndarray, np.ndarray]] = []
+
+    for i in range(n_strokes):
+        if len(hand_strokes[i]) < 2 or len(ref_strokes[i]) < 2:
+            continue
+        ref_resampled = resample_stroke(ref_strokes[i], num_points)
+        hand_resampled = resample_stroke(hand_strokes[i], num_points)
+        offset = hand_resampled - ref_resampled
+        results.append((ref_resampled, offset))
+
+    return results
+
+
 def compute_normalization_stats_2d(
     tensors: list[torch.Tensor],
 ) -> dict[str, float]:

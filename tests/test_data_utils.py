@@ -10,12 +10,14 @@ from src.model.data_utils import (
     compute_normalization_stats,
     compute_normalization_stats_2d,
     compute_reference_stats,
+    compute_stroke_offsets,
     denormalize_point,
     normalize_deltas,
     normalize_deltas_2d,
     normalize_reference,
     reference_to_sequence,
     reference_to_sequence_from_arrays,
+    resample_stroke,
     stroke_to_deltas_2d,
     strokes_to_deltas,
     strokes_to_deltas_from_arrays,
@@ -323,3 +325,59 @@ class TestReferenceNormalization:
         # separators become (0, 0)
         torch.testing.assert_close(normalized[0, 1], torch.tensor([0.0, 0.0]))
         torch.testing.assert_close(normalized[1, 2], torch.tensor([0.0, 0.0]))
+
+
+class TestResampleStroke:
+    def test_basic(self) -> None:
+        points = np.array([[0, 0], [1, 0], [2, 0], [3, 0], [4, 0],
+                           [5, 0], [6, 0], [7, 0], [8, 0], [9, 0]], dtype=np.float32)
+        result = resample_stroke(points, 32)
+        assert result.shape == (32, 2)
+        assert result.dtype == np.float32
+
+    def test_preserves_endpoints(self) -> None:
+        points = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float32)
+        result = resample_stroke(points, 16)
+        np.testing.assert_allclose(result[0], points[0], atol=1e-5)
+        np.testing.assert_allclose(result[-1], points[-1], atol=1e-5)
+
+    def test_single_point(self) -> None:
+        points = np.array([[3.0, 7.0]], dtype=np.float32)
+        result = resample_stroke(points, 32)
+        assert result.shape == (32, 2)
+        for i in range(32):
+            np.testing.assert_allclose(result[i], [3.0, 7.0])
+
+    def test_straight_line(self) -> None:
+        points = np.array([[0, 0], [10, 0]], dtype=np.float32)
+        result = resample_stroke(points, 11)
+        expected_x = np.linspace(0, 10, 11)
+        np.testing.assert_allclose(result[:, 0], expected_x, atol=1e-5)
+        np.testing.assert_allclose(result[:, 1], np.zeros(11), atol=1e-5)
+
+
+class TestComputeStrokeOffsets:
+    def test_basic(self) -> None:
+        hand = [
+            np.array([[0, 0], [2, 2], [4, 4]], dtype=np.float32),
+        ]
+        ref = [
+            np.array([[0, 0], [1, 1], [2, 2]], dtype=np.float32),
+        ]
+        result = compute_stroke_offsets(hand, ref, num_points=8)
+        assert len(result) == 1
+        ref_resampled, offset = result[0]
+        assert ref_resampled.shape == (8, 2)
+        assert offset.shape == (8, 2)
+
+    def test_skips_short_strokes(self) -> None:
+        hand = [
+            np.array([[0, 0]], dtype=np.float32),
+            np.array([[0, 0], [1, 1]], dtype=np.float32),
+        ]
+        ref = [
+            np.array([[0, 0], [1, 1]], dtype=np.float32),
+            np.array([[0, 0], [1, 1]], dtype=np.float32),
+        ]
+        result = compute_stroke_offsets(hand, ref, num_points=4)
+        assert len(result) == 1

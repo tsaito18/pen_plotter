@@ -10,7 +10,13 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from src.model.char_encoder import CharEncoder
-from src.model.finetune import FinetuneConfig, FinetuneDataset, Finetuner, collate_finetune
+from src.model.finetune import (
+    DeformationFinetuner,
+    FinetuneConfig,
+    FinetuneDataset,
+    Finetuner,
+    collate_finetune,
+)
 from src.model.stroke_model import StrokeGenerator
 from src.model.style_encoder import StyleEncoder
 
@@ -360,3 +366,98 @@ class TestFinetuner:
                 input_ckpt["generator_state_dict"][k],
                 output_ckpt["generator_state_dict"][k],
             )
+
+
+def _make_v3_checkpoint(path: Path, config: dict | None = None) -> Path:
+    """Create a V3 deformation checkpoint for testing."""
+    from src.model.stroke_deformer import StrokeDeformer
+
+    cfg = config or {"style_dim": 128, "hidden_dim": 256, "num_points": 32}
+    deformer = StrokeDeformer(
+        style_dim=cfg["style_dim"], hidden_dim=cfg["hidden_dim"],
+    )
+    style_enc = StyleEncoder(style_dim=cfg["style_dim"])
+    norm_stats = {"mean_x": 0.0, "mean_y": 0.0, "std_x": 1.0, "std_y": 1.0}
+
+    checkpoint = {
+        "deformer_state_dict": deformer.state_dict(),
+        "style_encoder_state_dict": style_enc.state_dict(),
+        "config": cfg,
+        "norm_stats": norm_stats,
+        "version": 3,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(checkpoint, path)
+    return path
+
+
+class TestDeformationFinetuner:
+    @pytest.fixture
+    def setup(self, tmp_path):
+        chars = ["あ", "い", "う"]
+        user_dir = _make_data_dir(tmp_path / "user", chars)
+        ref_dir = _make_ref_dir(tmp_path / "ref", chars)
+        ckpt_path = _make_v3_checkpoint(tmp_path / "ckpt" / "v3_checkpoint.pt")
+        output_dir = tmp_path / "output"
+        return {
+            "user_dir": user_dir,
+            "ref_dir": ref_dir,
+            "ckpt_path": ckpt_path,
+            "output_dir": output_dir,
+        }
+
+    def test_creation(self, setup):
+        cfg = FinetuneConfig(epochs=1)
+        finetuner = DeformationFinetuner(
+            config=cfg,
+            pretrain_checkpoint=setup["ckpt_path"],
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        assert finetuner is not None
+
+    def test_deformer_frozen(self, setup):
+        cfg = FinetuneConfig(epochs=1)
+        finetuner = DeformationFinetuner(
+            config=cfg,
+            pretrain_checkpoint=setup["ckpt_path"],
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        for p in finetuner.deformer.parameters():
+            assert not p.requires_grad
+
+    def test_style_encoder_unfrozen(self, setup):
+        cfg = FinetuneConfig(epochs=1)
+        finetuner = DeformationFinetuner(
+            config=cfg,
+            pretrain_checkpoint=setup["ckpt_path"],
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        for p in finetuner.style_encoder.parameters():
+            assert p.requires_grad
+
+    @pytest.mark.slow
+    def test_deformation_finetuner_trains(self, setup):
+        cfg = FinetuneConfig(epochs=1, batch_size=4)
+        finetuner = DeformationFinetuner(
+            config=cfg,
+            pretrain_checkpoint=setup["ckpt_path"],
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        history = finetuner.train()
+        assert "losses" in history
+        assert len(history["losses"]) == 1
+        assert history["losses"][0] > 0
+        assert (setup["output_dir"] / "finetuned.pt").exists()
+
+        ckpt = torch.load(setup["output_dir"] / "finetuned.pt", weights_only=False)
+        assert "deformer_state_dict" in ckpt
+        assert "style_encoder_state_dict" in ckpt
+        assert ckpt.get("version") == 3
