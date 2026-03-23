@@ -672,7 +672,7 @@ class DeformationPretrainer:
             self.scaler = None
 
     def train(self) -> dict:
-        from src.model.stroke_deformer import deformation_loss
+        from src.model.stroke_deformer import deformation_loss, smoothness_loss
         from src.model.stroke_model import embedding_variance_loss
 
         print(f"[V3] Device: {self.device}" + (" (AMP)" if self.amp else ""))
@@ -696,8 +696,10 @@ class DeformationPretrainer:
                     style = self.style_encoder(style_strokes, lengths=style_lengths)
                     predicted = self.deformer(ref_points, style, stroke_indices)
 
-                    loss = deformation_loss(predicted, target_offsets)
-                    loss = loss + 0.1 * embedding_variance_loss(style)
+                    loss_deform = deformation_loss(predicted, target_offsets)
+                    loss_smooth = smoothness_loss(predicted)
+                    loss_style_var = embedding_variance_loss(style)
+                    loss = loss_deform + 0.1 * loss_smooth + 0.1 * loss_style_var
 
                 self.optimizer.zero_grad()
                 all_params = [

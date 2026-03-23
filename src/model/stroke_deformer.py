@@ -106,3 +106,19 @@ def deformation_loss(
         return diff_sq.sum() / mask_expanded.sum().clamp(min=1.0)
 
     return diff_sq.mean()
+
+
+def smoothness_loss(offsets: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    """Penalize large differences between offsets of adjacent points.
+
+    Args:
+        offsets: (batch, N, 2) predicted offsets.
+        mask: (batch, N) optional mask.
+    """
+    diff = offsets[:, 1:] - offsets[:, :-1]  # (batch, N-1, 2)
+    sq_diff = (diff ** 2).sum(dim=-1)  # (batch, N-1)
+
+    if mask is not None:
+        valid = mask[:, 1:] * mask[:, :-1]  # (batch, N-1)
+        return (sq_diff * valid).sum() / valid.sum().clamp(min=1)
+    return sq_diff.mean()

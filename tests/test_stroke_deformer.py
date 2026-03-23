@@ -4,7 +4,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from src.model.stroke_deformer import StrokeDeformer, deformation_loss
+from src.model.stroke_deformer import StrokeDeformer, deformation_loss, smoothness_loss
 
 
 class TestStrokeDeformer:
@@ -60,3 +60,26 @@ class TestDeformationLoss:
         target = torch.randn(4, 32, 2)
         loss = deformation_loss(target.clone(), target)
         assert loss.item() < 1e-6
+
+
+class TestSmoothnessLoss:
+    def test_smoothness_loss_constant_offsets(self) -> None:
+        """All points have the same offset -> loss = 0."""
+        offsets = torch.ones(4, 32, 2) * 0.5
+        loss = smoothness_loss(offsets)
+        assert loss.item() < 1e-6
+
+    def test_smoothness_loss_varying_offsets(self) -> None:
+        """Different offsets per point -> loss > 0."""
+        offsets = torch.randn(4, 32, 2)
+        loss = smoothness_loss(offsets)
+        assert loss.item() > 0
+
+    def test_smoothness_loss_with_mask(self) -> None:
+        """Masked points should be excluded from loss computation."""
+        offsets = torch.randn(4, 32, 2)
+        mask = torch.ones(4, 32)
+        mask[:, 16:] = 0.0
+        loss_masked = smoothness_loss(offsets, mask=mask)
+        assert loss_masked.shape == ()
+        assert loss_masked.item() > 0

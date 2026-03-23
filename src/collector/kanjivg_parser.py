@@ -35,13 +35,13 @@ def _sample_cubic_bezier(
 
 def _tokenize_svg_path(d: str) -> list[str]:
     """SVG pathのd属性をコマンドと数値トークンに分割。"""
-    return re.findall(r"[MmLlCcZz]|[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", d)
+    return re.findall(r"[MmLlCcSsZz]|[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", d)
 
 
 def parse_svg_path(d: str) -> NDArray[np.float64]:
     """SVG pathのd属性文字列をパースして(N, 2)座標配列に変換。
 
-    M(moveto), L(lineto), C(cubic bezier)をサポート。
+    M(moveto), L(lineto), C(cubic bezier), S(smooth cubic bezier)をサポート。
     """
     tokens = _tokenize_svg_path(d)
     if not tokens:
@@ -49,6 +49,7 @@ def parse_svg_path(d: str) -> NDArray[np.float64]:
 
     points: list[tuple[float, float]] = []
     current = (0.0, 0.0)
+    last_control: tuple[float, float] | None = None
     i = 0
 
     while i < len(tokens):
@@ -63,6 +64,7 @@ def parse_svg_path(d: str) -> NDArray[np.float64]:
                 y += current[1]
             current = (x, y)
             points.append(current)
+            last_control = None
 
         elif cmd in ("L", "l"):
             x, y = float(tokens[i]), float(tokens[i + 1])
@@ -72,6 +74,7 @@ def parse_svg_path(d: str) -> NDArray[np.float64]:
                 y += current[1]
             current = (x, y)
             points.append(current)
+            last_control = None
 
         elif cmd in ("C", "c"):
             x1, y1 = float(tokens[i]), float(tokens[i + 1])
@@ -86,12 +89,31 @@ def parse_svg_path(d: str) -> NDArray[np.float64]:
                 x3 += current[0]
                 y3 += current[1]
             sampled = _sample_cubic_bezier(current, (x1, y1), (x2, y2), (x3, y3))
-            # 先頭は前のポイントと重複するのでスキップ
             points.extend(sampled[1:])
+            last_control = (x2, y2)
+            current = (x3, y3)
+
+        elif cmd in ("S", "s"):
+            x2, y2 = float(tokens[i]), float(tokens[i + 1])
+            x3, y3 = float(tokens[i + 2]), float(tokens[i + 3])
+            i += 4
+            if cmd == "s":
+                x2 += current[0]
+                y2 += current[1]
+                x3 += current[0]
+                y3 += current[1]
+            if last_control is not None:
+                x1 = 2 * current[0] - last_control[0]
+                y1 = 2 * current[1] - last_control[1]
+            else:
+                x1, y1 = current
+            sampled = _sample_cubic_bezier(current, (x1, y1), (x2, y2), (x3, y3))
+            points.extend(sampled[1:])
+            last_control = (x2, y2)
             current = (x3, y3)
 
         elif cmd in ("Z", "z"):
-            pass
+            last_control = None
 
     return np.array(points, dtype=np.float64) if points else np.empty((0, 2), dtype=np.float64)
 

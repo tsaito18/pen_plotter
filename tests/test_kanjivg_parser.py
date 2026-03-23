@@ -38,6 +38,34 @@ class TestParseSvgPath:
         points = parse_svg_path("")
         assert len(points) == 0
 
+    def test_parse_smooth_bezier_absolute(self):
+        points = parse_svg_path("M 10,20 S 30,40 50,60")
+        assert len(points) >= 2
+        assert np.allclose(points[0], [10.0, 20.0])
+        assert np.allclose(points[-1], [50.0, 60.0])
+
+    def test_parse_smooth_bezier_relative(self):
+        points = parse_svg_path("M 10,20 s 20,20 40,40")
+        assert len(points) >= 2
+        assert np.allclose(points[0], [10.0, 20.0])
+        assert np.allclose(points[-1], [50.0, 60.0])
+
+    def test_parse_smooth_bezier_after_cubic(self):
+        """C followed by s: reflected control point should differ from current."""
+        points = parse_svg_path("M 0,0 C 10,0 20,10 20,20 s 10,10 20,0")
+        assert len(points) >= 10
+        assert np.allclose(points[-1], [40.0, 20.0])
+        xs = points[:, 0]
+        assert xs.max() - xs.min() > 30
+
+    def test_parse_gaku_stroke_6(self):
+        d = "M37.25,46.5c1,0.25,3.75,0.25,5.5,-0.25s18.25,-4,20,-4s2.75,0.75,1,2.25S54.5,53.5,53,54.75"
+        points = parse_svg_path(d)
+        assert len(points) > 20
+        assert points[-1][0] == pytest.approx(53.0, abs=0.1)
+        assert points[-1][1] == pytest.approx(54.75, abs=0.1)
+        assert points[:, 0].max() - points[:, 0].min() > 10
+
 
 class TestKanjiVGParser:
     def test_parse_svg_string(self):

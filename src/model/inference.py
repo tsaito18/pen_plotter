@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from numpy.typing import NDArray
 
 from src.model.stroke_model import StrokeGenerator
@@ -253,6 +254,8 @@ class StrokeInference:
             stroke_idx = torch.tensor([i])
 
             offsets = self.deformer(ref_tensor, style, stroke_idx)
+            offsets = self._smooth_offsets(offsets, kernel_size=5)
+            offsets = offsets.clamp(-1.5, 1.5)
             noise = torch.randn_like(offsets) * noise_scale
             deformed = ref_tensor + offsets + noise
 
@@ -262,3 +265,20 @@ class StrokeInference:
             all_strokes = [np.array([[0.0, 0.0], [1.0, 1.0]])]
 
         return all_strokes
+
+    def _smooth_offsets(self, offsets: torch.Tensor, kernel_size: int = 5) -> torch.Tensor:
+        """Apply 1D moving average to smooth per-point offsets.
+
+        Args:
+            offsets: (batch, N, 2)
+            kernel_size: smoothing window size (odd number)
+        """
+        if offsets.shape[1] <= kernel_size:
+            return offsets
+        B, N, _ = offsets.shape
+        x = offsets.permute(0, 2, 1).reshape(B * 2, 1, N)  # (B*2, 1, N)
+        pad = kernel_size // 2
+        x_padded = F.pad(x, (pad, pad), mode='replicate')
+        kernel = torch.ones(1, 1, kernel_size, device=x.device) / kernel_size
+        smoothed = F.conv1d(x_padded, kernel)
+        return smoothed.reshape(B, 2, N).permute(0, 2, 1)  # back to (B, N, 2)
