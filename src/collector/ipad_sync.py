@@ -52,9 +52,9 @@ def select_next_char(
     """学習効率を最大化する次の文字を選択する。
 
     優先度ロジック:
-    1. サンプル数が少ない文字を優先（0 > 1 > 2）
-    2. 同じサンプル数内では、レポート頻出文字（Tier1）を優先
-    3. 同一Tier内ではランダム選択（偏りを防ぐ）
+    1. Tier優先（Tier1 > Tier2 > Tier3）— レポート頻出文字を先に完成させる
+    2. 同一Tier内ではサンプル数が少ない文字を優先（0 > 1 > 2）
+    3. 同一優先度内ではランダム選択（偏りを防ぐ）
     """
     import random
 
@@ -67,7 +67,7 @@ def select_next_char(
         return None
 
     def _priority(ch: str) -> tuple[int, int]:
-        """(サンプル数, Tier) — 小さいほど優先"""
+        """(Tier, サンプル数) — 小さいほど優先"""
         count = saved_counts.get(ch, 0)
         if ch in _TIER1_CHARS:
             tier = 0
@@ -75,7 +75,7 @@ def select_next_char(
             tier = 1
         else:
             tier = 2
-        return (count, tier)
+        return (tier, count)
 
     remaining.sort(key=_priority)
     best_priority = _priority(remaining[0])

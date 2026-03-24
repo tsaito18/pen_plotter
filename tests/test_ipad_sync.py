@@ -159,12 +159,12 @@ class TestSelectNextChar:
         assert result in _TIER1_CHARS
 
     def test_tier1_before_tier2(self):
-        """Tier1の0サンプルがTier2の0サンプルより優先される"""
-        # Tier1文字を全て1サンプルにし、Tier2を0サンプルにする
+        """Tier1がTier2より優先される（サンプル数が多くても）"""
+        # Tier1文字を全て1サンプルにし、Tier2/3を0サンプルにする
         counts = {c: 1 for c in GUIDED_CHARS if c in _TIER1_CHARS}
         result = select_next_char(counts, target_samples=3, seed=42)
-        # 0サンプルの文字が優先される（Tier2含む）
-        assert counts.get(result, 0) == 0
+        # Tier1の1サンプル文字が、Tier2/3の0サンプル文字より優先される
+        assert result in _TIER1_CHARS
 
     def test_zero_samples_before_one_sample(self):
         """0サンプルの文字が1サンプルの文字より優先される"""
