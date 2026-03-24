@@ -576,7 +576,7 @@ class UserTrainConfig:
 
 
 class UserDeformationTrainer:
-    """Train AffineStrokeDeformer + StyleEncoder directly on user data (no CASIA)."""
+    """Train StrokeDeformer + StyleEncoder directly on user data (no CASIA)."""
 
     def __init__(
         self,
@@ -587,7 +587,7 @@ class UserDeformationTrainer:
         device: str | None = None,
         num_workers: int = 0,
     ) -> None:
-        from src.model.stroke_deformer import AffineStrokeDeformer
+        from src.model.stroke_deformer import StrokeDeformer
 
         self.config = config
         self.output_dir = Path(output_dir)
@@ -613,7 +613,7 @@ class UserDeformationTrainer:
         self.norm_stats = compute_normalization_stats(style_tensors) if style_tensors else None
 
         self.style_encoder = StyleEncoder(style_dim=config.style_dim).to(self.device)
-        self.deformer = AffineStrokeDeformer(
+        self.deformer = StrokeDeformer(
             style_dim=config.style_dim,
             hidden_dim=config.hidden_dim,
             dropout=config.dropout,
@@ -632,7 +632,7 @@ class UserDeformationTrainer:
         )
 
     def train(self) -> dict:
-        from src.model.stroke_deformer import affine_deformation_loss
+        from src.model.stroke_deformer import deformation_loss, smoothness_loss
 
         print(f"[V3-user] Device: {self.device}")
         print(f"[V3-user] Dataset: {len(self.dataset)} stroke pairs")
@@ -649,6 +649,7 @@ class UserDeformationTrainer:
                 ref_points = batch["reference_points"].to(self.device)
                 target_points = batch["target_points"].to(self.device)
                 stroke_indices = batch["stroke_indices"].to(self.device)
+                target_offsets = target_points - ref_points
 
                 style_strokes = batch["style_strokes"].to(self.device)
                 if self.norm_stats is not None:
@@ -656,9 +657,9 @@ class UserDeformationTrainer:
                 style_lengths = batch["style_lengths"]
 
                 style = self.style_encoder(style_strokes, lengths=style_lengths)
-                transformed, _params = self.deformer(ref_points, style, stroke_indices)
+                predicted = self.deformer(ref_points, style, stroke_indices)
 
-                loss = affine_deformation_loss(transformed, target_points)
+                loss = deformation_loss(predicted, target_offsets) + 0.1 * smoothness_loss(predicted)
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -690,7 +691,7 @@ class UserDeformationTrainer:
                     "hidden_dim": self.config.hidden_dim,
                     "num_points": self.config.num_points,
                     "dropout": self.config.dropout,
-                    "deformer_type": "affine",
+                    "deformer_type": "offset",
                 },
                 "norm_stats": self.norm_stats,
                 "version": 3,
