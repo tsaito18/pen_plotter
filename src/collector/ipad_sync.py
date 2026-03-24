@@ -26,6 +26,63 @@ GUIDED_CHARS: list[str] = list(
     "0123456789ABCDEFabcdef+-×÷="
 )
 
+# レポート頻出文字の優先度（高→低の3段階）
+# Tier 1: レポートで非常に頻出するひらがな・漢字（最優先で収集）
+_TIER1_CHARS: set[str] = set(
+    "のをにはでがとるたしいてれかなまうもこさよりおくえあわけせすみつね"  # 頻出ひらがな
+    "実験測定結果値回路電圧周波数特性図表示"  # 理工系レポート頻出
+    "的方法用使用変化比較大小高低"  # 説明文頻出
+    "アイウエオカコサセタテナニノラルロン"  # 頻出カタカナ
+    "0123456789"  # 数字
+)
+# Tier 2: 中程度の頻度（基本漢字・残りカタカナ）
+_TIER2_CHARS: set[str] = set(
+    "キクケシスソチツトヌネハヘホマミムメモヤユリレワヲ"  # 残りカタカナ
+    "一二三四五六七八九十百千万年月日時分秒"  # 基本数量
+    "人学校先生会社体力行来出入上下左右中前後内外"  # 基本漢字
+    "ABCDEFabcdef+-×÷="  # 英字・記号
+)
+
+
+def select_next_char(
+    saved_counts: dict[str, int],
+    target_samples: int = 3,
+    seed: int | None = None,
+) -> str | None:
+    """学習効率を最大化する次の文字を選択する。
+
+    優先度ロジック:
+    1. サンプル数が少ない文字を優先（0 > 1 > 2）
+    2. 同じサンプル数内では、レポート頻出文字（Tier1）を優先
+    3. 同一Tier内ではランダム選択（偏りを防ぐ）
+    """
+    import random
+
+    rng = random.Random(seed)
+
+    remaining = [
+        c for c in GUIDED_CHARS if saved_counts.get(c, 0) < target_samples
+    ]
+    if not remaining:
+        return None
+
+    def _priority(ch: str) -> tuple[int, int]:
+        """(サンプル数, Tier) — 小さいほど優先"""
+        count = saved_counts.get(ch, 0)
+        if ch in _TIER1_CHARS:
+            tier = 0
+        elif ch in _TIER2_CHARS:
+            tier = 1
+        else:
+            tier = 2
+        return (count, tier)
+
+    remaining.sort(key=_priority)
+    best_priority = _priority(remaining[0])
+    candidates = [c for c in remaining if _priority(c) == best_priority]
+
+    return rng.choice(candidates)
+
 
 class StrokeCollectorApp:
     def __init__(self, output_dir: Path, port: int = 8080, target_samples: int = 3) -> None:
@@ -51,8 +108,6 @@ class StrokeCollectorApp:
         return self._recorder.list_characters()
 
     def get_progress(self) -> dict:
-        import random
-
         saved_chars: dict[str, int] = {}
         for char in GUIDED_CHARS:
             char_dir = self.output_dir / char
@@ -62,10 +117,19 @@ class StrokeCollectorApp:
                 saved_chars[char] = 0
 
         completed = [c for c in GUIDED_CHARS if saved_chars.get(c, 0) >= self.target_samples]
-        remaining = [c for c in GUIDED_CHARS if saved_chars.get(c, 0) < self.target_samples]
 
-        current_char = random.choice(remaining) if remaining else None
+        current_char = select_next_char(saved_chars, self.target_samples)
         current_index = GUIDED_CHARS.index(current_char) if current_char else 0
+
+        # Tier情報を付与
+        tier_label = ""
+        if current_char:
+            if current_char in _TIER1_CHARS:
+                tier_label = "★ 最優先"
+            elif current_char in _TIER2_CHARS:
+                tier_label = "☆ 優先"
+            else:
+                tier_label = "通常"
 
         return {
             "total": len(GUIDED_CHARS),
@@ -74,6 +138,7 @@ class StrokeCollectorApp:
             "current_index": current_index,
             "samples_for_current": saved_chars.get(current_char, 0) if current_char else 0,
             "target_samples": self.target_samples,
+            "tier": tier_label,
         }
 
     def serve(self) -> None:
@@ -328,9 +393,11 @@ _HTML_PAGE = """\
           guidedEl.textContent = data.current_char;
           charInput.value = data.current_char;
           const sampleNum = data.samples_for_current + 1;
+          const tierText = data.tier ? ' [' + data.tier + ']' : '';
           progressEl.textContent = data.completed + ' / ' + data.total
             + ' 文字完了 (' + data.current_char + ': '
-            + sampleNum + '/' + data.target_samples + '回目)';
+            + sampleNum + '/' + data.target_samples + '回目)'
+            + tierText;
         } else {
           guidedEl.textContent = '✓';
           progressEl.textContent = '全文字の収集が完了しました！';

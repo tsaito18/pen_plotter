@@ -6,7 +6,13 @@ import urllib.request
 import pytest
 
 from src.collector.data_format import StrokePoint, StrokeSample
-from src.collector.ipad_sync import GUIDED_CHARS, StrokeCollectorApp
+from src.collector.ipad_sync import (
+    GUIDED_CHARS,
+    StrokeCollectorApp,
+    _TIER1_CHARS,
+    _TIER2_CHARS,
+    select_next_char,
+)
 
 
 class TestStrokeCollectorApp:
@@ -97,30 +103,34 @@ class TestGuidedCollection:
         progress = app.get_progress()
         assert progress["total"] == len(GUIDED_CHARS)
         assert progress["completed"] == 0
-        assert progress["current_char"] == GUIDED_CHARS[0]
-        assert progress["current_index"] == 0
+        # Tier1の0サンプル文字が最優先で選ばれる
+        assert progress["current_char"] in _TIER1_CHARS
         assert progress["samples_for_current"] == 0
         assert progress["target_samples"] == 3
+        assert "tier" in progress
 
     def test_get_progress_with_samples(self, tmp_path):
         app = StrokeCollectorApp(output_dir=tmp_path, port=0)
-        sample = self._make_sample(GUIDED_CHARS[0])
+        first_char = app.get_progress()["current_char"]
+        sample = self._make_sample(first_char)
         app.save_stroke(sample)
         progress = app.get_progress()
-        assert progress["samples_for_current"] == 1
-        assert progress["current_char"] == GUIDED_CHARS[0]
+        # 1サンプルの文字より0サンプルのTier1文字が優先される
+        assert progress["current_char"] in GUIDED_CHARS
         assert progress["completed"] == 0
 
     def test_get_progress_char_completed(self, tmp_path):
         app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        first_char = app.get_progress()["current_char"]
         for _ in range(3):
-            sample = self._make_sample(GUIDED_CHARS[0])
+            sample = self._make_sample(first_char)
             app.save_stroke(sample)
             time.sleep(0.001)
         progress = app.get_progress()
         assert progress["completed"] == 1
-        assert progress["current_char"] == GUIDED_CHARS[1]
-        assert progress["current_index"] == 1
+        # 完了した文字ではなく別のTier1文字が選ばれる
+        assert progress["current_char"] != first_char
+        assert progress["current_char"] in GUIDED_CHARS
 
     def test_progress_endpoint(self, tmp_path):
         app = StrokeCollectorApp(output_dir=tmp_path, port=0)
@@ -137,4 +147,49 @@ class TestGuidedCollection:
         assert "current_index" in data
         assert "samples_for_current" in data
         assert "target_samples" in data
-        assert data["current_char"] == GUIDED_CHARS[0]
+        assert data["current_char"] in _TIER1_CHARS
+
+
+class TestSelectNextChar:
+    """select_next_char の優先度ロジックテスト"""
+
+    def test_empty_counts_returns_tier1(self):
+        """サンプルなしではTier1文字が選ばれる"""
+        result = select_next_char({}, target_samples=3, seed=42)
+        assert result in _TIER1_CHARS
+
+    def test_tier1_before_tier2(self):
+        """Tier1の0サンプルがTier2の0サンプルより優先される"""
+        # Tier1文字を全て1サンプルにし、Tier2を0サンプルにする
+        counts = {c: 1 for c in GUIDED_CHARS if c in _TIER1_CHARS}
+        result = select_next_char(counts, target_samples=3, seed=42)
+        # 0サンプルの文字が優先される（Tier2含む）
+        assert counts.get(result, 0) == 0
+
+    def test_zero_samples_before_one_sample(self):
+        """0サンプルの文字が1サンプルの文字より優先される"""
+        tier1_list = [c for c in GUIDED_CHARS if c in _TIER1_CHARS]
+        # 半分を1サンプルにする
+        counts = {c: 1 for c in tier1_list[:len(tier1_list) // 2]}
+        result = select_next_char(counts, target_samples=3, seed=42)
+        assert counts.get(result, 0) == 0
+
+    def test_all_completed_returns_none(self):
+        """全文字が目標サンプル数に達したらNone"""
+        counts = {c: 3 for c in GUIDED_CHARS}
+        result = select_next_char(counts, target_samples=3)
+        assert result is None
+
+    def test_deterministic_with_seed(self):
+        """同じseedで同じ結果"""
+        r1 = select_next_char({}, target_samples=3, seed=123)
+        r2 = select_next_char({}, target_samples=3, seed=123)
+        assert r1 == r2
+
+    def test_varies_without_seed(self):
+        """seedなしでは結果がバラけうる（ランダム性確認）"""
+        results = set()
+        for _ in range(20):
+            r = select_next_char({}, target_samples=3)
+            results.add(r)
+        assert len(results) > 1
