@@ -273,20 +273,17 @@ class StrokeInference:
                 offsets = offsets.clamp(-0.3, 0.3)
                 deformed = (ref_tensor + offsets).squeeze(0).detach().numpy()
 
-            # Per-stroke geometric variation (smooth, not per-point noise)
+            # Per-stroke geometric variation
             center = deformed.mean(axis=0)
             centered = deformed - center
-            # Random rotation
-            angle = np.random.normal(0, noise_scale * 0.15)  # radians
+            angle = np.random.normal(0, noise_scale * 0.05)
             cos_a, sin_a = np.cos(angle), np.sin(angle)
             rotated = centered @ np.array([[cos_a, -sin_a], [sin_a, cos_a]])
-            # Random scale
-            sx = 1.0 + np.random.normal(0, noise_scale * 0.3)
-            sy = 1.0 + np.random.normal(0, noise_scale * 0.3)
+            sx = 1.0 + np.random.normal(0, noise_scale * 0.1)
+            sy = 1.0 + np.random.normal(0, noise_scale * 0.1)
             scaled = rotated * np.array([sx, sy])
-            # Random position shift
-            dx = np.random.normal(0, noise_scale * 0.5)
-            dy = np.random.normal(0, noise_scale * 0.5)
+            dx = np.random.normal(0, noise_scale * 0.15)
+            dy = np.random.normal(0, noise_scale * 0.15)
             result = scaled + center + np.array([dx, dy])
 
             all_strokes.append(result.astype(np.float32))

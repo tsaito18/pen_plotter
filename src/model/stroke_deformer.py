@@ -150,12 +150,12 @@ class AffineStrokeDeformer(nn.Module):
         features = torch.cat([style, s_emb, stroke_stats], dim=-1)
         params = self.mlp(features)
 
-        theta = params[:, 0] * 0.1
-        sx = 1.0 + params[:, 1] * 0.2
-        sy = 1.0 + params[:, 2] * 0.2
-        shear = params[:, 3] * 0.1
-        tx = params[:, 4] * 0.5
-        ty = params[:, 5] * 0.5
+        theta = params[:, 0] * 0.015
+        sx = 1.0 + params[:, 1] * 0.04
+        sy = 1.0 + params[:, 2] * 0.04
+        shear = params[:, 3] * 0.015
+        tx = params[:, 4] * 0.08
+        ty = params[:, 5] * 0.08
 
         cos_t = torch.cos(theta)
         sin_t = torch.sin(theta)
