@@ -296,15 +296,12 @@ class PlotterPipeline:
 
         for stroke in strokes:
             if len(stroke) >= 2:
-                ax.plot(stroke[:, 0], stroke[:, 1], "b-", linewidth=0.3)
+                ax.plot(stroke[:, 0], stroke[:, 1], "b-", linewidth=0.5)
 
-        ax.set_xlim(-5, cfg.paper_width + 5)
-        ax.set_ylim(-5, cfg.paper_height + 5)
+        ax.set_xlim(-2, cfg.paper_width + 2)
+        ax.set_ylim(-2, cfg.paper_height + 2)
         ax.set_aspect("equal")
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
-        ax.set_title("Pen Plotter Preview")
-        ax.grid(False)
+        ax.axis("off")
 
         plt.tight_layout()
         fig.savefig(str(save_path), dpi=300)
