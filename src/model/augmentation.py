@@ -14,9 +14,10 @@ class AugmentConfig:
 
     baseline_drift: float = 0.3
     size_variation: float = 0.05
-    slant_variation: float = 0.03
-    jitter_amplitude: float = 0.1
+    slant_variation: float = 0.04
+    jitter_amplitude: float = 0.08
     spacing_variation: float = 0.2
+    line_density_variation: float = 0.1
     enabled: bool = True
 
 
@@ -31,6 +32,15 @@ class HandwritingAugmenter:
             return strokes
 
         return [self._apply_jitter(stroke) for stroke in strokes]
+
+    def get_line_density_scale(self) -> float:
+        """行ごとの文字密度スケールを返す。"""
+        if not self._config.enabled:
+            return 1.0
+        cfg = self._config
+        return 1.0 + self._rng.uniform(
+            -cfg.line_density_variation, cfg.line_density_variation
+        )
 
     def augment_char_placement(
         self, x: float, y: float, font_size: float
@@ -58,6 +68,10 @@ class HandwritingAugmenter:
         centered = stroke - np.array([center_x, center_y])
         rotated = centered @ np.array([[cos_a, -sin_a], [sin_a, cos_a]])
         return rotated + np.array([center_x, center_y])
+
+    def random_uniform(self, low: float, high: float) -> float:
+        """公開RNGアクセス: [low, high) の一様乱数を返す。"""
+        return float(self._rng.uniform(low, high))
 
     def _apply_jitter(self, stroke: Stroke) -> Stroke:
         """ストロークに微振動を加える。"""

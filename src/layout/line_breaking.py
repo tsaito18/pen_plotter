@@ -48,12 +48,12 @@ def break_lines(text: str, chars_per_line: int) -> list[str]:
         if not paragraph:
             result.append("")
             continue
-        result.extend(_break_paragraph(paragraph, chars_per_line))
+        result.extend(break_paragraph(paragraph, chars_per_line))
 
     return result
 
 
-def _break_paragraph(text: str, chars_per_line: int) -> list[str]:
+def break_paragraph(text: str, chars_per_line: int) -> list[str]:
     lines: list[str] = []
     max_width = float(chars_per_line)
     i = 0

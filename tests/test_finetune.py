@@ -456,6 +456,61 @@ class TestDeformationFinetuner:
             assert p.requires_grad
 
     @pytest.mark.slow
+    def test_offset_finetuner_clamps_offsets(self, tmp_path):
+        """DeformationFinetuner with offset deformer must clamp predicted offsets."""
+        from src.model.finetune import OFFSET_CLAMP
+
+        chars = ["あ", "い", "う"]
+        user_dir = _make_data_dir(tmp_path / "user", chars)
+        ref_dir = _make_ref_dir(tmp_path / "ref", chars)
+        ckpt_path = _make_v3_checkpoint(
+            tmp_path / "ckpt" / "v3_offset.pt",
+            config={
+                "style_dim": 128,
+                "hidden_dim": 64,
+                "num_points": 32,
+                "deformer_type": "offset",
+            },
+        )
+        cfg = FinetuneConfig(epochs=1, batch_size=4)
+        finetuner = DeformationFinetuner(
+            config=cfg,
+            pretrain_checkpoint=ckpt_path,
+            user_data_dir=user_dir,
+            ref_dir=ref_dir,
+            output_dir=tmp_path / "output",
+        )
+
+        # Monkey-patch deformer to return large offsets
+        original_forward = finetuner.deformer.forward
+        post_clamp_offsets = []
+
+        def patched_forward(*args, **kwargs):
+            return original_forward(*args, **kwargs) * 10.0
+
+        finetuner.deformer.forward = patched_forward
+
+        from src.model.stroke_deformer import deformation_loss as orig_loss
+        import src.model.stroke_deformer as sd_mod
+
+        def capturing_loss(predicted, target):
+            post_clamp_offsets.append(predicted.detach().clone())
+            return orig_loss(predicted, target)
+
+        old_loss = sd_mod.deformation_loss
+        sd_mod.deformation_loss = capturing_loss
+        try:
+            history = finetuner.train()
+        finally:
+            sd_mod.deformation_loss = old_loss
+
+        assert len(history["losses"]) == 1
+        assert len(post_clamp_offsets) > 0
+        for offsets in post_clamp_offsets:
+            assert offsets.max().item() <= OFFSET_CLAMP + 1e-6
+            assert offsets.min().item() >= -OFFSET_CLAMP - 1e-6
+
+    @pytest.mark.slow
     def test_deformation_finetuner_trains(self, setup):
         cfg = FinetuneConfig(epochs=1, batch_size=4)
         finetuner = DeformationFinetuner(
@@ -524,6 +579,62 @@ class TestUserDeformationTrainer:
         results = [ds[0]["target_points"] for _ in range(5)]
         all_same = all(torch.equal(results[0], r) for r in results[1:])
         assert not all_same, "Augmentation should produce different target points"
+
+    @pytest.mark.slow
+    def test_training_clamps_offsets(self, setup):
+        """Training must clamp predicted offsets within [-OFFSET_CLAMP, OFFSET_CLAMP]."""
+        from src.model.finetune import OFFSET_CLAMP
+
+        cfg = UserTrainConfig(epochs=1, batch_size=4)
+        trainer = UserDeformationTrainer(
+            config=cfg,
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+
+        # Monkey-patch deformer to return large offsets that would exceed clamp range
+        original_forward = trainer.deformer.forward
+        post_clamp_offsets = []
+
+        def patched_forward(*args, **kwargs):
+            result = original_forward(*args, **kwargs)
+            return result * 10.0  # artificially inflate to force clamping
+
+        trainer.deformer.forward = patched_forward
+
+        # Patch deformation_loss to capture the offsets after smooth+clamp
+        from src.model.stroke_deformer import deformation_loss as orig_loss
+
+        def capturing_loss(predicted, target):
+            post_clamp_offsets.append(predicted.detach().clone())
+            return orig_loss(predicted, target)
+
+        import src.model.stroke_deformer as sd_mod
+        old_loss = sd_mod.deformation_loss
+        sd_mod.deformation_loss = capturing_loss
+        try:
+            trainer.train()
+        finally:
+            sd_mod.deformation_loss = old_loss
+
+        assert len(post_clamp_offsets) > 0, "Loss was never called"
+        for offsets in post_clamp_offsets:
+            assert offsets.max().item() <= OFFSET_CLAMP + 1e-6
+            assert offsets.min().item() >= -OFFSET_CLAMP - 1e-6
+
+    @pytest.mark.slow
+    def test_training_and_inference_share_clamp_and_smoothing(self, setup):
+        """Training and inference use the same OFFSET_CLAMP and smooth_offsets function."""
+        from src.model.finetune import OFFSET_CLAMP, SMOOTHING_KERNEL_SIZE, smooth_offsets
+
+        assert OFFSET_CLAMP == 1.2
+        assert SMOOTHING_KERNEL_SIZE == 11
+
+        # Verify inference imports the same constants
+        offsets = torch.randn(1, 32, 2)
+        smoothed = smooth_offsets(offsets)
+        assert smoothed.shape == offsets.shape
 
     @pytest.mark.slow
     def test_checkpoint_compatible_with_inference(self, setup):

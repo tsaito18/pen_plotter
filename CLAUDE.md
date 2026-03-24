@@ -37,14 +37,16 @@
 ```
 KanjiVG参照ストローク → リサンプリング（32点）
 StyleEncoder(user_samples) → style_vector（どんな書き癖か）
-StrokeDeformer(参照点 + style_vector + stroke_index) → オフセット (N, 2)
-参照点 + オフセット → スムージング(kernel=11) + クランプ(±0.3) → 変形済みストローク
+StrokeDeformer(参照点 + 正規化位置t + 局所曲率 + style_vector + stroke_embed) → オフセット (N, 2)
+→ smooth_offsets(kernel=11) → clamp(±1.2) → 変形済みストローク
 + ストローク単位の幾何バリエーション（回転・スケール・シフト）
++ 文字配置の揺らぎ（ベースライン・字間・サイズ・傾き）+ ストローク太さ変化
 ```
 - KanjiVGの正しい形を前提に、per-point offsetで変形（生成ではなく転写）
 - ユーザーデータのみで訓練（CASIA不使用 — 中国語/日本語ストロークの不一致）
 - 137文字 / 269サンプル収集済み（data/user_strokes/）
 - V2 (LSTM+MDN) は300k samples, A100でも読めない品質で断念
+- train-inference gap解消済み: smooth+clampを訓練/推論で統一（共有定数/関数）
 
 ### スクリプト一覧
 | スクリプト | 用途 |
@@ -98,9 +100,9 @@ StrokeDeformer(参照点 + style_vector + stroke_index) → オフセット (N, 
 - Phase 4 完了: 組版エンジン（ページレイアウト・禁則処理・数式・表）
 - Phase 5 完了: サンプル収集基盤（データ形式・KanjiVGパーサー・iPad Web UI・ストローク正規化）
 - Phase 6 完了: MLモデル V2→V3移行完了（V2 LSTM+MDN断念、V3 StrokeDeformer採用）
-- Phase 7 部分完了: V3スタイル転写動作、組版改善（A4縦・罫線・文字サイズバランス）、幾何バリエーション
-- 訓練: ユーザーデータのみ（137文字/269サンプル）、CASIA不使用
-- 383テスト全パス
+- Phase 7 部分完了: V3スタイル転写動作、組版改善、幾何バリエーション、リアルさ改善（太さ変化・密度変動・段落インデント・局所曲率・クランプ±1.2）
+- 訓練: ユーザーデータのみ（137文字/269サンプル）、CASIA不使用、loss=10.4
+- 423テスト全パス
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -124,13 +126,15 @@ StrokeDeformer(参照点 + style_vector + stroke_index) → オフセット (N, 
 - V2 (LSTM+MDN) は300k samples, A100でも読めない品質で断念
 - V3: KanjiVG参照ストロークにper-point offsetを適用するスタイル転写方式
 - ユーザーデータのみで訓練（CASIA不使用 — 中国語/日本語ストロークの不一致でノイズ）
-- オフセットクランプ±0.3 + スムージングkernel=11 で滑らかさ確保
+- オフセットクランプ±1.2 + スムージングkernel=11（訓練/推論で統一）
 - ストローク単位の幾何バリエーション（回転・スケール・シフト）で自然さ追加
-- 課題: KanjiVGの形に近すぎる（スタイル表現が不足）
+- 局所曲率特徴追加でストロークの曲がり角に大きなオフセット許容
+- augmentation控えめ設定（baseline_drift=0.3, spacing=0.2, size=0.05）— 整然さ重視
+- ストローク太さ変化は控えめ（width=0.7+0.3*exp(-2t)）
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 
 ### 全体進捗（2026-03-24時点）
-- 383テスト全パス
+- 423テスト全パス
 - KanjiVG 6,699文字変換済み（SVGパーサー: smooth cubic bezier s/S対応済み）
 - 3段階フォールバック（ML推論→KanjiVG→矩形）動作
 - ガイド付きストローク収集UI（292文字セット）実装済み

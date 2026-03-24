@@ -10,6 +10,50 @@ import torch
 import torch.nn as nn
 
 
+def compute_local_curvature(points: torch.Tensor) -> torch.Tensor:
+    """Compute local curvature at each point from adjacent triplets.
+
+    Uses cross-product magnitude / (edge lengths product) to estimate curvature,
+    then normalizes to [0, 1] via sigmoid. Boundary points copy their neighbor's value.
+
+    Args:
+        points: (batch, N, 2) xy coordinates.
+
+    Returns:
+        curvature: (batch, N, 1) normalized curvature values in [0, 1].
+    """
+    batch, n, _ = points.shape
+    if n < 3:
+        return torch.zeros(batch, n, 1, device=points.device, dtype=points.dtype)
+
+    p_prev = points[:, :-2]  # (batch, N-2, 2)
+    p_curr = points[:, 1:-1]
+    p_next = points[:, 2:]
+
+    v1 = p_curr - p_prev  # (batch, N-2, 2)
+    v2 = p_next - p_curr
+
+    # 2D cross product magnitude = |v1.x * v2.y - v1.y * v2.x|
+    cross = (v1[..., 0] * v2[..., 1] - v1[..., 1] * v2[..., 0]).abs()
+
+    len1 = v1.norm(dim=-1).clamp(min=1e-8)
+    len2 = v2.norm(dim=-1).clamp(min=1e-8)
+
+    # Raw curvature: cross / (len1 * len2), range [0, 1] geometrically
+    raw_curv = cross / (len1 * len2)
+
+    # Sigmoid normalization to [0, 1], scaled so moderate bends are visible
+    curv_interior = torch.sigmoid(raw_curv * 4.0 - 2.0)  # (batch, N-2)
+
+    # Pad boundaries by copying neighbor values
+    curv = torch.cat(
+        [curv_interior[:, :1], curv_interior, curv_interior[:, -1:]],
+        dim=1,
+    )
+
+    return curv.unsqueeze(-1)  # (batch, N, 1)
+
+
 class StrokeDeformer(nn.Module):
     """Predicts per-point offsets to deform reference strokes to user style."""
 
@@ -30,8 +74,8 @@ class StrokeDeformer(nn.Module):
 
         self.stroke_embedding = nn.Embedding(self.MAX_STROKE_INDEX, stroke_embed_dim)
 
-        # ref_x, ref_y, normalized_t, style_vector, stroke_embed
-        input_dim = 2 + 1 + style_dim + stroke_embed_dim
+        # ref_x, ref_y, normalized_t, curvature, style_vector, stroke_embed
+        input_dim = 2 + 1 + 1 + style_dim + stroke_embed_dim
 
         layers: list[nn.Module] = []
         in_dim = input_dim
@@ -69,6 +113,9 @@ class StrokeDeformer(nn.Module):
         t = torch.linspace(0, 1, n_points, device=reference_points.device)
         t = t.unsqueeze(0).unsqueeze(-1).expand(batch_size, n_points, 1)
 
+        # local curvature from reference geometry
+        curvature = compute_local_curvature(reference_points)
+
         # style broadcast to each point
         style_expanded = style.unsqueeze(1).expand(batch_size, n_points, self.style_dim)
 
@@ -85,7 +132,9 @@ class StrokeDeformer(nn.Module):
                 device=reference_points.device,
             )
 
-        features = torch.cat([reference_points, t, style_expanded, stroke_emb], dim=-1)
+        features = torch.cat(
+            [reference_points, t, curvature, style_expanded, stroke_emb], dim=-1
+        )
         return self.mlp(features)
 
 

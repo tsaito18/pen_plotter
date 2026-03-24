@@ -4,10 +4,48 @@ import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+from matplotlib.collections import LineCollection
 
 from src.gcode.config import PlotterConfig
 
 Stroke = npt.NDArray[np.float64]
+
+
+def compute_stroke_widths(n_segments: int) -> list[float]:
+    """ストローク内の各セグメントの太さを計算する。
+
+    Args:
+        n_segments: セグメント数
+
+    Returns:
+        各セグメントの linewidth リスト（始点で太く、終点で細い）
+    """
+    if n_segments <= 0:
+        return []
+    if n_segments == 1:
+        t = np.array([0.5])
+    else:
+        t = np.linspace(0.0, 1.0, n_segments)
+    widths = 0.7 + 0.3 * np.exp(-2.0 * t)
+    return widths.tolist()
+
+
+def _draw_stroke_with_width(
+    ax: plt.Axes, stroke: Stroke, color: str = "b"
+) -> None:
+    """LineCollectionを使ってストロークを太さ変調付きで描画"""
+    n_points = len(stroke)
+    n_segments = n_points - 1
+    if n_segments < 1:
+        return
+
+    segments = [
+        [stroke[i].tolist(), stroke[i + 1].tolist()] for i in range(n_segments)
+    ]
+    widths = compute_stroke_widths(n_segments)
+
+    lc = LineCollection(segments, linewidths=widths, colors=color)
+    ax.add_collection(lc)
 
 
 def preview_strokes(
@@ -16,6 +54,7 @@ def preview_strokes(
     show_travel: bool = True,
     show_paper: bool = True,
     save_path: str | Path | None = None,
+    vary_width: bool = True,
 ) -> None:
     """ストロークデータをMatplotlibで描画
 
@@ -25,6 +64,7 @@ def preview_strokes(
         show_travel: ペンアップ移動を赤点線で表示
         show_paper: 用紙の矩形を表示
         save_path: 画像保存先。Noneの場合画面表示
+        vary_width: ストローク内の太さを変調する（始筆太→終筆細）
     """
     config = config or PlotterConfig()
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
@@ -48,7 +88,10 @@ def preview_strokes(
         if show_travel:
             travel = np.array([current_pos, stroke[0]])
             ax.plot(travel[:, 0], travel[:, 1], "r--", linewidth=0.5, alpha=0.3)
-        ax.plot(stroke[:, 0], stroke[:, 1], "b-", linewidth=1.0)
+        if vary_width:
+            _draw_stroke_with_width(ax, stroke)
+        else:
+            ax.plot(stroke[:, 0], stroke[:, 1], "b-", linewidth=1.0)
         current_pos = stroke[-1].copy()
 
     ax.set_xlim(-5, config.work_area_width + 5)

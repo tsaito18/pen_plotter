@@ -22,16 +22,26 @@ def main() -> None:
         default=Path("data/strokes"),
         help="KanjiVGストロークデータのディレクトリ (default: data/strokes)",
     )
+    parser.add_argument(
+        "--user-strokes-dir",
+        type=Path,
+        default=Path("data/user_strokes"),
+        help="ユーザー手書きストロークデータのディレクトリ (default: data/user_strokes)",
+    )
     parser.add_argument("--port", type=int, default=7860, help="ポート番号 (default: 7860)")
     parser.add_argument("--share", action="store_true", help="公開リンクを生成")
     args = parser.parse_args()
 
     kanjivg_dir = args.kanjivg_dir if args.kanjivg_dir.exists() else None
     checkpoint = args.checkpoint if args.checkpoint and args.checkpoint.exists() else None
+    user_strokes_dir = (
+        args.user_strokes_dir if args.user_strokes_dir.exists() else None
+    )
 
     pipeline = PlotterPipeline(
         checkpoint_path=checkpoint,
         kanjivg_dir=kanjivg_dir,
+        user_strokes_dir=user_strokes_dir,
     )
 
     app = pipeline.create_app()
@@ -43,6 +53,8 @@ def main() -> None:
     mode = []
     if checkpoint:
         mode.append(f"ML推論 ({checkpoint})")
+    if user_strokes_dir:
+        mode.append(f"スタイルサンプル ({user_strokes_dir})")
     if kanjivg_dir:
         mode.append(f"KanjiVGフォールバック ({kanjivg_dir})")
     if not mode:

@@ -22,8 +22,8 @@ class TestAugmentConfig:
         cfg = AugmentConfig()
         assert cfg.baseline_drift == 0.3
         assert cfg.size_variation == 0.05
-        assert cfg.slant_variation == 0.03
-        assert cfg.jitter_amplitude == 0.1
+        assert cfg.slant_variation == 0.04
+        assert cfg.jitter_amplitude == 0.08
         assert cfg.spacing_variation == 0.2
         assert cfg.enabled is True
 
@@ -128,3 +128,35 @@ class TestAugmentPage:
     def test_empty_strokes(self, augmenter: HandwritingAugmenter):
         result = augmenter.augment_page([])
         assert result == []
+
+
+class TestAugmentConfigLineDensity:
+    def test_augment_config_line_density_variation_default(self):
+        cfg = AugmentConfig()
+        assert cfg.line_density_variation == 0.1
+
+
+class TestLineDensityScale:
+    def test_get_line_density_scale_returns_float(self):
+        aug = HandwritingAugmenter(seed=42)
+        result = aug.get_line_density_scale()
+        assert isinstance(result, float)
+
+    def test_get_line_density_scale_varies(self):
+        aug = HandwritingAugmenter(seed=42)
+        values = [aug.get_line_density_scale() for _ in range(20)]
+        assert len(set(values)) >= 2, "Expected at least 2 distinct values in 20 calls"
+
+    def test_get_line_density_scale_range(self):
+        aug = HandwritingAugmenter(seed=42)
+        for _ in range(100):
+            scale = aug.get_line_density_scale()
+            assert 0.85 <= scale <= 1.15, (
+                f"Scale {scale} outside expected range [0.85, 1.15]"
+            )
+
+    def test_get_line_density_scale_disabled(self):
+        cfg = AugmentConfig(enabled=False)
+        aug = HandwritingAugmenter(config=cfg, seed=42)
+        result = aug.get_line_density_scale()
+        assert result == 1.0

@@ -287,3 +287,213 @@ class TestFallbackStrokes:
         """kanjivg_dir未設定時はNoneを返す。"""
         pipeline = PlotterPipeline()
         assert pipeline._load_reference_strokes("あ") is None
+
+    def test_style_sample_from_user_strokes(self, tmp_path):
+        """ユーザーストロークが存在する場合、実データからstyle_sampleを生成する。"""
+        import torch
+
+        user_dir = tmp_path / "user_strokes"
+        char_dir = user_dir / "あ"
+        char_dir.mkdir(parents=True)
+        stroke_data = {
+            "character": "あ",
+            "strokes": [
+                [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 0.5}],
+                [{"x": 3.0, "y": 3.0}, {"x": 4.0, "y": 4.0}],
+            ],
+            "metadata": {},
+        }
+        (char_dir / "あ_001.json").write_text(json.dumps(stroke_data), encoding="utf-8")
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+
+        assert isinstance(pipeline._style_sample, torch.Tensor)
+        assert pipeline._style_sample.dim() == 3  # (1, seq_len, 3)
+        assert pipeline._style_sample.shape[0] == 1
+        assert pipeline._style_sample.shape[2] == 3
+        assert pipeline._style_sample.shape[1] > 0
+        assert not torch.all(pipeline._style_sample == 0)
+
+    def test_style_sample_fallback_no_user_strokes(self):
+        """ユーザーストロークが存在しない場合、ゼロベクトルにフォールバック。"""
+        import torch
+
+        pipeline = PlotterPipeline()
+
+        assert isinstance(pipeline._style_sample, torch.Tensor)
+        assert torch.all(pipeline._style_sample == 0)
+
+    def test_style_sample_fallback_empty_dir(self, tmp_path):
+        """空のユーザーストロークディレクトリではゼロベクトルにフォールバック。"""
+        import torch
+
+        empty_dir = tmp_path / "empty_strokes"
+        empty_dir.mkdir()
+
+        pipeline = PlotterPipeline(user_strokes_dir=empty_dir)
+
+        assert isinstance(pipeline._style_sample, torch.Tensor)
+        assert torch.all(pipeline._style_sample == 0)
+
+    def test_style_sample_explicit_overrides_user_strokes(self, tmp_path):
+        """明示的にstyle_sampleが渡された場合はそれを使う。"""
+        import torch
+
+        user_dir = tmp_path / "user_strokes"
+        char_dir = user_dir / "い"
+        char_dir.mkdir(parents=True)
+        stroke_data = {
+            "character": "い",
+            "strokes": [[{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}]],
+            "metadata": {},
+        }
+        (char_dir / "い_001.json").write_text(json.dumps(stroke_data), encoding="utf-8")
+
+        explicit = torch.ones(1, 5, 3)
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir, style_sample=explicit)
+
+        assert torch.equal(pipeline._style_sample, explicit)
+
+    def test_style_sample_multiple_chars(self, tmp_path):
+        """複数文字のユーザーストロークがある場合もロードできる。"""
+        import torch
+
+        user_dir = tmp_path / "user_strokes"
+        for char in ["あ", "い"]:
+            char_dir = user_dir / char
+            char_dir.mkdir(parents=True)
+            stroke_data = {
+                "character": char,
+                "strokes": [[{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}]],
+                "metadata": {},
+            }
+            (char_dir / f"{char}_001.json").write_text(
+                json.dumps(stroke_data), encoding="utf-8"
+            )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+
+        assert isinstance(pipeline._style_sample, torch.Tensor)
+        assert pipeline._style_sample.dim() == 3
+        assert not torch.all(pipeline._style_sample == 0)
+
+
+class TestInterCharShift:
+    """文字間の微小水平シフトのテスト。"""
+
+    def _make_pipeline_with_two_chars(self, tmp_path):
+        """2文字分のKanjiVGデータとパイプラインを作成するヘルパー。"""
+        _create_kanjivg_json(tmp_path, "あ", num_strokes=2, num_points=5)
+        _create_kanjivg_json(tmp_path, "い", num_strokes=2, num_points=5)
+        pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
+        return pipeline
+
+    def _make_placements(self, chars, font_size=6.0, spacing=6.0):
+        """指定文字列のCharPlacementリストを作成。"""
+        return [
+            CharPlacement(char=c, x=10.0 + i * spacing, y=20.0, font_size=font_size)
+            for i, c in enumerate(chars)
+        ]
+
+    def test_consecutive_chars_shifted(self, tmp_path):
+        """連続文字でストロークが微量シフトされる。"""
+        pipeline = self._make_pipeline_with_two_chars(tmp_path)
+
+        single_placement = self._make_placements("い")
+        single_strokes = pipeline.placements_to_strokes(single_placement)
+        single_xs = np.concatenate(single_strokes, axis=0)[:, 0]
+
+        pair_placements = self._make_placements("あい")
+        pair_strokes = pipeline.placements_to_strokes(pair_placements)
+        # 2文字目のストロークだけ取得（1文字目は2ストローク）
+        second_char_strokes = pair_strokes[2:]
+        pair_xs = np.concatenate(second_char_strokes, axis=0)[:, 0]
+
+        # 2文字目の位置が異なるので直接比較ではなく、相対位置で比較
+        # single_placement の "い" は x=10.0、pair の "い" は x=16.0
+        single_relative = single_xs - 10.0
+        pair_relative = pair_xs - 16.0
+
+        # シフトが適用されていれば相対位置が異なる（前の文字方向に寄る）
+        shift = single_relative.mean() - pair_relative.mean()
+        assert shift != 0.0 or pair_relative.mean() < single_relative.mean()
+
+    def test_shift_amount_within_range(self, tmp_path):
+        """シフト量が0〜0.2mmの範囲内。"""
+        pipeline = self._make_pipeline_with_two_chars(tmp_path)
+
+        # シフトなし（単独文字）の基準位置を取得
+        baseline_placement = [
+            CharPlacement(char="い", x=16.0, y=20.0, font_size=6.0)
+        ]
+        baseline_strokes = pipeline.placements_to_strokes(baseline_placement)
+        baseline_min_x = np.concatenate(baseline_strokes, axis=0)[:, 0].min()
+
+        for seed in range(20):
+            np.random.seed(seed)
+            pair_placements = self._make_placements("あい")
+            pair_strokes = pipeline.placements_to_strokes(pair_placements)
+            second_char_strokes = pair_strokes[2:]
+            shifted_min_x = np.concatenate(second_char_strokes, axis=0)[:, 0].min()
+
+            shift = baseline_min_x - shifted_min_x
+            assert -0.01 <= shift <= 0.2 + 0.01, (
+                f"seed={seed}: shift={shift:.4f} is outside [0, 0.2] range"
+            )
+
+    def test_shift_varies_randomly(self, tmp_path):
+        """シフト量がランダムに変動する。"""
+        pipeline = self._make_pipeline_with_two_chars(tmp_path)
+
+        baseline_placement = [
+            CharPlacement(char="い", x=16.0, y=20.0, font_size=6.0)
+        ]
+        baseline_strokes = pipeline.placements_to_strokes(baseline_placement)
+        baseline_min_x = np.concatenate(baseline_strokes, axis=0)[:, 0].min()
+
+        shifts = []
+        for seed in range(30):
+            np.random.seed(seed)
+            pair_placements = self._make_placements("あい")
+            pair_strokes = pipeline.placements_to_strokes(pair_placements)
+            second_char_strokes = pair_strokes[2:]
+            shifted_min_x = np.concatenate(second_char_strokes, axis=0)[:, 0].min()
+            shifts.append(baseline_min_x - shifted_min_x)
+
+        unique_shifts = set(round(s, 6) for s in shifts)
+        assert len(unique_shifts) > 1, (
+            f"All shift amounts are identical: {shifts[:5]}"
+        )
+
+    def test_first_char_not_shifted(self, tmp_path):
+        """最初の文字はシフトされない。"""
+        pipeline = self._make_pipeline_with_two_chars(tmp_path)
+
+        single_placement = self._make_placements("あ")
+        single_strokes = pipeline.placements_to_strokes(single_placement)
+        single_xs = np.concatenate(single_strokes, axis=0)[:, 0]
+
+        pair_placements = self._make_placements("あい")
+        pair_strokes = pipeline.placements_to_strokes(pair_placements)
+        first_char_strokes = pair_strokes[:2]
+        pair_xs = np.concatenate(first_char_strokes, axis=0)[:, 0]
+
+        np.testing.assert_array_almost_equal(single_xs, pair_xs)
+
+    def test_shift_disabled_when_no_augmenter(self):
+        """augmenter無しの場合シフトなし。"""
+        pipeline1 = PlotterPipeline()
+        pipeline2 = PlotterPipeline()
+
+        placements = [
+            CharPlacement(char="あ", x=10.0, y=20.0, font_size=6.0),
+            CharPlacement(char="い", x=16.0, y=20.0, font_size=6.0),
+        ]
+
+        np.random.seed(42)
+        strokes1 = pipeline1.placements_to_strokes(placements)
+        np.random.seed(42)
+        strokes2 = pipeline2.placements_to_strokes(placements)
+
+        for s1, s2 in zip(strokes1, strokes2):
+            np.testing.assert_array_equal(s1, s2)

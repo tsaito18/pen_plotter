@@ -29,6 +29,27 @@ from src.model.pretrain import _detect_device
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
 
+OFFSET_CLAMP = 1.2
+SMOOTHING_KERNEL_SIZE = 11
+
+
+def smooth_offsets(offsets: torch.Tensor, kernel_size: int = SMOOTHING_KERNEL_SIZE) -> torch.Tensor:
+    """Apply 1D moving average to smooth per-point offsets.
+
+    Args:
+        offsets: (batch, N, 2)
+        kernel_size: smoothing window size (odd number)
+    """
+    if offsets.shape[1] <= kernel_size:
+        return offsets
+    B, N, _ = offsets.shape
+    x = offsets.permute(0, 2, 1).reshape(B * 2, 1, N)
+    pad = kernel_size // 2
+    x_padded = torch.nn.functional.pad(x, (pad, pad), mode="replicate")
+    kernel = torch.ones(1, 1, kernel_size, device=x.device) / kernel_size
+    smoothed = torch.nn.functional.conv1d(x_padded, kernel)
+    return smoothed.reshape(B, 2, N).permute(0, 2, 1)
+
 
 @dataclass
 class FinetuneConfig:
@@ -527,6 +548,8 @@ class DeformationFinetuner:
                     loss = affine_deformation_loss(transformed, target_points)
                 else:
                     predicted = self.deformer(ref_points, style, stroke_indices)
+                    predicted = smooth_offsets(predicted)
+                    predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
                     target_offsets = target_points - ref_points
                     loss = deformation_loss(predicted, target_offsets)
 
@@ -658,6 +681,8 @@ class UserDeformationTrainer:
 
                 style = self.style_encoder(style_strokes, lengths=style_lengths)
                 predicted = self.deformer(ref_points, style, stroke_indices)
+                predicted = smooth_offsets(predicted)
+                predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
 
                 loss = deformation_loss(predicted, target_offsets) + 0.1 * smoothness_loss(predicted)
 

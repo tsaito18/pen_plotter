@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from numpy.typing import NDArray
 
 from src.model.stroke_model import StrokeGenerator
@@ -50,7 +49,29 @@ class StrokeInference:
                     hidden_dim=hidden_dim,
                     dropout=dropout,
                 )
-            self.deformer.load_state_dict(checkpoint["deformer_state_dict"])
+            state = checkpoint["deformer_state_dict"]
+            try:
+                self.deformer.load_state_dict(state)
+            except RuntimeError:
+                # Dropout層なしで保存された旧チェックポイントとの互換
+                self.deformer.load_state_dict(state, strict=False)
+                model_keys = set(self.deformer.state_dict().keys())
+                saved_keys = set(state.keys())
+                missing = model_keys - saved_keys
+                if missing:
+                    # キーのリマップ: 旧 mlp.{0,2,4} → 新 mlp.{0,3,6} 等
+                    remap = {}
+                    saved_mlp = sorted(
+                        k for k in saved_keys if k.startswith("mlp.")
+                    )
+                    model_mlp = sorted(k for k in model_keys if k.startswith("mlp."))
+                    for sk, mk in zip(saved_mlp, model_mlp):
+                        remap[mk] = state[sk]
+                    new_state = {
+                        k: remap.get(k, state.get(k, v))
+                        for k, v in self.deformer.state_dict().items()
+                    }
+                    self.deformer.load_state_dict(new_state)
             self.deformer.eval()
 
             style_enc_kwargs = dict(style_encoder_kwargs or {})
@@ -245,6 +266,7 @@ class StrokeInference:
     ) -> list[np.ndarray]:
         """V3: Deform reference strokes using predicted offsets."""
         from src.model.data_utils import normalize_deltas, resample_stroke
+        from src.model.finetune import OFFSET_CLAMP, smooth_offsets
 
         if reference_strokes is None or len(reference_strokes) == 0:
             return [np.array([[0.0, 0.0], [1.0, 1.0]])]
@@ -269,8 +291,8 @@ class StrokeInference:
                 deformed = transformed.squeeze(0).detach().numpy()
             else:
                 offsets = self.deformer(ref_tensor, style, stroke_idx)
-                offsets = self._smooth_offsets(offsets, kernel_size=11)
-                offsets = offsets.clamp(-0.3, 0.3)
+                offsets = smooth_offsets(offsets)
+                offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
                 deformed = (ref_tensor + offsets).squeeze(0).detach().numpy()
 
             # Per-stroke geometric variation
@@ -293,19 +315,3 @@ class StrokeInference:
 
         return all_strokes
 
-    def _smooth_offsets(self, offsets: torch.Tensor, kernel_size: int = 5) -> torch.Tensor:
-        """Apply 1D moving average to smooth per-point offsets.
-
-        Args:
-            offsets: (batch, N, 2)
-            kernel_size: smoothing window size (odd number)
-        """
-        if offsets.shape[1] <= kernel_size:
-            return offsets
-        B, N, _ = offsets.shape
-        x = offsets.permute(0, 2, 1).reshape(B * 2, 1, N)  # (B*2, 1, N)
-        pad = kernel_size // 2
-        x_padded = F.pad(x, (pad, pad), mode="replicate")
-        kernel = torch.ones(1, 1, kernel_size, device=x.device) / kernel_size
-        smoothed = F.conv1d(x_padded, kernel)
-        return smoothed.reshape(B, 2, N).permute(0, 2, 1)  # back to (B, N, 2)

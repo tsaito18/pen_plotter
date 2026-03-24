@@ -412,8 +412,10 @@ class TestStrokeInferenceV3:
 
     def test_v3_smooth_offsets(self, v3_engine):
         """Smoothing should reduce variation between adjacent offset differences."""
+        from src.model.finetune import smooth_offsets
+
         offsets = torch.randn(1, 32, 2)
-        smoothed = v3_engine._smooth_offsets(offsets, kernel_size=5)
+        smoothed = smooth_offsets(offsets, kernel_size=5)
         assert smoothed.shape == offsets.shape
 
         raw_diff = (offsets[:, 1:] - offsets[:, :-1]).abs().mean().item()
@@ -422,6 +424,8 @@ class TestStrokeInferenceV3:
 
     def test_v3_smooth_offsets_short_sequence(self, v3_engine):
         """Sequences shorter than kernel_size are returned unchanged."""
+        from src.model.finetune import smooth_offsets
+
         offsets = torch.randn(1, 3, 2)
-        result = v3_engine._smooth_offsets(offsets, kernel_size=5)
+        result = smooth_offsets(offsets, kernel_size=5)
         assert torch.equal(result, offsets)

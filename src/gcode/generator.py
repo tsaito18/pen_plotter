@@ -41,7 +41,18 @@ class GCodeGenerator:
             "M2",
         ]
 
-    def _stroke_to_gcode(self, stroke: Stroke) -> list[str]:
+    def _compute_feed_rate(self, t: float) -> float:
+        """ストローク内位置 t (0→1) に応じたフィードレートを計算"""
+        base = self.config.draw_speed
+        if t < 0.15:
+            return base * 0.7
+        elif t > 0.85:
+            return base * 1.3
+        return base
+
+    def _stroke_to_gcode(
+        self, stroke: Stroke, vary_speed: bool = True
+    ) -> list[str]:
         """単一ストロークをG-codeに変換"""
         if len(stroke) < 2:
             return []
@@ -53,21 +64,30 @@ class GCodeGenerator:
         )
         lines.append(self.config.pen_down_command)
         lines.append(self.config.pen_delay_gcode())
-        for point in stroke[1:]:
+
+        n_draw_points = len(stroke) - 1
+        for i, point in enumerate(stroke[1:]):
             x, y = point
+            if vary_speed and n_draw_points > 1:
+                t = i / (n_draw_points - 1)
+                feed = self._compute_feed_rate(t)
+            else:
+                feed = self.config.draw_speed
             lines.append(
-                f"G1 X{self._format_coord(x)} Y{self._format_coord(y)} F{self.config.draw_speed:.0f}"
+                f"G1 X{self._format_coord(x)} Y{self._format_coord(y)} F{feed:.0f}"
             )
         lines.append(self.config.pen_up_command)
         lines.append(self.config.pen_delay_gcode())
 
         return lines
 
-    def generate(self, strokes: list[Stroke]) -> list[str]:
+    def generate(
+        self, strokes: list[Stroke], vary_speed: bool = True
+    ) -> list[str]:
         """ストローク列からG-code全体を生成"""
         lines = self._header()
         for stroke in strokes:
-            lines.extend(self._stroke_to_gcode(stroke))
+            lines.extend(self._stroke_to_gcode(stroke, vary_speed=vary_speed))
         lines.extend(self._footer())
         return lines
 

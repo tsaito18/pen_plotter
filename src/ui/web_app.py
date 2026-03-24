@@ -11,10 +11,11 @@ from src.collector.kanjivg_parser import KanjiVGParser
 from src.gcode.config import PlotterConfig
 from src.gcode.generator import GCodeGenerator
 from src.gcode.optimizer import optimize_stroke_order
-from src.gcode.preview import preview_strokes
+from src.gcode.preview import _draw_stroke_with_width, preview_strokes
 from src.layout.line_breaking import is_halfwidth
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement, Typesetter
+from src.model.augmentation import HandwritingAugmenter
 
 Stroke = npt.NDArray[np.float64]
 
@@ -30,6 +31,7 @@ class PlotterPipeline:
         kanjivg_dir: Path | str | None = None,
         style_sample: object | None = None,
         temperature: float = 1.0,
+        user_strokes_dir: Path | str | None = None,
     ) -> None:
         self._page_config = page_config or PageConfig(
             paper_size=(210.0, 297.0),
@@ -47,7 +49,9 @@ class PlotterPipeline:
             paper_width=self._page_config.paper_size[0],
             paper_height=self._page_config.paper_size[1],
         )
-        self._typesetter = Typesetter(self._page_config, font_size=5.0)
+        self._typesetter = Typesetter(
+            self._page_config, font_size=6.0, augmenter=HandwritingAugmenter()
+        )
         self._generator = GCodeGenerator(self._plotter_config)
         self._temperature = temperature
 
@@ -66,12 +70,7 @@ class PlotterPipeline:
         if style_sample is not None:
             self._style_sample = style_sample
         else:
-            try:
-                import torch
-
-                self._style_sample = torch.zeros(1, 10, 3)
-            except ImportError:
-                self._style_sample = None
+            self._style_sample = self._load_style_from_user_strokes(user_strokes_dir)
 
         self._kanjivg_parser: KanjiVGParser | None = None
         self._kanjivg_dir: Path | None = None
@@ -81,14 +80,70 @@ class PlotterPipeline:
                 self._kanjivg_parser = KanjiVGParser()
                 self._kanjivg_dir = d
 
+    @staticmethod
+    def _load_style_from_user_strokes(
+        user_strokes_dir: Path | str | None,
+    ) -> object:
+        """ユーザーストロークからstyle_sampleテンソルを生成。データなしはゼロベクトル。"""
+        try:
+            import torch
+        except ImportError:
+            return None
+
+        if user_strokes_dir is not None:
+            user_dir = Path(user_strokes_dir)
+            if user_dir.is_dir():
+                import json
+
+                from src.model.data_utils import strokes_to_deltas
+
+                json_files: list[Path] = []
+                for char_dir in sorted(user_dir.iterdir()):
+                    if char_dir.is_dir():
+                        json_files.extend(sorted(char_dir.glob("*.json")))
+
+                if json_files:
+                    all_strokes: list[list[dict[str, float]]] = []
+                    for jf in json_files:
+                        try:
+                            data = json.loads(jf.read_text(encoding="utf-8"))
+                            all_strokes.extend(data["strokes"])
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+
+                    if all_strokes:
+                        deltas = strokes_to_deltas(all_strokes)
+                        style_sample = deltas.unsqueeze(0)  # (1, N, 3)
+                        logger.info(
+                            "Loaded style sample from %d files (%d points)",
+                            len(json_files),
+                            deltas.shape[0],
+                        )
+                        return style_sample
+
+        return torch.zeros(1, 10, 3)
+
     def text_to_placements(self, text: str) -> list[list[CharPlacement]]:
         return self._typesetter.typeset(text)
 
     def placements_to_strokes(self, placements: list[CharPlacement]) -> list[Stroke]:
         """各文字のストロークを3段階フォールバックで生成。"""
         strokes: list[Stroke] = []
+        prev_end_x: float | None = None
+        augmenter = self._typesetter.augmenter
+        has_real_renderer = self._inference is not None or self._kanjivg_dir is not None
+
         for p in placements:
             char_strokes = self._generate_char_strokes(p)
+
+            if prev_end_x is not None and augmenter is not None and has_real_renderer and char_strokes:
+                shift = augmenter.random_uniform(0, 0.2)
+                char_strokes = [s - np.array([shift, 0.0]) for s in char_strokes]
+
+            if char_strokes:
+                last_stroke = char_strokes[-1]
+                prev_end_x = last_stroke[-1, 0]
+
             strokes.extend(char_strokes)
         return strokes
 
@@ -339,7 +394,7 @@ class PlotterPipeline:
 
         for stroke in strokes:
             if len(stroke) >= 2:
-                ax.plot(stroke[:, 0], stroke[:, 1], "b-", linewidth=0.5)
+                _draw_stroke_with_width(ax, stroke)
 
         ax.set_xlim(-2, cfg.paper_width + 2)
         ax.set_ylim(-2, cfg.paper_height + 2)
