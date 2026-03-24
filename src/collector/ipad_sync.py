@@ -202,19 +202,21 @@ _HTML_PAGE = """\
 <title>Stroke Collector</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100svh; overflow: hidden; }
   body {
     font-family: -apple-system, 'SF Pro Display', 'Hiragino Sans', sans-serif;
-    background: #f2f2f7; color: #1c1c1e; min-height: 100dvh;
-    display: flex; flex-direction: column; align-items: center; padding: 20px 16px;
+    background: #f2f2f7; color: #1c1c1e;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 12px 16px; gap: 8px;
   }
   .card {
-    background: #fff; border-radius: 16px; padding: 20px;
-    width: 100%; max-width: 560px; margin-bottom: 12px;
+    background: #fff; border-radius: 14px; padding: 12px 16px;
+    width: 100%; max-width: 560px; flex-shrink: 0;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
   }
   @media (min-width: 768px) { .card { max-width: 740px; } }
   #guidedChar {
-    font-size: 7rem; text-align: center; line-height: 1;
+    font-size: 5rem; text-align: center; line-height: 1;
     color: #1c1c1e; font-weight: 300; letter-spacing: -2px;
   }
   #tierBadge {
@@ -242,14 +244,15 @@ _HTML_PAGE = """\
     border-radius: 2px; transition: width 0.4s ease;
   }
   #canvas {
-    display: block; width: 100%; max-width: 560px; aspect-ratio: 1;
+    display: block; width: 100%; max-width: 560px;
+    flex: 1 1 0; min-height: 0; aspect-ratio: 1;
     background: #fff; border-radius: 12px; touch-action: none;
     border: 1px solid #d1d1d6;
     box-shadow: 0 1px 4px rgba(0,0,0,0.06);
   }
   @media (min-width: 768px) { #canvas { max-width: 740px; } }
   .controls {
-    display: flex; gap: 8px; width: 100%; max-width: 560px; margin-top: 12px;
+    display: flex; gap: 8px; width: 100%; max-width: 560px; flex-shrink: 0;
   }
   @media (min-width: 768px) { .controls { max-width: 740px; } }
   .controls button {
@@ -264,8 +267,8 @@ _HTML_PAGE = """\
   #undoBtn { background: #e5e5ea; color: #1c1c1e; }
   #skipBtn { background: #e5e5ea; color: #8e8e93; }
   #status {
-    margin-top: 10px; font-size: 0.85rem; color: #8e8e93;
-    text-align: center; min-height: 1.2em;
+    font-size: 0.85rem; color: #8e8e93;
+    text-align: center; min-height: 1.2em; flex-shrink: 0;
   }
   #status.success { color: #34c759; }
   #status.error { color: #ff3b30; }
