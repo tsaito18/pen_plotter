@@ -51,6 +51,8 @@ class StrokeCollectorApp:
         return self._recorder.list_characters()
 
     def get_progress(self) -> dict:
+        import random
+
         saved_chars: dict[str, int] = {}
         for char in GUIDED_CHARS:
             char_dir = self.output_dir / char
@@ -60,13 +62,10 @@ class StrokeCollectorApp:
                 saved_chars[char] = 0
 
         completed = [c for c in GUIDED_CHARS if saved_chars.get(c, 0) >= self.target_samples]
-        current_char = None
-        current_index = 0
-        for i, c in enumerate(GUIDED_CHARS):
-            if saved_chars.get(c, 0) < self.target_samples:
-                current_char = c
-                current_index = i
-                break
+        remaining = [c for c in GUIDED_CHARS if saved_chars.get(c, 0) < self.target_samples]
+
+        current_char = random.choice(remaining) if remaining else None
+        current_index = GUIDED_CHARS.index(current_char) if current_char else 0
 
         return {
             "total": len(GUIDED_CHARS),
