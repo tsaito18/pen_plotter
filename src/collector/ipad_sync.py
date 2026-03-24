@@ -219,8 +219,11 @@ _HTML_PAGE = """\
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Stroke Collector</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100svh; overflow: hidden; }
+  * {
+    margin: 0; padding: 0; box-sizing: border-box;
+    -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+  }
+  html, body { height: 100svh; overflow: hidden; touch-action: manipulation; }
   body {
     font-family: -apple-system, 'SF Pro Display', 'Hiragino Sans', sans-serif;
     background: #f2f2f7; color: #1c1c1e;
@@ -362,6 +365,9 @@ _HTML_PAGE = """\
 
 <script>
 (function() {
+  // ロングプレスによるコンテキストメニュー・テキスト選択を無効化
+  document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
   const status = document.getElementById('status');
