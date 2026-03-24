@@ -138,6 +138,10 @@ class PlotterPipeline:
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
 
+        punct_strokes = self._simple_punct_strokes(lookup_char)
+        if punct_strokes is not None:
+            return self._position_strokes(punct_strokes, placement)
+
         if self._kanjivg_dir is not None:
             char_strokes = self._load_kanjivg_json(placement)
             if char_strokes is not None:
@@ -148,6 +152,20 @@ class PlotterPipeline:
             return self._position_strokes(paren_strokes, placement)
 
         return self._rect_fallback(placement)
+
+    def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
+        """Generate normalized strokes for common punctuation (0-1 range)."""
+        if char in ('、', ','):
+            return [np.array([[0.6, 0.2], [0.3, 0.8]])]
+        elif char in ('。', '.'):
+            angles = np.linspace(0, 2 * np.pi, 16)
+            r = 0.3
+            return [np.stack([0.5 + r * np.cos(angles), 0.5 + r * np.sin(angles)], axis=1)]
+        elif char == '・':
+            angles = np.linspace(0, 2 * np.pi, 12)
+            r = 0.15
+            return [np.stack([0.5 + r * np.cos(angles), 0.5 + r * np.sin(angles)], axis=1)]
+        return None
 
     def _simple_paren_strokes(self, char: str, placement: CharPlacement) -> list[Stroke] | None:
         """Generate normalized arc strokes for parentheses (0-1 range)."""
@@ -212,10 +230,28 @@ class PlotterPipeline:
     _SMALL_KANA = set("ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ")
     _SMALL_PUNCT = set("。、.,")
 
+    def _char_scale_factor(self, char: str) -> float:
+        """文字種別に応じたスケール係数。
+
+        日本語組版では平仮名・片仮名は漢字よりやや小さく組む。
+        """
+        cp = ord(char)
+        if char in self._SMALL_KANA:
+            return 0.55
+        elif char in self._SMALL_PUNCT:
+            return 0.35
+        elif 0x3040 <= cp <= 0x309F:  # Hiragana
+            return 0.88
+        elif 0x30A0 <= cp <= 0x30FF:  # Katakana
+            return 0.85
+        else:
+            return 1.0
+
     def _position_strokes(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
         """正規化ストロークをCharPlacementの位置・サイズに合わせる。
 
         アスペクト比を保持し、セル内で中央配置する。
+        半角文字はセル幅に収まるよう制約する。
         """
         if not strokes:
             return []
@@ -224,27 +260,34 @@ class PlotterPipeline:
         mins = all_pts.min(axis=0)
         maxs = all_pts.max(axis=0)
         ranges = maxs - mins
-        current_size = ranges.max() if ranges.max() > 0 else 1.0
 
         fs = placement.font_size
+        char_scale = self._char_scale_factor(placement.char)
+        target_h = fs * char_scale
 
-        if placement.char in self._SMALL_PUNCT:
-            target_size = fs * 0.4
-        elif placement.char in self._SMALL_KANA:
-            target_size = fs * 0.6
+        if is_halfwidth(placement.char):
+            cell_width = fs * 0.6
         else:
-            target_size = fs
+            cell_width = fs * char_scale
 
-        scale = target_size / current_size
+        scale_w = cell_width / ranges[0] if ranges[0] > 1e-6 else float('inf')
+        scale_h = target_h / ranges[1] if ranges[1] > 1e-6 else float('inf')
+        scale = min(scale_w, scale_h)
+
         scaled = [(stroke - mins) * scale for stroke in strokes]
-
         rendered_w = ranges[0] * scale
         rendered_h = ranges[1] * scale
 
-        cell_width = fs * 0.6 if is_halfwidth(placement.char) else fs
-        x_offset = placement.x + (cell_width - rendered_w) / 2
+        if is_halfwidth(placement.char):
+            x_offset = placement.x + (fs * 0.6 - rendered_w) / 2
+        else:
+            x_offset = placement.x + (cell_width - rendered_w) / 2
+
         line_spacing = self._page_config.line_spacing
-        y_offset = placement.y + (line_spacing - rendered_h) / 2
+        if char_scale < 0.5:
+            y_offset = placement.y + 0.1 * line_spacing
+        else:
+            y_offset = placement.y + (line_spacing - rendered_h) / 2
 
         offset = np.array([x_offset, y_offset])
         return [stroke + offset for stroke in scaled]

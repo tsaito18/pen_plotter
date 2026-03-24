@@ -154,7 +154,8 @@ class TestFallbackStrokes:
         normalized = [
             np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]),
         ]
-        placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=6.0)
+        # 漢字(scale=1.0)でテスト
+        placement = CharPlacement(char="漢", x=10.0, y=20.0, font_size=6.0)
         result = pipeline._position_strokes(normalized, placement)
 
         assert len(result) == 1
@@ -166,10 +167,25 @@ class TestFallbackStrokes:
         center_x = (all_pts[:, 0].min() + all_pts[:, 0].max()) / 2
         center_y = (all_pts[:, 1].min() + all_pts[:, 1].max()) / 2
         assert np.isclose(center_x, 10.0 + 3.0, atol=0.01)
-        # y_offset = placement.y + (line_spacing - rendered_h) / 2
         line_spacing = pipeline._page_config.line_spacing
         expected_y = 20.0 + (line_spacing - 6.0) / 2 + 3.0
         assert np.isclose(center_y, expected_y, atol=0.01)
+
+    def test_position_strokes_hiragana_scaled(self):
+        """平仮名は漢字より小さくスケーリングされる。"""
+        pipeline = PlotterPipeline()
+        normalized = [
+            np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]),
+        ]
+        placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=6.0)
+        result = pipeline._position_strokes(normalized, placement)
+
+        all_pts = np.concatenate(result, axis=0)
+        rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
+        rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
+        expected_size = 6.0 * 0.88
+        assert np.isclose(rendered_w, expected_size, atol=0.01)
+        assert np.isclose(rendered_h, expected_size, atol=0.01)
 
     def test_position_strokes_halfwidth(self):
         """半角文字のアスペクト比が保持され、セル内で中央配置される。"""
@@ -186,6 +202,21 @@ class TestFallbackStrokes:
         rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
         assert rendered_h > rendered_w
         assert np.isclose(rendered_h, 6.0, atol=0.01)
+
+    def test_halfwidth_wide_char_constrained(self):
+        """幅広の半角文字がセル幅(0.6*fs)を超えないこと。"""
+        pipeline = PlotterPipeline()
+        # 正方形ストローク（幅=高さ）→ セル幅に制約される
+        normalized = [
+            np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
+        ]
+        placement = CharPlacement(char="W", x=10.0, y=20.0, font_size=6.0)
+        result = pipeline._position_strokes(normalized, placement)
+
+        all_pts = np.concatenate(result, axis=0)
+        rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
+        cell_width = 6.0 * 0.6
+        assert rendered_w <= cell_width + 0.01
 
     def test_inference_v2_with_reference(self, tmp_path):
         """V2推論時にreference_strokesがKanjiVGから渡される。"""
