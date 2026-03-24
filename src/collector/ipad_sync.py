@@ -223,6 +223,9 @@ _HTML_PAGE = """\
     aspect-ratio: 1; background: #fff; border: 2px solid #333;
     border-radius: 8px; touch-action: none;
   }
+  @media (min-width: 768px) {
+    #canvas { max-width: 700px; }
+  }
   #status { margin-top: 8px; font-size: 0.9rem; color: #666; }
   #charList { margin-top: 12px; font-size: 0.9rem; color: #333; }
   #categoryProgress { margin-top: 12px; font-size: 0.95rem; color: #444; }
@@ -232,6 +235,9 @@ _HTML_PAGE = """\
 <body>
 <div id="guidedChar"></div>
 <div id="progressInfo"></div>
+<div id="progressBar" style="width:100%;max-width:512px;height:8px;background:#e0e0e0;border-radius:4px;margin-bottom:12px;">
+  <div id="progressFill" style="height:100%;width:0%;background:#007aff;border-radius:4px;transition:width 0.3s;"></div>
+</div>
 <div class="controls">
   <input id="charInput" type="text" maxlength="1" placeholder="字">
   <button class="primary" id="sendBtn">送信</button>
@@ -349,11 +355,18 @@ _HTML_PAGE = """\
     }
   });
 
-  document.getElementById('sendBtn').addEventListener('click', function() {
+  const sendBtn = document.getElementById('sendBtn');
+  sendBtn.addEventListener('click', function() {
     const ch = document.getElementById('charInput').value.trim();
     if (!ch) { status.textContent = '文字を入力してください'; return; }
     if (strokes.length === 0) { status.textContent = 'ストロークを描いてください'; return; }
+    if (progressData && progressData.current_char && ch !== progressData.current_char) {
+      status.textContent = '⚠ 「' + progressData.current_char + '」を書いてください';
+      return;
+    }
 
+    sendBtn.disabled = true;
+    sendBtn.textContent = '送信中...';
     const payload = { character: ch, strokes: strokes };
     fetch('/api/stroke', {
       method: 'POST',
@@ -362,13 +375,18 @@ _HTML_PAGE = """\
     })
     .then(r => r.json())
     .then(d => {
-      status.textContent = '保存しました: ' + ch;
+      status.textContent = '✓ 保存: ' + ch;
       strokes = [];
       redraw();
-      loadCharacters();
-      loadProgress();
+      sendBtn.disabled = false;
+      sendBtn.textContent = '送信';
+      setTimeout(() => { loadProgress(); }, 500);
     })
-    .catch(err => { status.textContent = 'エラー: ' + err; });
+    .catch(err => {
+      status.textContent = 'エラー: ' + err;
+      sendBtn.disabled = false;
+      sendBtn.textContent = '送信';
+    });
   });
 
   function loadCharacters() {
@@ -380,6 +398,12 @@ _HTML_PAGE = """\
       });
   }
 
+  function tierDisplay(tier) {
+    if (tier === '★ 最優先') return '★ レポート頻出';
+    if (tier === '☆ 優先') return '☆ 基本文字';
+    return tier;
+  }
+
   function loadProgress() {
     fetch('/api/progress')
       .then(r => r.json())
@@ -388,12 +412,17 @@ _HTML_PAGE = """\
         const guidedEl = document.getElementById('guidedChar');
         const progressEl = document.getElementById('progressInfo');
         const charInput = document.getElementById('charInput');
+        const progressFill = document.getElementById('progressFill');
+
+        if (data.total > 0) {
+          progressFill.style.width = (data.completed / data.total * 100) + '%';
+        }
 
         if (data.current_char) {
           guidedEl.textContent = data.current_char;
           charInput.value = data.current_char;
           const sampleNum = data.samples_for_current + 1;
-          const tierText = data.tier ? ' [' + data.tier + ']' : '';
+          const tierText = data.tier ? ' [' + tierDisplay(data.tier) + ']' : '';
           progressEl.textContent = data.completed + ' / ' + data.total
             + ' 文字完了 (' + data.current_char + ': '
             + sampleNum + '/' + data.target_samples + '回目)'
@@ -405,7 +434,6 @@ _HTML_PAGE = """\
       });
   }
 
-  loadCharacters();
   loadProgress();
 })();
 </script>
