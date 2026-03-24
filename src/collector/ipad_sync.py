@@ -91,6 +91,7 @@ class StrokeCollectorApp:
         self.port = port
         self.target_samples = target_samples
         self._recorder = StrokeRecorder(output_dir=self.output_dir)
+        self._next_char_cache: str | None = None
 
     def build_html(self) -> str:
         return _HTML_PAGE
@@ -118,14 +119,24 @@ class StrokeCollectorApp:
 
         completed = [c for c in GUIDED_CHARS if saved_chars.get(c, 0) >= self.target_samples]
 
-        current_char = select_next_char(saved_chars, self.target_samples)
+        # キャッシュされた next_char があり、まだ未完了ならそれを使う
+        if (
+            self._next_char_cache is not None
+            and saved_chars.get(self._next_char_cache, 0) < self.target_samples
+        ):
+            current_char = self._next_char_cache
+            self._next_char_cache = None
+        else:
+            current_char = select_next_char(saved_chars, self.target_samples)
+            self._next_char_cache = None
         current_index = GUIDED_CHARS.index(current_char) if current_char else 0
 
-        # 次の文字を先読み（current_charを仮完了として計算）
+        # 次の文字を先読みしてキャッシュ
         next_counts = dict(saved_chars)
         if current_char:
             next_counts[current_char] = self.target_samples
         next_char = select_next_char(next_counts, self.target_samples)
+        self._next_char_cache = next_char
 
         # Tier情報を付与
         tier_label = ""
