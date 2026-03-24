@@ -254,8 +254,8 @@ class StrokeInference:
             stroke_idx = torch.tensor([i])
 
             offsets = self.deformer(ref_tensor, style, stroke_idx)
-            offsets = self._smooth_offsets(offsets, kernel_size=9)
-            offsets = offsets.clamp(-0.2, 0.2)
+            offsets = self._smooth_offsets(offsets, kernel_size=11)
+            offsets = offsets.clamp(-1.0, 1.0)
             deformed = (ref_tensor + offsets).squeeze(0).detach().numpy()
 
             # Per-stroke geometric variation (smooth, not per-point noise)
