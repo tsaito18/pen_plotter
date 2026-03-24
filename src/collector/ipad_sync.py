@@ -202,50 +202,93 @@ _HTML_PAGE = """\
 <title>Stroke Collector</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, sans-serif; background: #f5f5f5; padding: 16px; }
+  body {
+    font-family: -apple-system, 'SF Pro Display', 'Hiragino Sans', sans-serif;
+    background: #0a0a0a; color: #e5e5e5; min-height: 100dvh;
+    display: flex; flex-direction: column; align-items: center; padding: 20px 16px;
+  }
+  .card {
+    background: #1c1c1e; border-radius: 16px; padding: 20px;
+    width: 100%; max-width: 560px; margin-bottom: 12px;
+  }
+  @media (min-width: 768px) { .card { max-width: 740px; } }
   #guidedChar {
-    font-size: 8rem; text-align: center; line-height: 1.1;
-    margin-bottom: 8px; color: #222;
+    font-size: 7rem; text-align: center; line-height: 1;
+    color: #fff; font-weight: 300; letter-spacing: -2px;
   }
-  #progressInfo { text-align: center; font-size: 1.1rem; color: #555; margin-bottom: 12px; }
-  .controls { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
-  #charInput {
-    font-size: 2rem; width: 3em; text-align: center;
-    border: 2px solid #333; border-radius: 8px; padding: 4px;
+  #tierBadge {
+    display: inline-block; font-size: 0.75rem; font-weight: 600;
+    padding: 3px 10px; border-radius: 20px; margin-top: 8px;
   }
-  button {
-    font-size: 1rem; padding: 8px 16px; border-radius: 8px;
-    border: 1px solid #999; background: #fff; cursor: pointer;
+  .tier-high { background: #ff9f0a22; color: #ff9f0a; border: 1px solid #ff9f0a44; }
+  .tier-mid { background: #30d15822; color: #30d158; border: 1px solid #30d15844; }
+  .tier-low { background: #ffffff15; color: #98989d; border: 1px solid #ffffff20; }
+  #sampleDots { display: flex; gap: 6px; justify-content: center; margin-top: 10px; }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%; background: #333;
+    transition: background 0.3s;
   }
-  button.primary { background: #007aff; color: #fff; border: none; }
+  .dot.filled { background: #0a84ff; }
+  #progressInfo {
+    text-align: center; font-size: 0.85rem; color: #98989d; margin-top: 8px;
+  }
+  .progress-track {
+    width: 100%; height: 4px; background: #333; border-radius: 2px; margin-top: 12px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; background: linear-gradient(90deg, #0a84ff, #5e5ce6);
+    border-radius: 2px; transition: width 0.4s ease;
+  }
   #canvas {
-    display: block; width: 100%; max-width: 512px;
-    aspect-ratio: 1; background: #fff; border: 2px solid #333;
-    border-radius: 8px; touch-action: none;
+    display: block; width: 100%; max-width: 560px; aspect-ratio: 1;
+    background: #fff; border-radius: 12px; touch-action: none;
+    box-shadow: 0 2px 20px rgba(0,0,0,0.3);
   }
-  @media (min-width: 768px) {
-    #canvas { max-width: 700px; }
+  @media (min-width: 768px) { #canvas { max-width: 740px; } }
+  .controls {
+    display: flex; gap: 8px; width: 100%; max-width: 560px; margin-top: 12px;
   }
-  #status { margin-top: 8px; font-size: 0.9rem; color: #666; }
-  #charList { margin-top: 12px; font-size: 0.9rem; color: #333; }
-  #categoryProgress { margin-top: 12px; font-size: 0.95rem; color: #444; }
-  #categoryProgress div { margin: 2px 0; }
+  @media (min-width: 768px) { .controls { max-width: 740px; } }
+  .controls button {
+    flex: 1; font-size: 0.95rem; padding: 12px 0; border-radius: 10px;
+    border: none; cursor: pointer; font-weight: 500;
+    transition: opacity 0.15s, transform 0.1s;
+  }
+  .controls button:active { transform: scale(0.97); }
+  .controls button:disabled { opacity: 0.4; }
+  #sendBtn { background: #0a84ff; color: #fff; flex: 2; }
+  #clearBtn { background: #2c2c2e; color: #e5e5e5; }
+  #undoBtn { background: #2c2c2e; color: #e5e5e5; }
+  #skipBtn { background: #2c2c2e; color: #98989d; }
+  #status {
+    margin-top: 10px; font-size: 0.85rem; color: #98989d;
+    text-align: center; min-height: 1.2em;
+  }
+  #status.success { color: #30d158; }
+  #status.error { color: #ff453a; }
+  #status.warn { color: #ff9f0a; }
+  #charInput { display: none; }
+  #charList { display: none; }
+  #categoryProgress { display: none; }
 </style>
 </head>
 <body>
-<div id="guidedChar"></div>
-<div id="progressInfo"></div>
-<div id="progressBar" style="width:100%;max-width:512px;height:8px;background:#e0e0e0;border-radius:4px;margin-bottom:12px;">
-  <div id="progressFill" style="height:100%;width:0%;background:#007aff;border-radius:4px;transition:width 0.3s;"></div>
+<div class="card" style="text-align:center;">
+  <div id="guidedChar"></div>
+  <div id="tierBadge"></div>
+  <div id="sampleDots"></div>
+  <div id="progressInfo"></div>
+  <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
 </div>
-<div class="controls">
-  <input id="charInput" type="text" maxlength="1" placeholder="字">
-  <button class="primary" id="sendBtn">送信</button>
-  <button id="clearBtn">消去</button>
-  <button id="undoBtn">戻す</button>
-  <button id="skipBtn">スキップ</button>
-</div>
+<input id="charInput" type="text" maxlength="1">
 <canvas id="canvas" width="512" height="512"></canvas>
+<div class="controls">
+  <button id="undoBtn">戻す</button>
+  <button id="clearBtn">消去</button>
+  <button id="sendBtn">送信</button>
+  <button id="skipBtn">Skip</button>
+</div>
 <div id="status"></div>
 <div id="charList"></div>
 <div id="categoryProgress"></div>
@@ -358,15 +401,16 @@ _HTML_PAGE = """\
   const sendBtn = document.getElementById('sendBtn');
   sendBtn.addEventListener('click', function() {
     const ch = document.getElementById('charInput').value.trim();
-    if (!ch) { status.textContent = '文字を入力してください'; return; }
-    if (strokes.length === 0) { status.textContent = 'ストロークを描いてください'; return; }
+    if (!ch) { status.textContent = '文字を入力してください'; status.className = 'warn'; return; }
+    if (strokes.length === 0) { status.textContent = '文字を書いてください'; status.className = 'warn'; return; }
     if (progressData && progressData.current_char && ch !== progressData.current_char) {
-      status.textContent = '⚠ 「' + progressData.current_char + '」を書いてください';
+      status.textContent = '「' + progressData.current_char + '」を書いてください';
+      status.className = 'warn';
       return;
     }
 
     sendBtn.disabled = true;
-    sendBtn.textContent = '送信中...';
+    sendBtn.textContent = '...';
     const payload = { character: ch, strokes: strokes };
     fetch('/api/stroke', {
       method: 'POST',
@@ -375,15 +419,17 @@ _HTML_PAGE = """\
     })
     .then(r => r.json())
     .then(d => {
-      status.textContent = '✓ 保存: ' + ch;
+      status.textContent = '保存しました';
+      status.className = 'success';
       strokes = [];
       redraw();
       sendBtn.disabled = false;
       sendBtn.textContent = '送信';
-      setTimeout(() => { loadProgress(); }, 500);
+      setTimeout(() => { status.textContent = ''; status.className = ''; loadProgress(); }, 500);
     })
     .catch(err => {
       status.textContent = 'エラー: ' + err;
+      status.className = 'error';
       sendBtn.disabled = false;
       sendBtn.textContent = '送信';
     });
@@ -398,12 +444,6 @@ _HTML_PAGE = """\
       });
   }
 
-  function tierDisplay(tier) {
-    if (tier === '★ 最優先') return '★ レポート頻出';
-    if (tier === '☆ 優先') return '☆ 基本文字';
-    return tier;
-  }
-
   function loadProgress() {
     fetch('/api/progress')
       .then(r => r.json())
@@ -413,6 +453,8 @@ _HTML_PAGE = """\
         const progressEl = document.getElementById('progressInfo');
         const charInput = document.getElementById('charInput');
         const progressFill = document.getElementById('progressFill');
+        const tierBadge = document.getElementById('tierBadge');
+        const dotsEl = document.getElementById('sampleDots');
 
         if (data.total > 0) {
           progressFill.style.width = (data.completed / data.total * 100) + '%';
@@ -421,14 +463,32 @@ _HTML_PAGE = """\
         if (data.current_char) {
           guidedEl.textContent = data.current_char;
           charInput.value = data.current_char;
-          const sampleNum = data.samples_for_current + 1;
-          const tierText = data.tier ? ' [' + tierDisplay(data.tier) + ']' : '';
-          progressEl.textContent = data.completed + ' / ' + data.total
-            + ' 文字完了 (' + data.current_char + ': '
-            + sampleNum + '/' + data.target_samples + '回目)'
-            + tierText;
+
+          // Tier badge
+          if (data.tier === '★ 最優先') {
+            tierBadge.textContent = 'レポート頻出';
+            tierBadge.className = 'tier-high';
+          } else if (data.tier === '☆ 優先') {
+            tierBadge.textContent = '基本文字';
+            tierBadge.className = 'tier-mid';
+          } else {
+            tierBadge.textContent = '標準';
+            tierBadge.className = 'tier-low';
+          }
+
+          // Sample dots (e.g. ● ● ○ for 2/3)
+          let dots = '';
+          for (let i = 0; i < data.target_samples; i++) {
+            dots += '<span class="dot' + (i < data.samples_for_current ? ' filled' : '') + '"></span>';
+          }
+          dotsEl.innerHTML = dots;
+
+          const pct = Math.round(data.completed / data.total * 100);
+          progressEl.textContent = data.completed + ' / ' + data.total + ' 文字完了 (' + pct + '%)';
         } else {
           guidedEl.textContent = '✓';
+          tierBadge.textContent = '';
+          dotsEl.innerHTML = '';
           progressEl.textContent = '全文字の収集が完了しました！';
         }
       });
