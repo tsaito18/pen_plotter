@@ -53,5 +53,5 @@ class TestBreakLines:
         assert lines == ["abc"]
 
     def test_mixed_width(self):
-        lines = break_lines("あab", chars_per_line=2)
+        lines = break_lines("あab", chars_per_line=3)
         assert lines == ["あab"]

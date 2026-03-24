@@ -55,8 +55,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/tmp/preview_batch.png"),
-        help="Output PNG file path",
+        default=None,
+        help="Output PNG file path (default: auto-numbered in /tmp/preview_NNN.png)",
     )
     parser.add_argument(
         "--samples-per-char",
@@ -113,8 +113,19 @@ def plot_strokes(ax: plt.Axes, strokes: list[np.ndarray], title: str) -> None:
     ax.grid(True, alpha=0.2)
 
 
+def _auto_output_path() -> Path:
+    """Generate auto-numbered output path: /tmp/preview_001.png, 002, ..."""
+    for i in range(1, 1000):
+        p = Path(f"/tmp/preview_{i:03d}.png")
+        if not p.exists():
+            return p
+    return Path("/tmp/preview_latest.png")
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.output is None:
+        args.output = _auto_output_path()
     _configure_cjk_font()
 
     if not args.checkpoint.exists():

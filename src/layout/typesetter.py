@@ -48,7 +48,7 @@ class Typesetter:
             for ch in line_text:
                 if ch == "\n":
                     continue
-                char_width = self.font_size * 0.5 if is_halfwidth(ch) else self.font_size
+                char_width = self.font_size * 0.6 if is_halfwidth(ch) else self.font_size
                 current_page.append(CharPlacement(
                     char=ch, x=x, y=y, font_size=self.font_size, page=page_idx,
                 ))

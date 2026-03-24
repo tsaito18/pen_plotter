@@ -12,6 +12,7 @@ from src.gcode.config import PlotterConfig
 from src.gcode.generator import GCodeGenerator
 from src.gcode.optimizer import optimize_stroke_order
 from src.gcode.preview import preview_strokes
+from src.layout.line_breaking import is_halfwidth
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement, Typesetter
 
@@ -32,9 +33,10 @@ class PlotterPipeline:
     ) -> None:
         self._page_config = page_config or PageConfig(
             paper_size=(297.0, 210.0),
+            line_spacing=10.0,
         )
         self._plotter_config = plotter_config or PlotterConfig()
-        self._typesetter = Typesetter(self._page_config)
+        self._typesetter = Typesetter(self._page_config, font_size=5.5)
         self._generator = GCodeGenerator(self._plotter_config)
         self._temperature = temperature
 
@@ -81,10 +83,35 @@ class PlotterPipeline:
 
     _SKIP_RENDER = set(" \t　")
 
+    _CHAR_SUBSTITUTIONS: dict[str, str] = {
+        '（': '(',
+        '）': ')',
+        '｛': '{',
+        '｝': '}',
+        '［': '[',
+        '］': ']',
+        '！': '!',
+        '？': '?',
+        '：': ':',
+        '；': ';',
+        '＝': '=',
+        '＋': '+',
+        '－': '-',
+        '／': '/',
+    }
+
     def _generate_char_strokes(self, placement: CharPlacement) -> list[Stroke]:
-        """Tier 1: ML推論 → Tier 2: KanjiVG → Tier 3: 矩形。"""
+        """Tier 1: ML推論 → Tier 2: KanjiVG → Tier 3: 括弧等の幾何生成 → Tier 4: 矩形。"""
         if placement.char in self._SKIP_RENDER:
             return []
+
+        original_char = placement.char
+        lookup_char = self._CHAR_SUBSTITUTIONS.get(original_char, original_char)
+        if lookup_char != original_char:
+            placement = CharPlacement(
+                char=lookup_char, x=placement.x, y=placement.y,
+                font_size=placement.font_size, page=placement.page,
+            )
 
         reference = self._load_reference_strokes(placement.char)
 
@@ -105,7 +132,31 @@ class PlotterPipeline:
             if char_strokes is not None:
                 return self._position_strokes(char_strokes, placement)
 
+        paren_strokes = self._simple_paren_strokes(original_char, placement)
+        if paren_strokes is not None:
+            return self._position_strokes(paren_strokes, placement)
+
         return self._rect_fallback(placement)
+
+    def _simple_paren_strokes(self, char: str, placement: CharPlacement) -> list[Stroke] | None:
+        """Generate normalized arc strokes for parentheses (0-1 range)."""
+        if char in ('(', '（'):
+            points = []
+            for i in range(20):
+                t = i / 19
+                x = 0.3 * np.cos(np.pi * 0.6 * (t - 0.5))
+                y = t
+                points.append([x, y])
+            return [np.array(points)]
+        elif char in (')', '）'):
+            points = []
+            for i in range(20):
+                t = i / 19
+                x = 1.0 - 0.3 * np.cos(np.pi * 0.6 * (t - 0.5))
+                y = t
+                points.append([x, y])
+            return [np.array(points)]
+        return None
 
     def _load_reference_strokes(self, char: str) -> list[Stroke] | None:
         """KanjiVG参照ストロークをNDArrayリストとして読み込む（CharEncoder入力用）。"""
@@ -147,10 +198,14 @@ class PlotterPipeline:
             logger.warning("KanjiVG JSON load failed for '%s'", placement.char, exc_info=True)
             return None
 
+    _SMALL_KANA = set("ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ")
     _SMALL_PUNCT = set("。、.,")
 
     def _position_strokes(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
-        """正規化ストロークをCharPlacementの位置・サイズに合わせる。"""
+        """正規化ストロークをCharPlacementの位置・サイズに合わせる。
+
+        アスペクト比を保持し、セル内で中央配置する。
+        """
         if not strokes:
             return []
 
@@ -161,16 +216,26 @@ class PlotterPipeline:
         current_size = ranges.max() if ranges.max() > 0 else 1.0
 
         fs = placement.font_size
-        if placement.char in self._SMALL_PUNCT:
-            char_size = fs * 0.4
-            scale = char_size / current_size
-            offset = np.array([placement.x, placement.y - fs / 2.0])
-        else:
-            scale = fs / current_size
-            half = fs / 2.0
-            offset = np.array([placement.x, placement.y - half])
 
-        return [(stroke - mins) * scale + offset for stroke in strokes]
+        if placement.char in self._SMALL_PUNCT:
+            target_size = fs * 0.4
+        elif placement.char in self._SMALL_KANA:
+            target_size = fs * 0.6
+        else:
+            target_size = fs
+
+        scale = target_size / current_size
+        scaled = [(stroke - mins) * scale for stroke in strokes]
+
+        rendered_w = ranges[0] * scale
+        rendered_h = ranges[1] * scale
+
+        cell_width = fs * 0.6 if is_halfwidth(placement.char) else fs
+        x_offset = placement.x + (cell_width - rendered_w) / 2
+        y_offset = placement.y - rendered_h / 2
+
+        offset = np.array([x_offset, y_offset])
+        return [stroke + offset for stroke in scaled]
 
     @staticmethod
     def _rect_fallback(p: CharPlacement) -> list[Stroke]:

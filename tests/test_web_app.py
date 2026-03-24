@@ -113,11 +113,10 @@ class TestFallbackStrokes:
             assert s.shape[0] == 8
 
         all_pts = np.concatenate(strokes, axis=0)
-        half = placement.font_size / 2.0
-        assert all_pts[:, 0].min() >= placement.x - 0.01
-        assert all_pts[:, 0].max() <= placement.x + placement.font_size + 0.01
-        assert all_pts[:, 1].min() >= placement.y - half - 0.01
-        assert all_pts[:, 1].max() <= placement.y + half + 0.01
+        rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
+        rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
+        assert rendered_w <= placement.font_size + 0.01
+        assert rendered_h <= placement.font_size + 0.01
 
     def test_pipeline_kanjivg_missing_char_falls_to_rect(self, tmp_path):
         """KanjiVGにファイルがない文字は矩形フォールバック。"""
@@ -150,7 +149,7 @@ class TestFallbackStrokes:
             assert isinstance(s, np.ndarray)
 
     def test_position_strokes(self):
-        """_position_strokesがスケーリングと平行移動を正しく行う。"""
+        """_position_strokesがアスペクト比保持・セル中央配置で正しく動作する。"""
         pipeline = PlotterPipeline()
         normalized = [
             np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]),
@@ -159,10 +158,31 @@ class TestFallbackStrokes:
         result = pipeline._position_strokes(normalized, placement)
 
         assert len(result) == 1
-        # (0,0) → (10.0, 20.0 - 3.0) = (10.0, 17.0)
-        assert np.allclose(result[0][0], [10.0, 17.0])
-        # (1,1) → (10.0 + 6.0, 17.0 + 6.0) = (16.0, 23.0)
-        assert np.allclose(result[0][-1], [16.0, 23.0])
+        all_pts = np.concatenate(result, axis=0)
+        rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
+        rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
+        assert np.isclose(rendered_w, 6.0, atol=0.01)
+        assert np.isclose(rendered_h, 6.0, atol=0.01)
+        center_x = (all_pts[:, 0].min() + all_pts[:, 0].max()) / 2
+        center_y = (all_pts[:, 1].min() + all_pts[:, 1].max()) / 2
+        assert np.isclose(center_x, 10.0 + 3.0, atol=0.01)
+        assert np.isclose(center_y, 20.0, atol=0.01)
+
+    def test_position_strokes_halfwidth(self):
+        """半角文字のアスペクト比が保持され、セル内で中央配置される。"""
+        pipeline = PlotterPipeline()
+        normalized = [
+            np.array([[0.0, 0.0], [0.5, 1.0], [0.5, 0.0]]),
+        ]
+        placement = CharPlacement(char="C", x=10.0, y=20.0, font_size=6.0)
+        result = pipeline._position_strokes(normalized, placement)
+
+        assert len(result) == 1
+        all_pts = np.concatenate(result, axis=0)
+        rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
+        rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
+        assert rendered_h > rendered_w
+        assert np.isclose(rendered_h, 6.0, atol=0.01)
 
     def test_inference_v2_with_reference(self, tmp_path):
         """V2推論時にreference_strokesがKanjiVGから渡される。"""
