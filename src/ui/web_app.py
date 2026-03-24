@@ -32,11 +32,22 @@ class PlotterPipeline:
         temperature: float = 1.0,
     ) -> None:
         self._page_config = page_config or PageConfig(
-            paper_size=(297.0, 210.0),
-            line_spacing=10.0,
+            paper_size=(210.0, 297.0),
+            margin_top=30.0,
+            margin_bottom=15.0,
+            margin_left=25.0,
+            margin_right=15.0,
+            line_spacing=8.0,
         )
-        self._plotter_config = plotter_config or PlotterConfig()
-        self._typesetter = Typesetter(self._page_config, font_size=5.5)
+        self._plotter_config = plotter_config or PlotterConfig(
+            work_area_width=220.0,
+            work_area_height=310.0,
+            paper_origin_x=0.0,
+            paper_origin_y=0.0,
+            paper_width=self._page_config.paper_size[0],
+            paper_height=self._page_config.paper_size[1],
+        )
+        self._typesetter = Typesetter(self._page_config, font_size=5.0)
         self._generator = GCodeGenerator(self._plotter_config)
         self._temperature = temperature
 
@@ -261,12 +272,14 @@ class PlotterPipeline:
     def generate_preview(self, text: str, save_path: str | Path) -> None:
         save_path = Path(save_path)
         pages = self.text_to_placements(text)
+        ruled_lines = self._typesetter._layout.ruled_line_strokes()
         if not pages or not pages[0]:
-            preview_strokes([], config=self._plotter_config, save_path=save_path)
+            preview_strokes(ruled_lines, config=self._plotter_config, save_path=save_path)
             return
         strokes = self.placements_to_strokes(pages[0])
         optimized = optimize_stroke_order(strokes)
-        preview_strokes(optimized, config=self._plotter_config, save_path=save_path)
+        all_strokes = ruled_lines + optimized
+        preview_strokes(all_strokes, config=self._plotter_config, save_path=save_path)
 
     def generate_gcode_file(self, text: str, save_path: str | Path) -> None:
         save_path = Path(save_path)

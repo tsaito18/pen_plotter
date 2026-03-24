@@ -11,6 +11,7 @@ build/
 data/strokes/
 data/user_strokes/
 data/models/
+data/report_examples/
 
 # G-code
 *.gcode
