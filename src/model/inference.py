@@ -298,14 +298,14 @@ class StrokeInference:
             # Per-stroke geometric variation
             center = deformed.mean(axis=0)
             centered = deformed - center
-            angle = np.random.normal(0, noise_scale * 0.05)
+            angle = np.random.normal(0, noise_scale * 0.15)
             cos_a, sin_a = np.cos(angle), np.sin(angle)
             rotated = centered @ np.array([[cos_a, -sin_a], [sin_a, cos_a]])
-            sx = 1.0 + np.random.normal(0, noise_scale * 0.1)
-            sy = 1.0 + np.random.normal(0, noise_scale * 0.1)
+            sx = 1.0 + np.random.normal(0, noise_scale * 0.08)
+            sy = 1.0 + np.random.normal(0, noise_scale * 0.08)
             scaled = rotated * np.array([sx, sy])
-            dx = np.random.normal(0, noise_scale * 0.15)
-            dy = np.random.normal(0, noise_scale * 0.15)
+            dx = np.random.normal(0, noise_scale * 0.3)
+            dy = np.random.normal(0, noise_scale * 0.3)
             result = scaled + center + np.array([dx, dy])
 
             all_strokes.append(result.astype(np.float32))
