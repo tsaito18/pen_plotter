@@ -31,17 +31,25 @@ class StrokeInference:
         self.norm_stats = checkpoint.get("norm_stats", None)
 
         if is_v3:
-            from src.model.stroke_deformer import StrokeDeformer
+            from src.model.stroke_deformer import AffineStrokeDeformer, StrokeDeformer
 
             style_dim = config.get("style_dim", 128)
             hidden_dim = config.get("hidden_dim", 256)
-
             dropout = config.get("dropout", 0.0)
-            self.deformer = StrokeDeformer(
-                style_dim=style_dim,
-                hidden_dim=hidden_dim,
-                dropout=dropout,
-            )
+
+            self.deformer_type = config.get("deformer_type", "offset")
+            if self.deformer_type == "affine":
+                self.deformer = AffineStrokeDeformer(
+                    style_dim=style_dim,
+                    hidden_dim=hidden_dim,
+                    dropout=dropout,
+                )
+            else:
+                self.deformer = StrokeDeformer(
+                    style_dim=style_dim,
+                    hidden_dim=hidden_dim,
+                    dropout=dropout,
+                )
             self.deformer.load_state_dict(checkpoint["deformer_state_dict"])
             self.deformer.eval()
 
@@ -165,7 +173,8 @@ class StrokeInference:
 
             for _ in range(max_stroke_steps):
                 output = self.generator(
-                    current, style,
+                    current,
+                    style,
                     char_embedding=char_embedding,
                     stroke_index=stroke_index_tensor,
                 )
@@ -177,8 +186,12 @@ class StrokeInference:
 
                 mu_x = output["mu_x"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
                 mu_y = output["mu_y"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
-                sigma_x = output["sigma_x"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
-                sigma_y = output["sigma_y"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
+                sigma_x = (
+                    output["sigma_x"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
+                )
+                sigma_y = (
+                    output["sigma_y"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
+                )
                 rho = output["rho"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
 
                 z1 = torch.randn_like(mu_x)
@@ -191,9 +204,7 @@ class StrokeInference:
                 if self.norm_stats is not None:
                     from src.model.data_utils import denormalize_point
 
-                    dx_raw, dy_raw = denormalize_point(
-                        dx.item(), dy.item(), self.norm_stats
-                    )
+                    dx_raw, dy_raw = denormalize_point(dx.item(), dy.item(), self.norm_stats)
                 else:
                     dx_raw, dy_raw = dx.item(), dy.item()
 
@@ -250,15 +261,17 @@ class StrokeInference:
             ref_resampled = resample_stroke(
                 np.asarray(ref_stroke, dtype=np.float32), self.num_points
             )
-            ref_tensor = torch.tensor(
-                ref_resampled, dtype=torch.float32
-            ).unsqueeze(0)
+            ref_tensor = torch.tensor(ref_resampled, dtype=torch.float32).unsqueeze(0)
             stroke_idx = torch.tensor([i])
 
-            offsets = self.deformer(ref_tensor, style, stroke_idx)
-            offsets = self._smooth_offsets(offsets, kernel_size=11)
-            offsets = offsets.clamp(-0.3, 0.3)
-            deformed = (ref_tensor + offsets).squeeze(0).detach().numpy()
+            if self.deformer_type == "affine":
+                transformed, _params = self.deformer(ref_tensor, style, stroke_idx)
+                deformed = transformed.squeeze(0).detach().numpy()
+            else:
+                offsets = self.deformer(ref_tensor, style, stroke_idx)
+                offsets = self._smooth_offsets(offsets, kernel_size=11)
+                offsets = offsets.clamp(-0.3, 0.3)
+                deformed = (ref_tensor + offsets).squeeze(0).detach().numpy()
 
             # Per-stroke geometric variation (smooth, not per-point noise)
             center = deformed.mean(axis=0)
@@ -295,7 +308,7 @@ class StrokeInference:
         B, N, _ = offsets.shape
         x = offsets.permute(0, 2, 1).reshape(B * 2, 1, N)  # (B*2, 1, N)
         pad = kernel_size // 2
-        x_padded = F.pad(x, (pad, pad), mode='replicate')
+        x_padded = F.pad(x, (pad, pad), mode="replicate")
         kernel = torch.ones(1, 1, kernel_size, device=x.device) / kernel_size
         smoothed = F.conv1d(x_padded, kernel)
         return smoothed.reshape(B, 2, N).permute(0, 2, 1)  # back to (B, N, 2)

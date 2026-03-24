@@ -335,11 +335,13 @@ class Pretrainer:
             num_mixtures=config.num_mixtures,
         ).to(self.device)
 
-        self.optimizer = torch.optim.Adam([
-            {"params": self.generator.parameters(), "lr": config.learning_rate},
-            {"params": self.char_encoder.parameters(), "lr": config.learning_rate * 3},
-            {"params": self.style_encoder.parameters(), "lr": config.learning_rate * 3},
-        ])
+        self.optimizer = torch.optim.Adam(
+            [
+                {"params": self.generator.parameters(), "lr": config.learning_rate},
+                {"params": self.char_encoder.parameters(), "lr": config.learning_rate * 3},
+                {"params": self.style_encoder.parameters(), "lr": config.learning_rate * 3},
+            ]
+        )
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
 
         self.amp = amp
@@ -382,7 +384,8 @@ class Pretrainer:
                     target_eos = eos[:, 1:]
 
                     output = self.generator(
-                        x, style_vector,
+                        x,
+                        style_vector,
                         char_embedding=char_embedding,
                         stroke_index=stroke_indices,
                     )
@@ -398,9 +401,7 @@ class Pretrainer:
                     loss = stroke_loss + 1.0 * eos_loss + 1.0 * (loss_char_var + loss_style_var)
 
                 self.optimizer.zero_grad()
-                all_params = [
-                    p for group in self.optimizer.param_groups for p in group["params"]
-                ]
+                all_params = [p for group in self.optimizer.param_groups for p in group["params"]]
                 if self.scaler is not None:
                     self.scaler.scale(loss).backward()
                     self.scaler.unscale_(self.optimizer)
@@ -420,7 +421,8 @@ class Pretrainer:
                         f"\r  Epoch {epoch + 1}/{self.config.epochs} "
                         f"[{batch_idx + 1}/{total_batches}] "
                         f"loss: {loss.item():.4f}",
-                        end="", flush=True,
+                        end="",
+                        flush=True,
                     )
 
             avg_loss = epoch_loss / max(n_batches, 1)
@@ -490,9 +492,7 @@ class CASIADeformationDataset(Dataset):
         n_files = len(pot_files)
         print(f"[V3] Loading .pot files from {pot_dir}...")
 
-        self.char_samples: list[
-            tuple[str, list[np.ndarray], list[np.ndarray], Path]
-        ] = []
+        self.char_samples: list[tuple[str, list[np.ndarray], list[np.ndarray], Path]] = []
         char_set: set[str] = set()
         total_stroke_samples = 0
 
@@ -509,9 +509,7 @@ class CASIADeformationDataset(Dataset):
                 ref_path = ref_files[ch]
                 ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
                 kanjivg_strokes_np = [
-                    np.array(
-                        [[pt["x"], pt["y"]] for pt in stroke], dtype=np.float32
-                    )
+                    np.array([[pt["x"], pt["y"]] for pt in stroke], dtype=np.float32)
                     for stroke in ref_data["strokes"]
                 ]
 
@@ -523,9 +521,7 @@ class CASIADeformationDataset(Dataset):
                 if valid_count == 0:
                     continue
 
-                self.char_samples.append(
-                    (ch, normalized, kanjivg_strokes_np, ref_path)
-                )
+                self.char_samples.append((ch, normalized, kanjivg_strokes_np, ref_path))
                 char_set.add(ch)
                 total_stroke_samples += valid_count
 
@@ -539,18 +535,11 @@ class CASIADeformationDataset(Dataset):
             self.char_to_indices.setdefault(ch, []).append(i)
 
         self.samples: list[tuple[int, int, int]] = []
-        for char_idx, (ch, casia_strokes, kvg_strokes, _) in enumerate(
-            self.char_samples
-        ):
+        for char_idx, (ch, casia_strokes, kvg_strokes, _) in enumerate(self.char_samples):
             n_common = min(len(casia_strokes), len(kvg_strokes))
             for stroke_idx in range(n_common):
-                if (
-                    len(casia_strokes[stroke_idx]) >= 2
-                    and len(kvg_strokes[stroke_idx]) >= 2
-                ):
-                    self.samples.append(
-                        (char_idx, stroke_idx, len(casia_strokes))
-                    )
+                if len(casia_strokes[stroke_idx]) >= 2 and len(kvg_strokes[stroke_idx]) >= 2:
+                    self.samples.append((char_idx, stroke_idx, len(casia_strokes)))
 
         print(
             f"[V3] Loaded {len(self.samples)} stroke samples "
@@ -565,13 +554,8 @@ class CASIADeformationDataset(Dataset):
         char_idx, stroke_idx, num_strokes = self.samples[idx]
         character, casia_strokes, kvg_strokes, _ = self.char_samples[char_idx]
 
-        ref_resampled = resample_stroke(
-            kvg_strokes[stroke_idx], self.num_points
-        )
-        hand_resampled = resample_stroke(
-            casia_strokes[stroke_idx], self.num_points
-        )
-        offset = hand_resampled - ref_resampled
+        ref_resampled = resample_stroke(kvg_strokes[stroke_idx], self.num_points)
+        hand_resampled = resample_stroke(casia_strokes[stroke_idx], self.num_points)
 
         # Style: use a different writer's sample of same character if available
         style_tensor = strokes_to_deltas_from_arrays(casia_strokes)
@@ -584,7 +568,7 @@ class CASIADeformationDataset(Dataset):
 
         return {
             "reference_points": torch.tensor(ref_resampled, dtype=torch.float32),
-            "target_offsets": torch.tensor(offset, dtype=torch.float32),
+            "target_points": torch.tensor(hand_resampled, dtype=torch.float32),
             "stroke_index": stroke_idx,
             "style_strokes": style_tensor,
             "character": character,
@@ -594,14 +578,14 @@ class CASIADeformationDataset(Dataset):
 def collate_deformation(batch: list[dict]) -> dict:
     """Collate function for CASIADeformationDataset."""
     reference_points = torch.stack([item["reference_points"] for item in batch])
-    target_offsets = torch.stack([item["target_offsets"] for item in batch])
+    target_points = torch.stack([item["target_points"] for item in batch])
     stroke_indices = torch.tensor([item["stroke_index"] for item in batch])
     style_strokes = [item["style_strokes"] for item in batch]
     style_lengths = torch.tensor([s.shape[0] for s in style_strokes])
     padded_style = pad_sequence(style_strokes, batch_first=True, padding_value=0.0)
     return {
         "reference_points": reference_points,
-        "target_offsets": target_offsets,
+        "target_points": target_points,
         "stroke_indices": stroke_indices,
         "style_strokes": padded_style,
         "style_lengths": style_lengths,
@@ -610,7 +594,7 @@ def collate_deformation(batch: list[dict]) -> dict:
 
 
 class DeformationPretrainer:
-    """StrokeDeformer + StyleEncoder の事前学習。"""
+    """AffineStrokeDeformer + StyleEncoder の事前学習。"""
 
     def __init__(
         self,
@@ -624,7 +608,7 @@ class DeformationPretrainer:
         amp: bool = False,
         norm_sample_size: int = 5000,
     ) -> None:
-        from src.model.stroke_deformer import StrokeDeformer
+        from src.model.stroke_deformer import AffineStrokeDeformer
 
         self.config = config
         self.output_dir = Path(output_dir)
@@ -635,7 +619,10 @@ class DeformationPretrainer:
             raise ValueError("pot_dir is required for DeformationPretrainer")
 
         self.dataset = CASIADeformationDataset(
-            pot_dir, ref_dir, max_samples=max_samples, num_points=config.num_points,
+            pot_dir,
+            ref_dir,
+            max_samples=max_samples,
+            num_points=config.num_points,
         )
         self.dataloader = DataLoader(
             self.dataset,
@@ -653,16 +640,21 @@ class DeformationPretrainer:
         self.norm_stats = compute_normalization_stats(style_tensors)
 
         self.style_encoder = StyleEncoder(style_dim=config.style_dim).to(self.device)
-        self.deformer = StrokeDeformer(
-            style_dim=config.style_dim, hidden_dim=config.hidden_dim,
+        self.deformer = AffineStrokeDeformer(
+            style_dim=config.style_dim,
+            hidden_dim=config.hidden_dim,
         ).to(self.device)
 
-        self.optimizer = torch.optim.Adam([
-            {"params": self.deformer.parameters(), "lr": config.learning_rate},
-            {"params": self.style_encoder.parameters(), "lr": config.learning_rate * 3},
-        ])
+        self.optimizer = torch.optim.Adam(
+            [
+                {"params": self.deformer.parameters(), "lr": config.learning_rate},
+                {"params": self.style_encoder.parameters(), "lr": config.learning_rate * 3},
+            ]
+        )
         self.scheduler = torch.optim.lr_scheduler.StepLR(
-            self.optimizer, step_size=20, gamma=0.5,
+            self.optimizer,
+            step_size=20,
+            gamma=0.5,
         )
 
         self.amp = amp
@@ -672,7 +664,7 @@ class DeformationPretrainer:
             self.scaler = None
 
     def train(self) -> dict:
-        from src.model.stroke_deformer import deformation_loss, smoothness_loss
+        from src.model.stroke_deformer import affine_deformation_loss
         from src.model.stroke_model import embedding_variance_loss
 
         print(f"[V3] Device: {self.device}" + (" (AMP)" if self.amp else ""))
@@ -685,7 +677,7 @@ class DeformationPretrainer:
 
             for batch_idx, batch in enumerate(self.dataloader):
                 ref_points = batch["reference_points"].to(self.device)
-                target_offsets = batch["target_offsets"].to(self.device)
+                target_points = batch["target_points"].to(self.device)
                 stroke_indices = batch["stroke_indices"].to(self.device)
 
                 style_strokes = batch["style_strokes"].to(self.device)
@@ -694,17 +686,14 @@ class DeformationPretrainer:
 
                 with torch.amp.autocast(self.device.type, enabled=self.amp):
                     style = self.style_encoder(style_strokes, lengths=style_lengths)
-                    predicted = self.deformer(ref_points, style, stroke_indices)
+                    transformed, _params = self.deformer(ref_points, style, stroke_indices)
 
-                    loss_deform = deformation_loss(predicted, target_offsets)
-                    loss_smooth = smoothness_loss(predicted)
+                    loss_deform = affine_deformation_loss(transformed, target_points)
                     loss_style_var = embedding_variance_loss(style)
-                    loss = loss_deform + 0.1 * loss_smooth + 0.1 * loss_style_var
+                    loss = loss_deform + 0.1 * loss_style_var
 
                 self.optimizer.zero_grad()
-                all_params = [
-                    p for group in self.optimizer.param_groups for p in group["params"]
-                ]
+                all_params = [p for group in self.optimizer.param_groups for p in group["params"]]
                 if self.scaler is not None:
                     self.scaler.scale(loss).backward()
                     self.scaler.unscale_(self.optimizer)
@@ -724,17 +713,18 @@ class DeformationPretrainer:
                         f"\r  [V3] Epoch {epoch + 1}/{self.config.epochs} "
                         f"[{batch_idx + 1}/{total_batches}] "
                         f"loss: {loss.item():.4f}",
-                        end="", flush=True,
+                        end="",
+                        flush=True,
                     )
 
             avg_loss = epoch_loss / max(n_batches, 1)
             history["losses"].append(avg_loss)
             self.scheduler.step()
-            print(
-                f"\r  [V3] Epoch {epoch + 1}/{self.config.epochs} — avg loss: {avg_loss:.4f}"
-            )
+            print(f"\r  [V3] Epoch {epoch + 1}/{self.config.epochs} — avg loss: {avg_loss:.4f}")
 
         cpu = torch.device("cpu")
+        config_dict = asdict(self.config)
+        config_dict["deformer_type"] = "affine"
         torch.save(
             {
                 "deformer_state_dict": {
@@ -743,7 +733,7 @@ class DeformationPretrainer:
                 "style_encoder_state_dict": {
                     k: v.to(cpu) for k, v in self.style_encoder.state_dict().items()
                 },
-                "config": asdict(self.config),
+                "config": config_dict,
                 "norm_stats": self.norm_stats,
                 "version": 3,
             },

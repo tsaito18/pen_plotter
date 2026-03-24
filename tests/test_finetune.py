@@ -373,12 +373,23 @@ class TestFinetuner:
 
 def _make_v3_checkpoint(path: Path, config: dict | None = None) -> Path:
     """Create a V3 deformation checkpoint for testing."""
-    from src.model.stroke_deformer import StrokeDeformer
+    from src.model.stroke_deformer import AffineStrokeDeformer, StrokeDeformer
 
-    cfg = config or {"style_dim": 128, "hidden_dim": 256, "num_points": 32}
-    deformer = StrokeDeformer(
-        style_dim=cfg["style_dim"], hidden_dim=cfg["hidden_dim"],
-    )
+    cfg = config or {
+        "style_dim": 128,
+        "hidden_dim": 64,
+        "num_points": 32,
+        "deformer_type": "affine",
+    }
+    deformer_type = cfg.get("deformer_type", "offset")
+    if deformer_type == "affine":
+        deformer = AffineStrokeDeformer(
+            style_dim=cfg["style_dim"], hidden_dim=cfg["hidden_dim"],
+        )
+    else:
+        deformer = StrokeDeformer(
+            style_dim=cfg["style_dim"], hidden_dim=cfg["hidden_dim"],
+        )
     style_enc = StyleEncoder(style_dim=cfg["style_dim"])
     norm_stats = {"mean_x": 0.0, "mean_y": 0.0, "std_x": 1.0, "std_y": 1.0}
 
@@ -510,9 +521,9 @@ class TestUserDeformationTrainer:
         ds = FinetuneDeformationDataset(user_dir, ref_dir, augment=True)
         if len(ds) == 0:
             pytest.skip("No stroke pairs found")
-        results = [ds[0]["target_offsets"] for _ in range(5)]
+        results = [ds[0]["target_points"] for _ in range(5)]
         all_same = all(torch.equal(results[0], r) for r in results[1:])
-        assert not all_same, "Augmentation should produce different offsets"
+        assert not all_same, "Augmentation should produce different target points"
 
     @pytest.mark.slow
     def test_checkpoint_compatible_with_inference(self, setup):

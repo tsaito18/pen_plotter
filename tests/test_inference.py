@@ -341,15 +341,20 @@ class TestStrokeInferenceV3:
 
     @pytest.fixture
     def v3_checkpoint_path(self, tmp_path):
-        from src.model.stroke_deformer import StrokeDeformer
+        from src.model.stroke_deformer import AffineStrokeDeformer
 
         style_dim = 64
-        deformer = StrokeDeformer(style_dim=style_dim, hidden_dim=128)
+        deformer = AffineStrokeDeformer(style_dim=style_dim, hidden_dim=128)
         style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=style_dim)
         checkpoint = {
             "deformer_state_dict": deformer.state_dict(),
             "style_encoder_state_dict": style_enc.state_dict(),
-            "config": {"style_dim": style_dim, "hidden_dim": 128, "num_points": 16},
+            "config": {
+                "style_dim": style_dim,
+                "hidden_dim": 128,
+                "num_points": 16,
+                "deformer_type": "affine",
+            },
             "norm_stats": {"mean_x": 0.0, "mean_y": 0.0, "std_x": 1.0, "std_y": 1.0},
             "version": 3,
         }

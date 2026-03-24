@@ -433,7 +433,7 @@ class TestCASIADeformationDataset:
         ds = CASIADeformationDataset(pot_dir, ref_dir, num_points=16)
         item = ds[0]
         assert item["reference_points"].shape == (16, 2)
-        assert item["target_offsets"].shape == (16, 2)
+        assert item["target_points"].shape == (16, 2)
         assert isinstance(item["stroke_index"], int)
         assert item["style_strokes"].ndim == 2
         assert item["style_strokes"].shape[1] == 3
@@ -454,7 +454,7 @@ class TestCASIADeformationDataset:
         assert collated["reference_points"].shape[0] == len(ds)
         assert collated["reference_points"].shape[1] == 8
         assert collated["reference_points"].shape[2] == 2
-        assert collated["target_offsets"].shape == collated["reference_points"].shape
+        assert collated["target_points"].shape == collated["reference_points"].shape
         assert "stroke_indices" in collated
         assert "style_strokes" in collated
         assert "style_lengths" in collated

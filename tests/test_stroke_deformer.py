@@ -4,7 +4,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from src.model.stroke_deformer import StrokeDeformer, deformation_loss, smoothness_loss
+from src.model.stroke_deformer import (
+    AffineStrokeDeformer,
+    StrokeDeformer,
+    affine_deformation_loss,
+    deformation_loss,
+    smoothness_loss,
+)
 
 
 class TestStrokeDeformer:
@@ -83,3 +89,58 @@ class TestSmoothnessLoss:
         loss_masked = smoothness_loss(offsets, mask=mask)
         assert loss_masked.shape == ()
         assert loss_masked.item() > 0
+
+
+class TestAffineStrokeDeformer:
+    def test_output_shape(self) -> None:
+        model = AffineStrokeDeformer(style_dim=64, hidden_dim=32)
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        transformed, params = model(ref, style)
+        assert transformed.shape == (4, 32, 2)
+        assert params.shape == (4, 6)
+
+    def test_identity_init(self) -> None:
+        """With zero-initialized output layer, output should approximate input."""
+        model = AffineStrokeDeformer(style_dim=64, hidden_dim=32)
+        ref = torch.randn(4, 16, 2)
+        style = torch.zeros(4, 64)
+        transformed, params = model(ref, style)
+        assert torch.allclose(transformed, ref, atol=1e-4)
+
+    def test_with_stroke_index(self) -> None:
+        model = AffineStrokeDeformer(style_dim=64, hidden_dim=32)
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        stroke_idx = torch.tensor([0, 1, 2, 3])
+        transformed, params = model(ref, style, stroke_idx)
+        assert transformed.shape == (4, 32, 2)
+        assert params.shape == (4, 6)
+
+    def test_without_stroke_index(self) -> None:
+        model = AffineStrokeDeformer(style_dim=64, hidden_dim=32)
+        ref = torch.randn(2, 16, 2)
+        style = torch.randn(2, 64)
+        transformed, params = model(ref, style, stroke_index=None)
+        assert transformed.shape == (2, 16, 2)
+
+    def test_stroke_index_clamped(self) -> None:
+        model = AffineStrokeDeformer(style_dim=64, hidden_dim=32)
+        ref = torch.randn(2, 8, 2)
+        style = torch.randn(2, 64)
+        stroke_idx = torch.tensor([100, 200])
+        transformed, params = model(ref, style, stroke_idx)
+        assert transformed.shape == (2, 8, 2)
+
+
+class TestAffineDeformationLoss:
+    def test_zero_loss(self) -> None:
+        target = torch.randn(4, 32, 2)
+        loss = affine_deformation_loss(target.clone(), target)
+        assert loss.item() < 1e-6
+
+    def test_nonzero(self) -> None:
+        transformed = torch.randn(4, 32, 2)
+        target = torch.randn(4, 32, 2)
+        loss = affine_deformation_loss(transformed, target)
+        assert loss.item() > 0
