@@ -352,11 +352,37 @@ class FinetuneDeformationDataset(Dataset):
             dtype=np.float32,
         )
 
+        # Normalize user strokes to same [0, target_size] range as KanjiVG reference
+        all_user_pts = np.concatenate(
+            [np.array([[pt["x"], pt["y"]] for pt in s]) for s in user_data["strokes"]],
+            axis=0,
+        )
+        u_min = all_user_pts.min(axis=0)
+        u_max = all_user_pts.max(axis=0)
+        u_range = (u_max - u_min).max()
+        all_ref_pts = np.concatenate(
+            [np.array([[pt["x"], pt["y"]] for pt in s]) for s in ref_data["strokes"]],
+            axis=0,
+        )
+        r_range = (all_ref_pts.max(axis=0) - all_ref_pts.min(axis=0)).max()
+        if u_range > 0:
+            scale = r_range / u_range
+            user_stroke_pts = (user_stroke_pts - u_min) * scale + all_ref_pts.min(axis=0)
+
         ref_resampled = resample_stroke(ref_stroke_pts, self.num_points)
         hand_resampled = resample_stroke(user_stroke_pts, self.num_points)
         offset = hand_resampled - ref_resampled
 
-        style_tensor = strokes_to_deltas(user_data["strokes"])
+        # Style tensor also needs normalization
+        normalized_user_strokes = []
+        for s in user_data["strokes"]:
+            pts = np.array([[pt["x"], pt["y"]] for pt in s], dtype=np.float32)
+            if u_range > 0:
+                pts = (pts - u_min) * scale + all_ref_pts.min(axis=0)
+            normalized_user_strokes.append(
+                [{"x": float(p[0]), "y": float(p[1])} for p in pts]
+            )
+        style_tensor = strokes_to_deltas(normalized_user_strokes)
 
         return {
             "reference_points": torch.tensor(ref_resampled, dtype=torch.float32),
