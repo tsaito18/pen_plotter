@@ -72,8 +72,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model-version",
         type=str,
         default="v3",
-        choices=["v2", "v3"],
-        help="Model architecture version (v2=LSTM+MDN, v3=deformation)",
+        choices=["v2", "v3", "v3-user"],
+        help="Model architecture version (v2=LSTM+MDN, v3=deformation, v3-user=user-data-only)",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.2,
+        help="Dropout rate for StrokeDeformer (v3-user only)",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.01,
+        help="Weight decay for AdamW (v3-user only)",
     )
     return parser.parse_args(argv)
 
@@ -115,7 +127,28 @@ def main(argv: list[str] | None = None) -> dict:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.model_version == "v3":
+    if args.model_version == "v3-user":
+        from src.model.finetune import UserDeformationTrainer, UserTrainConfig
+
+        user_config = UserTrainConfig(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            grad_clip_norm=args.grad_clip_norm,
+            style_dim=args.style_dim,
+            hidden_dim=args.hidden_dim,
+            dropout=args.dropout,
+            weight_decay=args.weight_decay,
+        )
+        pretrainer = UserDeformationTrainer(
+            config=user_config,
+            user_data_dir=hand_dir,
+            ref_dir=ref_dir,
+            output_dir=args.output_dir,
+            device=args.device,
+            num_workers=args.num_workers,
+        )
+    elif args.model_version == "v3":
         from src.model.pretrain import DeformationConfig, DeformationPretrainer
 
         config_v3 = DeformationConfig(

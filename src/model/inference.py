@@ -36,9 +36,11 @@ class StrokeInference:
             style_dim = config.get("style_dim", 128)
             hidden_dim = config.get("hidden_dim", 256)
 
+            dropout = config.get("dropout", 0.0)
             self.deformer = StrokeDeformer(
                 style_dim=style_dim,
                 hidden_dim=hidden_dim,
+                dropout=dropout,
             )
             self.deformer.load_state_dict(checkpoint["deformer_state_dict"])
             self.deformer.eval()
@@ -255,7 +257,7 @@ class StrokeInference:
 
             offsets = self.deformer(ref_tensor, style, stroke_idx)
             offsets = self._smooth_offsets(offsets, kernel_size=11)
-            offsets = offsets.clamp(-1.0, 1.0)
+            offsets = offsets.clamp(-0.3, 0.3)
             deformed = (ref_tensor + offsets).squeeze(0).detach().numpy()
 
             # Per-stroke geometric variation (smooth, not per-point noise)

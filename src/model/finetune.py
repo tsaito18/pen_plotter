@@ -24,6 +24,7 @@ from src.model.data_utils import (
     resample_stroke,
     strokes_to_deltas,
 )
+from src.model.data_utils import compute_normalization_stats
 from src.model.pretrain import _detect_device
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
@@ -298,8 +299,10 @@ class FinetuneDeformationDataset(Dataset):
         user_dir: Path,
         ref_dir: Path,
         num_points: int = 32,
+        augment: bool = False,
     ) -> None:
         self.num_points = num_points
+        self.augment = augment
         self.char_samples: list[tuple[str, Path, Path]] = []
         user_dir = Path(user_dir)
         ref_dir = Path(ref_dir)
@@ -369,20 +372,42 @@ class FinetuneDeformationDataset(Dataset):
             scale = r_range / u_range
             user_stroke_pts = (user_stroke_pts - u_min) * scale + all_ref_pts.min(axis=0)
 
-        ref_resampled = resample_stroke(ref_stroke_pts, self.num_points)
-        hand_resampled = resample_stroke(user_stroke_pts, self.num_points)
-        offset = hand_resampled - ref_resampled
-
-        # Style tensor also needs normalization
+        # Normalize all user strokes to KanjiVG scale
         normalized_user_strokes = []
         for s in user_data["strokes"]:
             pts = np.array([[pt["x"], pt["y"]] for pt in s], dtype=np.float32)
             if u_range > 0:
                 pts = (pts - u_min) * scale + all_ref_pts.min(axis=0)
-            normalized_user_strokes.append(
-                [{"x": float(p[0]), "y": float(p[1])} for p in pts]
-            )
-        style_tensor = strokes_to_deltas(normalized_user_strokes)
+            normalized_user_strokes.append(pts)
+
+        # Apply augmentation: same transform to all strokes of this character
+        if self.augment:
+            angle = np.random.uniform(-5, 5) * np.pi / 180
+            scale_aug = np.random.uniform(0.9, 1.1)
+            ref_center = all_ref_pts.mean(axis=0)
+            bbox_size = (all_ref_pts.max(axis=0) - all_ref_pts.min(axis=0)).max()
+            tx = np.random.uniform(-0.05, 0.05) * bbox_size
+            ty = np.random.uniform(-0.05, 0.05) * bbox_size
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]], dtype=np.float32)
+
+            user_stroke_pts = (user_stroke_pts - ref_center) * scale_aug @ rot + ref_center + np.array([tx, ty])
+            for i in range(len(normalized_user_strokes)):
+                normalized_user_strokes[i] = (
+                    (normalized_user_strokes[i] - ref_center) * scale_aug @ rot
+                    + ref_center + np.array([tx, ty])
+                )
+
+        ref_resampled = resample_stroke(ref_stroke_pts, self.num_points)
+        hand_resampled = resample_stroke(user_stroke_pts, self.num_points)
+        offset = hand_resampled - ref_resampled
+
+        # Build style tensor from normalized (and possibly augmented) user strokes
+        normalized_user_strokes_dicts = [
+            [{"x": float(p[0]), "y": float(p[1])} for p in pts]
+            for pts in normalized_user_strokes
+        ]
+        style_tensor = strokes_to_deltas(normalized_user_strokes_dicts)
 
         return {
             "reference_points": torch.tensor(ref_resampled, dtype=torch.float32),
@@ -443,6 +468,7 @@ class DeformationFinetuner:
         self.deformer = StrokeDeformer(
             style_dim=cfg.get("style_dim", 128),
             hidden_dim=cfg.get("hidden_dim", 256),
+            dropout=cfg.get("dropout", 0.0),
         )
         self.deformer.load_state_dict(checkpoint["deformer_state_dict"])
 
@@ -527,6 +553,144 @@ class DeformationFinetuner:
                 "version": 3,
             },
             self.output_dir / "finetuned.pt",
+        )
+
+        return history
+
+
+@dataclass
+class UserTrainConfig:
+    epochs: int = 200
+    batch_size: int = 16
+    learning_rate: float = 5e-4
+    grad_clip_norm: float = 5.0
+    style_dim: int = 128
+    hidden_dim: int = 64
+    num_points: int = 32
+    dropout: float = 0.2
+    weight_decay: float = 0.01
+
+
+class UserDeformationTrainer:
+    """Train StrokeDeformer + StyleEncoder directly on user data (no CASIA)."""
+
+    def __init__(
+        self,
+        config: UserTrainConfig,
+        user_data_dir: Path,
+        ref_dir: Path,
+        output_dir: Path,
+        device: str | None = None,
+        num_workers: int = 0,
+    ) -> None:
+        from src.model.stroke_deformer import StrokeDeformer
+
+        self.config = config
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.device = _detect_device(device)
+
+        self.dataset = FinetuneDeformationDataset(
+            user_data_dir, ref_dir, num_points=config.num_points, augment=True,
+        )
+        self.dataloader = DataLoader(
+            self.dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            collate_fn=collate_deformation_finetune,
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
+        )
+
+        style_tensors = [self.dataset[i]["style_strokes"] for i in range(len(self.dataset))]
+        self.norm_stats = compute_normalization_stats(style_tensors) if style_tensors else None
+
+        self.style_encoder = StyleEncoder(style_dim=config.style_dim).to(self.device)
+        self.deformer = StrokeDeformer(
+            style_dim=config.style_dim,
+            hidden_dim=config.hidden_dim,
+            dropout=config.dropout,
+        ).to(self.device)
+
+        self.optimizer = torch.optim.AdamW(
+            [
+                {"params": self.deformer.parameters(), "lr": config.learning_rate},
+                {"params": self.style_encoder.parameters(), "lr": config.learning_rate * 3},
+            ],
+            weight_decay=config.weight_decay,
+        )
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=config.epochs,
+        )
+
+    def train(self) -> dict:
+        from src.model.stroke_deformer import deformation_loss, smoothness_loss
+
+        print(f"[V3-user] Device: {self.device}")
+        print(f"[V3-user] Dataset: {len(self.dataset)} stroke pairs")
+        history: dict[str, list[float]] = {"losses": []}
+
+        self.deformer.train()
+        self.style_encoder.train()
+
+        for epoch in range(self.config.epochs):
+            epoch_loss = 0.0
+            n_batches = 0
+
+            for batch in self.dataloader:
+                ref_points = batch["reference_points"].to(self.device)
+                target_offsets = batch["target_offsets"].to(self.device)
+                stroke_indices = batch["stroke_indices"].to(self.device)
+
+                style_strokes = batch["style_strokes"].to(self.device)
+                if self.norm_stats is not None:
+                    style_strokes = normalize_deltas(style_strokes, self.norm_stats)
+                style_lengths = batch["style_lengths"]
+
+                style = self.style_encoder(style_strokes, lengths=style_lengths)
+                predicted = self.deformer(ref_points, style, stroke_indices)
+
+                loss_deform = deformation_loss(predicted, target_offsets)
+                loss_smooth = smoothness_loss(predicted)
+                loss = loss_deform + 0.1 * loss_smooth
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                all_params = [
+                    p for group in self.optimizer.param_groups for p in group["params"]
+                ]
+                torch.nn.utils.clip_grad_norm_(all_params, self.config.grad_clip_norm)
+                self.optimizer.step()
+
+                epoch_loss += loss.item()
+                n_batches += 1
+
+            avg_loss = epoch_loss / max(n_batches, 1)
+            history["losses"].append(avg_loss)
+            self.scheduler.step()
+
+            if (epoch + 1) % 10 == 0 or epoch == 0:
+                print(f"  [V3-user] Epoch {epoch + 1}/{self.config.epochs} — loss: {avg_loss:.4f}")
+
+        cpu = torch.device("cpu")
+        torch.save(
+            {
+                "deformer_state_dict": {
+                    k: v.to(cpu) for k, v in self.deformer.state_dict().items()
+                },
+                "style_encoder_state_dict": {
+                    k: v.to(cpu) for k, v in self.style_encoder.state_dict().items()
+                },
+                "config": {
+                    "style_dim": self.config.style_dim,
+                    "hidden_dim": self.config.hidden_dim,
+                    "num_points": self.config.num_points,
+                    "dropout": self.config.dropout,
+                },
+                "norm_stats": self.norm_stats,
+                "version": 3,
+            },
+            self.output_dir / "pretrain_checkpoint.pt",
         )
 
         return history

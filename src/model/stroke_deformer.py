@@ -21,6 +21,7 @@ class StrokeDeformer(nn.Module):
         hidden_dim: int = 256,
         num_layers: int = 3,
         stroke_embed_dim: int = 16,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.style_dim = style_dim
@@ -38,6 +39,7 @@ class StrokeDeformer(nn.Module):
             layers.extend([
                 nn.Linear(in_dim, hidden_dim),
                 nn.ReLU(),
+                nn.Dropout(dropout),
             ])
             in_dim = hidden_dim
         layers.append(nn.Linear(in_dim, 2))

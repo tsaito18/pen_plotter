@@ -14,7 +14,10 @@ from src.model.finetune import (
     DeformationFinetuner,
     FinetuneConfig,
     FinetuneDataset,
+    FinetuneDeformationDataset,
     Finetuner,
+    UserDeformationTrainer,
+    UserTrainConfig,
     collate_finetune,
 )
 from src.model.stroke_model import StrokeGenerator
@@ -461,3 +464,78 @@ class TestDeformationFinetuner:
         assert "deformer_state_dict" in ckpt
         assert "style_encoder_state_dict" in ckpt
         assert ckpt.get("version") == 3
+
+
+class TestUserDeformationTrainer:
+    @pytest.fixture
+    def setup(self, tmp_path):
+        chars = ["あ", "い", "う"]
+        user_dir = _make_data_dir(tmp_path / "user", chars)
+        ref_dir = _make_ref_dir(tmp_path / "ref", chars)
+        output_dir = tmp_path / "output"
+        return {
+            "user_dir": user_dir,
+            "ref_dir": ref_dir,
+            "output_dir": output_dir,
+        }
+
+    def test_user_trainer_creation(self, setup):
+        cfg = UserTrainConfig(epochs=1)
+        trainer = UserDeformationTrainer(
+            config=cfg,
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        assert trainer is not None
+        assert len(trainer.dataset) > 0
+
+    def test_both_modules_trainable(self, setup):
+        cfg = UserTrainConfig(epochs=1)
+        trainer = UserDeformationTrainer(
+            config=cfg,
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        for p in trainer.deformer.parameters():
+            assert p.requires_grad
+        for p in trainer.style_encoder.parameters():
+            assert p.requires_grad
+
+    def test_augmentation_varies_output(self, tmp_path):
+        chars = ["あ"]
+        user_dir = _make_data_dir(tmp_path / "user", chars, n_samples=1)
+        ref_dir = _make_ref_dir(tmp_path / "ref", chars)
+        ds = FinetuneDeformationDataset(user_dir, ref_dir, augment=True)
+        if len(ds) == 0:
+            pytest.skip("No stroke pairs found")
+        results = [ds[0]["target_offsets"] for _ in range(5)]
+        all_same = all(torch.equal(results[0], r) for r in results[1:])
+        assert not all_same, "Augmentation should produce different offsets"
+
+    @pytest.mark.slow
+    def test_checkpoint_compatible_with_inference(self, setup):
+        from src.model.inference import StrokeInference
+
+        cfg = UserTrainConfig(epochs=2, batch_size=4)
+        trainer = UserDeformationTrainer(
+            config=cfg,
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        trainer.train()
+
+        ckpt_path = setup["output_dir"] / "pretrain_checkpoint.pt"
+        assert ckpt_path.exists()
+
+        ckpt = torch.load(ckpt_path, weights_only=False)
+        assert ckpt.get("version") == 3
+        assert "deformer_state_dict" in ckpt
+        assert "style_encoder_state_dict" in ckpt
+        assert "dropout" in ckpt["config"]
+
+        inference = StrokeInference(ckpt_path)
+        assert inference.version == 3
+        assert inference.deformer is not None

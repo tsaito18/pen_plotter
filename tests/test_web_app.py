@@ -166,7 +166,10 @@ class TestFallbackStrokes:
         center_x = (all_pts[:, 0].min() + all_pts[:, 0].max()) / 2
         center_y = (all_pts[:, 1].min() + all_pts[:, 1].max()) / 2
         assert np.isclose(center_x, 10.0 + 3.0, atol=0.01)
-        assert np.isclose(center_y, 20.0, atol=0.01)
+        # y_offset = placement.y + (line_spacing - rendered_h) / 2
+        line_spacing = pipeline._page_config.line_spacing
+        expected_y = 20.0 + (line_spacing - 6.0) / 2 + 3.0
+        assert np.isclose(center_y, expected_y, atol=0.01)
 
     def test_position_strokes_halfwidth(self):
         """半角文字のアスペクト比が保持され、セル内で中央配置される。"""
