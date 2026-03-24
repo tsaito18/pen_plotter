@@ -228,7 +228,7 @@ class StrokeInference:
         self,
         style_sample: torch.Tensor,
         reference_strokes: list[NDArray[np.float64]] | None,
-        noise_scale: float = 0.02,
+        noise_scale: float = 0.3,
     ) -> list[np.ndarray]:
         """V3: Deform reference strokes using predicted offsets."""
         from src.model.data_utils import normalize_deltas, resample_stroke
@@ -254,12 +254,27 @@ class StrokeInference:
             stroke_idx = torch.tensor([i])
 
             offsets = self.deformer(ref_tensor, style, stroke_idx)
-            offsets = self._smooth_offsets(offsets, kernel_size=5)
-            offsets = offsets.clamp(-1.5, 1.5)
-            noise = torch.randn_like(offsets) * noise_scale
-            deformed = ref_tensor + offsets + noise
+            offsets = self._smooth_offsets(offsets, kernel_size=9)
+            offsets = offsets.clamp(-0.2, 0.2)
+            deformed = (ref_tensor + offsets).squeeze(0).detach().numpy()
 
-            all_strokes.append(deformed.squeeze(0).detach().numpy())
+            # Per-stroke geometric variation (smooth, not per-point noise)
+            center = deformed.mean(axis=0)
+            centered = deformed - center
+            # Random rotation
+            angle = np.random.normal(0, noise_scale * 0.15)  # radians
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            rotated = centered @ np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+            # Random scale
+            sx = 1.0 + np.random.normal(0, noise_scale * 0.3)
+            sy = 1.0 + np.random.normal(0, noise_scale * 0.3)
+            scaled = rotated * np.array([sx, sy])
+            # Random position shift
+            dx = np.random.normal(0, noise_scale * 0.5)
+            dy = np.random.normal(0, noise_scale * 0.5)
+            result = scaled + center + np.array([dx, dy])
+
+            all_strokes.append(result.astype(np.float32))
 
         if not all_strokes:
             all_strokes = [np.array([[0.0, 0.0], [1.0, 1.0]])]
