@@ -243,7 +243,8 @@ class PlotterPipeline:
 
         cell_width = fs * 0.6 if is_halfwidth(placement.char) else fs
         x_offset = placement.x + (cell_width - rendered_w) / 2
-        y_offset = placement.y
+        line_spacing = self._page_config.line_spacing
+        y_offset = placement.y + (line_spacing - rendered_h) / 2
 
         offset = np.array([x_offset, y_offset])
         return [stroke + offset for stroke in scaled]
@@ -269,17 +270,58 @@ class PlotterPipeline:
         optimized = optimize_stroke_order(strokes)
         return self._generator.generate(optimized)
 
+    def _preview_with_ruled_lines(
+        self,
+        strokes: list[Stroke],
+        ruled_lines: list[Stroke],
+        save_path: str | Path,
+    ) -> None:
+        """罫線（薄グレー）+ 文字ストローク（青）を高解像度で描画。"""
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+
+        cfg = self._plotter_config
+        fig, ax = plt.subplots(1, 1, figsize=(10, 14))
+
+        paper_rect = patches.Rectangle(
+            (cfg.paper_origin_x, cfg.paper_origin_y),
+            cfg.paper_width, cfg.paper_height,
+            linewidth=1, edgecolor="gray", facecolor="lightyellow", linestyle="--",
+        )
+        ax.add_patch(paper_rect)
+
+        for line in ruled_lines:
+            if len(line) >= 2:
+                ax.plot(line[:, 0], line[:, 1], color="#CCCCCC", linewidth=0.3)
+
+        for stroke in strokes:
+            if len(stroke) >= 2:
+                ax.plot(stroke[:, 0], stroke[:, 1], "b-", linewidth=0.3)
+
+        ax.set_xlim(-5, cfg.paper_width + 5)
+        ax.set_ylim(-5, cfg.paper_height + 5)
+        ax.set_aspect("equal")
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+        ax.set_title("Pen Plotter Preview")
+        ax.grid(False)
+
+        plt.tight_layout()
+        fig.savefig(str(save_path), dpi=300)
+        plt.close(fig)
+
     def generate_preview(self, text: str, save_path: str | Path) -> None:
         save_path = Path(save_path)
         pages = self.text_to_placements(text)
         ruled_lines = self._typesetter._layout.ruled_line_strokes()
         if not pages or not pages[0]:
-            preview_strokes(ruled_lines, config=self._plotter_config, save_path=save_path)
+            self._preview_with_ruled_lines([], ruled_lines, save_path)
             return
         strokes = self.placements_to_strokes(pages[0])
         optimized = optimize_stroke_order(strokes)
-        all_strokes = ruled_lines + optimized
-        preview_strokes(all_strokes, config=self._plotter_config, save_path=save_path)
+        self._preview_with_ruled_lines(
+            optimized, ruled_lines, save_path,
+        )
 
     def generate_gcode_file(self, text: str, save_path: str | Path) -> None:
         save_path = Path(save_path)
