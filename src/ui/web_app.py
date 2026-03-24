@@ -243,7 +243,7 @@ class PlotterPipeline:
 
         cell_width = fs * 0.6 if is_halfwidth(placement.char) else fs
         x_offset = placement.x + (cell_width - rendered_w) / 2
-        y_offset = placement.y - rendered_h / 2
+        y_offset = placement.y
 
         offset = np.array([x_offset, y_offset])
         return [stroke + offset for stroke in scaled]
