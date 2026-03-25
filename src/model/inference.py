@@ -264,7 +264,7 @@ class StrokeInference:
         reference_strokes: list[NDArray[np.float64]] | None,
         noise_scale: float = 0.3,
     ) -> list[np.ndarray]:
-        """V3: Deform reference strokes using predicted offsets."""
+        """V3: Deform reference strokes using predicted offsets (batched)."""
         from src.model.data_utils import normalize_deltas, resample_stroke
         from src.model.finetune import OFFSET_CLAMP, smooth_offsets
 
@@ -276,24 +276,36 @@ class StrokeInference:
 
         style = self.style_encoder(style_sample)
 
-        all_strokes: list[np.ndarray] = []
+        batch_refs: list[NDArray[np.float32]] = []
+        batch_indices: list[int] = []
         for i, ref_stroke in enumerate(reference_strokes):
             if len(ref_stroke) < 2:
                 continue
             ref_resampled = resample_stroke(
                 np.asarray(ref_stroke, dtype=np.float32), self.num_points
             )
-            ref_tensor = torch.tensor(ref_resampled, dtype=torch.float32).unsqueeze(0)
-            stroke_idx = torch.tensor([i])
+            batch_refs.append(ref_resampled)
+            batch_indices.append(i)
 
-            if self.deformer_type == "affine":
-                transformed, _params = self.deformer(ref_tensor, style, stroke_idx)
-                deformed = transformed.squeeze(0).detach().numpy()
-            else:
-                offsets = self.deformer(ref_tensor, style, stroke_idx)
-                offsets = smooth_offsets(offsets)
-                offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
-                deformed = (ref_tensor + offsets).squeeze(0).detach().numpy()
+        if not batch_refs:
+            return [np.array([[0.0, 0.0], [1.0, 1.0]])]
+
+        ref_batch = torch.tensor(np.stack(batch_refs), dtype=torch.float32)
+        idx_batch = torch.tensor(batch_indices)
+        style_batch = style.expand(len(batch_refs), -1)
+
+        if self.deformer_type == "affine":
+            transformed, _params = self.deformer(ref_batch, style_batch, idx_batch)
+            deformed_batch = transformed.detach().numpy()
+        else:
+            offsets = self.deformer(ref_batch, style_batch, idx_batch)
+            offsets = smooth_offsets(offsets)
+            offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
+            deformed_batch = (ref_batch + offsets).detach().numpy()
+
+        all_strokes: list[np.ndarray] = []
+        for j in range(len(batch_refs)):
+            deformed = deformed_batch[j]
 
             # Per-stroke geometric variation
             center = deformed.mean(axis=0)
@@ -309,9 +321,6 @@ class StrokeInference:
             result = scaled + center + np.array([dx, dy])
 
             all_strokes.append(result.astype(np.float32))
-
-        if not all_strokes:
-            all_strokes = [np.array([[0.0, 0.0], [1.0, 1.0]])]
 
         return all_strokes
 

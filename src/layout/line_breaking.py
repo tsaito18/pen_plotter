@@ -1,7 +1,7 @@
 """禁則処理付き改行モジュール。
 
 日本語組版の禁則処理ルールに従い、行頭・行末禁止文字を考慮した改行を行う。
-半角文字は0.6文字幅として計算する。
+半角文字は0.5文字幅として計算する。
 """
 
 LINE_START_PROHIBITED: set[str] = set("。、，．）」』】〉》〕!?！？ー")
@@ -21,7 +21,7 @@ def is_halfwidth(ch: str) -> bool:
 
 
 def _char_width(ch: str) -> float:
-    return 0.6 if is_halfwidth(ch) else 1.0
+    return 0.5 if is_halfwidth(ch) else 1.0
 
 
 def _text_width(text: str) -> float:

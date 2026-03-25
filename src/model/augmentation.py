@@ -16,7 +16,7 @@ class AugmentConfig:
     size_variation: float = 0.05
     slant_variation: float = 0.04
     jitter_amplitude: float = 0.08
-    spacing_variation: float = 0.2
+    spacing_variation: float = 0.1
     line_density_variation: float = 0.1
     enabled: bool = True
 

@@ -51,9 +51,20 @@ class TestTypesetter:
         ts = Typesetter(PageConfig())
         pages = ts.typeset("ab")
         placements = pages[0]
-        # 半角文字は全角の半分の幅
+        # 半角文字は_char_size_scaleにより0.6倍幅
         width = placements[1].x - placements[0].x
-        assert width < ts.font_size  # 全角幅より小さい
+        assert width == pytest.approx(ts.font_size * 0.6)
+
+    def test_halfwidth_width_ratio(self):
+        """半角文字幅は漢字の0.6倍。"""
+        ts = Typesetter(PageConfig(), font_size=6.0)
+        pages = ts.typeset("a漢")
+        p = pages[0]
+        half_w = p[1].x - p[0].x  # 'a'の幅
+        pages2 = ts.typeset("漢字")
+        p2 = pages2[0]
+        full_w = p2[1].x - p2[0].x  # '漢'の幅（スケール1.0）
+        assert half_w == pytest.approx(full_w * 0.6)
 
     def test_font_size_default(self):
         ts = Typesetter(PageConfig())
@@ -260,3 +271,122 @@ class TestParagraphIndent:
         para3_chars = [p for p in placements if p.char == "さ"]
         assert len(para3_chars) == 1
         assert para3_chars[0].x == pytest.approx(area.x + 6.0)
+
+
+class TestHalfwidthSpacingReduction:
+    """連続する半角文字間ではaugmentationのspacing variationが減衰する。"""
+
+    def _make_typesetter(self, seed: int = 42) -> Typesetter:
+        cfg = AugmentConfig(spacing_variation=1.0, baseline_drift=0.0,
+                            size_variation=0.0, slant_variation=0.0,
+                            jitter_amplitude=0.0, line_density_variation=0.0)
+        aug = HandwritingAugmenter(cfg, seed=seed)
+        return Typesetter(PageConfig(), augmenter=aug)
+
+    def test_consecutive_halfwidth_spacing_reduced(self):
+        """連続半角文字間のspacing変動は、全角文字間より小さい。"""
+        half_deviations = []
+        full_deviations = []
+        for seed in range(20):
+            ts_half = self._make_typesetter(seed=seed)
+            pages_half = ts_half.typeset("abcdefgh")
+            p_half = pages_half[0]
+
+            ts_full = self._make_typesetter(seed=seed)
+            pages_full = ts_full.typeset("漢字書道文章表現技")
+            p_full = pages_full[0]
+
+            # 半角: 2文字目以降のspacing deviation（期待幅からの差）
+            font = ts_half.font_size
+            for i in range(1, len(p_half) - 1):
+                actual_w = p_half[i + 1].x - p_half[i].x
+                expected_w = font * 0.6  # _char_size_scale による半角幅
+                half_deviations.append(abs(actual_w - expected_w))
+
+            # 漢字: スケール1.0
+            for i in range(1, len(p_full) - 1):
+                actual_w = p_full[i + 1].x - p_full[i].x
+                expected_w = font  # 漢字のスケール1.0
+                full_deviations.append(abs(actual_w - expected_w))
+
+        avg_half_dev = sum(half_deviations) / len(half_deviations)
+        avg_full_dev = sum(full_deviations) / len(full_deviations)
+        # 半角連続のspacing変動は全角の概ね半分程度になる
+        assert avg_half_dev < avg_full_dev * 0.75
+
+    def test_halfwidth_after_fullwidth_no_reduction(self):
+        """全角→半角の遷移ではspacing減衰しない。"""
+        ts_plain = Typesetter(PageConfig(), font_size=6.0)
+        ts_aug = self._make_typesetter(seed=42)
+
+        pages_aug = ts_aug.typeset("あa")
+        p = pages_aug[0]
+        # 全角→半角の遷移: 減衰なしなのでaugmentationフル適用
+        # （減衰が適用されないことのテスト — 厳密な値ではなくフル適用を確認）
+        actual_w = p[1].x - p[0].x
+        # augmentなしの幅
+        pages_plain = ts_plain.typeset("あa")
+        pp = pages_plain[0]
+        plain_w = pp[1].x - pp[0].x
+        # augmentありで値が変動している（減衰なし=フルaugment）
+        # NOTE: seed次第で偶然一致する可能性はあるが、spacing_variation=1.0なら非常に低い
+        assert actual_w != pytest.approx(plain_w, abs=0.01)
+
+
+class TestCharSizeScale:
+    """文字種別サイズスケールのテスト。"""
+
+    def test_kanji_scale_is_1(self):
+        from src.layout.typesetter import _char_size_scale
+        assert _char_size_scale("漢") == 1.0
+        assert _char_size_scale("字") == 1.0
+
+    def test_hiragana_scale(self):
+        from src.layout.typesetter import _char_size_scale
+        assert _char_size_scale("あ") == 0.88
+        assert _char_size_scale("ん") == 0.88
+
+    def test_katakana_scale(self):
+        from src.layout.typesetter import _char_size_scale
+        assert _char_size_scale("ア") == 0.88
+        assert _char_size_scale("ン") == 0.88
+
+    def test_small_kana_scale(self):
+        from src.layout.typesetter import _char_size_scale
+        assert _char_size_scale("っ") == 0.55
+        assert _char_size_scale("ょ") == 0.55
+        assert _char_size_scale("ッ") == 0.55
+        assert _char_size_scale("ャ") == 0.55
+
+    def test_halfwidth_scale(self):
+        from src.layout.typesetter import _char_size_scale
+        assert _char_size_scale("a") == 0.6
+        assert _char_size_scale("1") == 0.6
+
+    def test_typeset_hiragana_smaller_than_kanji(self):
+        """組版時、ひらがなは漢字より小さいfont_sizeで配置される。"""
+        from src.layout.page_layout import PageConfig
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("漢あ")
+        placements = pages[0]
+        assert placements[0].font_size > placements[1].font_size
+        assert placements[0].font_size == pytest.approx(7.0)
+        assert placements[1].font_size == pytest.approx(7.0 * 0.88)
+
+    def test_typeset_small_kana_smallest(self):
+        """小書き文字は最小のfont_sizeで配置される。"""
+        from src.layout.page_layout import PageConfig
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("漢っ")
+        placements = pages[0]
+        assert placements[1].font_size == pytest.approx(7.0 * 0.55)
+
+    def test_typeset_with_augmenter_applies_scale(self):
+        """augmenter有効時もスケールが適用される。"""
+        from src.layout.page_layout import PageConfig
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+        aug = HandwritingAugmenter(AugmentConfig(), seed=42)
+        ts = Typesetter(PageConfig(), font_size=7.0, augmenter=aug)
+        pages = ts.typeset("漢あ")
+        placements = pages[0]
+        assert placements[1].font_size < placements[0].font_size

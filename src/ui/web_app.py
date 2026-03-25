@@ -137,7 +137,7 @@ class PlotterPipeline:
             char_strokes = self._generate_char_strokes(p)
 
             if prev_end_x is not None and augmenter is not None and has_real_renderer and char_strokes:
-                shift = augmenter.random_uniform(0, 0.2)
+                shift = augmenter.random_uniform(0, 0.1)
                 char_strokes = [s - np.array([shift, 0.0]) for s in char_strokes]
 
             if char_strokes:

@@ -6,6 +6,23 @@ from typing import TYPE_CHECKING
 from src.layout.line_breaking import break_lines, break_paragraph, is_halfwidth
 from src.layout.page_layout import PageConfig, PageLayout
 
+_SMALL_KANA = set('っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ')
+
+
+def _char_size_scale(ch: str) -> float:
+    """文字種別に応じたサイズスケールを返す。"""
+    cp = ord(ch)
+    if ch in _SMALL_KANA:
+        return 0.55
+    if 0x3040 <= cp <= 0x309F:
+        return 0.88
+    if 0x30A0 <= cp <= 0x30FF:
+        return 0.88
+    if is_halfwidth(ch):
+        return 0.6
+    return 1.0
+
+
 if TYPE_CHECKING:
     from src.model.augmentation import HandwritingAugmenter
 
@@ -83,25 +100,36 @@ class Typesetter:
                 line_y = y
                 density_scale = 1.0
 
+            prev_halfwidth = False
             for ch in line_text:
                 if ch == "\n":
                     continue
 
+                cur_halfwidth = is_halfwidth(ch)
+
+                scale = _char_size_scale(ch)
+                char_font_size = self.font_size * scale
+
                 if self._augmenter is not None:
                     aug_x, _, aug_size = self._augmenter.augment_char_placement(
-                        x, y, self.font_size
+                        x, y, char_font_size
                     )
-                    aug_x = x + (aug_x - x) * density_scale
-                    char_width = aug_size * 0.6 if is_halfwidth(ch) else aug_size
+                    spacing_factor = density_scale
+                    if prev_halfwidth and cur_halfwidth:
+                        spacing_factor *= 0.5
+                    aug_x = x + (aug_x - x) * spacing_factor
+                    char_width = aug_size
                     char_width *= density_scale
                     current_page.append(CharPlacement(
                         char=ch, x=aug_x, y=line_y, font_size=aug_size, page=page_idx,
                     ))
                 else:
-                    char_width = self.font_size * 0.6 if is_halfwidth(ch) else self.font_size
+                    char_width = char_font_size
                     current_page.append(CharPlacement(
-                        char=ch, x=x, y=y, font_size=self.font_size, page=page_idx,
+                        char=ch, x=x, y=y, font_size=char_font_size, page=page_idx,
                     ))
+
+                prev_halfwidth = cur_halfwidth
 
                 x += char_width
 

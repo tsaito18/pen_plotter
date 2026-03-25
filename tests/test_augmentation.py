@@ -24,7 +24,7 @@ class TestAugmentConfig:
         assert cfg.size_variation == 0.05
         assert cfg.slant_variation == 0.04
         assert cfg.jitter_amplitude == 0.08
-        assert cfg.spacing_variation == 0.2
+        assert cfg.spacing_variation == 0.1
         assert cfg.enabled is True
 
 

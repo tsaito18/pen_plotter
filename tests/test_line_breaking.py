@@ -1,4 +1,9 @@
-from src.layout.line_breaking import break_lines, is_line_start_prohibited, is_line_end_prohibited
+from src.layout.line_breaking import (
+    break_lines,
+    is_line_start_prohibited,
+    is_line_end_prohibited,
+    _char_width,
+)
 
 
 class TestProhibitedChars:
@@ -55,3 +60,23 @@ class TestBreakLines:
     def test_mixed_width(self):
         lines = break_lines("あab", chars_per_line=3)
         assert lines == ["あab"]
+
+    def test_halfwidth_char_width_is_0_5(self):
+        """半角文字の幅は0.5（全角の半分）。"""
+        assert _char_width("a") == 0.5
+        assert _char_width("Z") == 0.5
+        assert _char_width("0") == 0.5
+
+    def test_fullwidth_char_width_is_1(self):
+        assert _char_width("あ") == 1.0
+        assert _char_width("漢") == 1.0
+
+    def test_halfwidth_fitting_more_chars_per_line(self):
+        """半角0.5幅なら、chars_per_line=2に半角4文字が収まる。"""
+        lines = break_lines("abcd", chars_per_line=2)
+        assert lines == ["abcd"]
+
+    def test_halfwidth_overflow(self):
+        """半角0.5幅なら、chars_per_line=2に半角5文字は溢れる。"""
+        lines = break_lines("abcde", chars_per_line=2)
+        assert lines == ["abcd", "e"]
