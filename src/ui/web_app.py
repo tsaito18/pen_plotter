@@ -72,6 +72,8 @@ class PlotterPipeline:
         else:
             self._style_sample = self._load_style_from_user_strokes(user_strokes_dir)
 
+        self._user_stroke_db = self._load_user_stroke_db(user_strokes_dir)
+
         self._kanjivg_parser: KanjiVGParser | None = None
         self._kanjivg_dir: Path | None = None
         if kanjivg_dir is not None:
@@ -79,6 +81,34 @@ class PlotterPipeline:
             if d.is_dir():
                 self._kanjivg_parser = KanjiVGParser()
                 self._kanjivg_dir = d
+
+    @staticmethod
+    def _load_user_stroke_db(
+        user_strokes_dir: Path | str | None,
+    ) -> dict[str, list[list[Stroke]]]:
+        """ユーザーストロークJSONを全てロードしてDBを構築。"""
+        db: dict[str, list[list[Stroke]]] = {}
+        if user_strokes_dir is None:
+            return db
+        user_dir = Path(user_strokes_dir)
+        if not user_dir.is_dir():
+            return db
+        for char_dir in sorted(user_dir.iterdir()):
+            if not char_dir.is_dir():
+                continue
+            char = char_dir.name
+            for json_file in sorted(char_dir.glob("*.json")):
+                try:
+                    sample = StrokeSample.load(json_file)
+                    strokes = [
+                        np.array([[p.x, p.y] for p in stroke], dtype=np.float64)
+                        for stroke in sample.strokes
+                    ]
+                    db.setdefault(char, []).append(strokes)
+                except Exception:
+                    logger.warning("Failed to load user stroke: %s", json_file)
+        logger.info("Loaded user stroke DB: %d chars", len(db))
+        return db
 
     @staticmethod
     def _load_style_from_user_strokes(
@@ -167,7 +197,7 @@ class PlotterPipeline:
     }
 
     def _generate_char_strokes(self, placement: CharPlacement) -> list[Stroke]:
-        """Tier 1: ML推論 → Tier 2: KanjiVG → Tier 3: 括弧等の幾何生成 → Tier 4: 矩形。"""
+        """Tier 0: 直接ストローク → Tier 1: ML推論 → Tier 2: 句読点 → Tier 3: KanjiVG → Tier 4: 括弧 → Tier 5: 矩形。"""
         if placement.char in self._SKIP_RENDER:
             return []
 
@@ -179,6 +209,11 @@ class PlotterPipeline:
                 font_size=placement.font_size, page=placement.page,
             )
 
+        # Tier 0: ユーザー直接ストローク
+        direct = self._direct_stroke(placement.char)
+        if direct is not None:
+            return self._position_strokes(direct, placement)
+
         reference = self._load_reference_strokes(placement.char)
 
         if self._inference is not None:
@@ -189,24 +224,83 @@ class PlotterPipeline:
                     temperature=self._temperature,
                     reference_strokes=reference,
                 )
-                return self._position_strokes(raw, placement)
+                return self._apply_distortion(self._position_strokes(raw, placement))
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
 
         punct_strokes = self._simple_punct_strokes(lookup_char)
         if punct_strokes is not None:
-            return self._position_strokes(punct_strokes, placement)
+            return self._apply_distortion(self._position_strokes(punct_strokes, placement))
 
         if self._kanjivg_dir is not None:
             char_strokes = self._load_kanjivg_json(placement)
             if char_strokes is not None:
-                return self._position_strokes(char_strokes, placement)
+                return self._apply_distortion(self._position_strokes(char_strokes, placement))
 
         paren_strokes = self._simple_paren_strokes(original_char, placement)
         if paren_strokes is not None:
-            return self._position_strokes(paren_strokes, placement)
+            return self._apply_distortion(self._position_strokes(paren_strokes, placement))
 
         return self._rect_fallback(placement)
+
+    def _apply_distortion(self, strokes: list[Stroke]) -> list[Stroke]:
+        """弾性変形+手の震えを全ストロークに適用。"""
+        aug = self._typesetter.augmenter
+        if aug is None:
+            return strokes
+        strokes = [aug.elastic_distort(s) for s in strokes]
+        strokes = [aug.apply_tremor(s) for s in strokes]
+        return strokes
+
+    _NOISE_SCALE = 0.3
+
+    def _direct_stroke(self, char: str) -> list[Stroke] | None:
+        """ユーザー直接ストロークを合成して正規化(0-1)で返す。"""
+        samples = self._user_stroke_db.get(char)
+        if not samples:
+            return None
+
+        if len(samples) == 1:
+            raw_strokes = samples[0]
+        else:
+            max_stroke_count = max(len(s) for s in samples)
+            raw_strokes = []
+            for i in range(max_stroke_count):
+                candidates = [s[i] for s in samples if i < len(s)]
+                raw_strokes.append(candidates[np.random.randint(len(candidates))])
+
+        varied = self._apply_stroke_variation(raw_strokes)
+        return self._normalize_strokes_to_unit(varied)
+
+    @staticmethod
+    def _normalize_strokes_to_unit(strokes: list[Stroke]) -> list[Stroke]:
+        """iPad座標のストロークを 0-1 範囲に正規化。"""
+        all_pts = np.concatenate(strokes, axis=0)
+        mins = all_pts.min(axis=0)
+        maxs = all_pts.max(axis=0)
+        span = (maxs - mins).max()
+        if span < 1e-6:
+            return strokes
+        center = (mins + maxs) / 2
+        return [(s - center) / span + 0.5 for s in strokes]
+
+    def _apply_stroke_variation(self, strokes: list[Stroke]) -> list[Stroke]:
+        """ストロークごとの幾何バリエーション（inference.py _generate_v3 と同等）。"""
+        ns = self._NOISE_SCALE
+        result = []
+        for stroke in strokes:
+            center = stroke.mean(axis=0)
+            centered = stroke - center
+            angle = np.random.normal(0, ns * 0.15)
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            rotated = centered @ np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+            sx = 1.0 + np.random.normal(0, ns * 0.08)
+            sy = 1.0 + np.random.normal(0, ns * 0.08)
+            scaled = rotated * np.array([sx, sy])
+            dx = np.random.normal(0, ns * 0.3)
+            dy = np.random.normal(0, ns * 0.3)
+            result.append(scaled + center + np.array([dx, dy]))
+        return result
 
     def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
         """Generate normalized strokes for common punctuation (0-1 range)."""

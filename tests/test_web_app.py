@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from src.layout.typesetter import CharPlacement
+from src.model.augmentation import HandwritingAugmenter
 from src.ui.web_app import PlotterPipeline
 
 
@@ -420,17 +421,22 @@ class TestInterCharShift:
 
     def test_shift_amount_within_range(self, tmp_path):
         """シフト量が0〜0.2mmの範囲内。"""
-        pipeline = self._make_pipeline_with_two_chars(tmp_path)
-
-        # シフトなし（単独文字）の基準位置を取得
-        baseline_placement = [
-            CharPlacement(char="い", x=16.0, y=20.0, font_size=6.0)
-        ]
-        baseline_strokes = pipeline.placements_to_strokes(baseline_placement)
-        baseline_min_x = np.concatenate(baseline_strokes, axis=0)[:, 0].min()
+        from src.model.augmentation import AugmentConfig
+        _create_kanjivg_json(tmp_path, "あ", num_strokes=2, num_points=5)
+        _create_kanjivg_json(tmp_path, "い", num_strokes=2, num_points=5)
+        cfg = AugmentConfig(enabled=False)
 
         for seed in range(20):
             np.random.seed(seed)
+            pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
+            pipeline._typesetter._augmenter = HandwritingAugmenter(config=cfg)
+
+            baseline_placement = [
+                CharPlacement(char="い", x=16.0, y=20.0, font_size=6.0)
+            ]
+            baseline_strokes = pipeline.placements_to_strokes(baseline_placement)
+            baseline_min_x = np.concatenate(baseline_strokes, axis=0)[:, 0].min()
+
             pair_placements = self._make_placements("あい")
             pair_strokes = pipeline.placements_to_strokes(pair_placements)
             second_char_strokes = pair_strokes[2:]
@@ -466,8 +472,13 @@ class TestInterCharShift:
         )
 
     def test_first_char_not_shifted(self, tmp_path):
-        """最初の文字はシフトされない。"""
-        pipeline = self._make_pipeline_with_two_chars(tmp_path)
+        """最初の文字はシフトされない（distortion無効で比較）。"""
+        from src.model.augmentation import AugmentConfig
+        _create_kanjivg_json(tmp_path, "あ", num_strokes=2, num_points=5)
+        _create_kanjivg_json(tmp_path, "い", num_strokes=2, num_points=5)
+        cfg = AugmentConfig(enabled=False)
+        pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
+        pipeline._typesetter._augmenter = HandwritingAugmenter(config=cfg)
 
         single_placement = self._make_placements("あ")
         single_strokes = pipeline.placements_to_strokes(single_placement)
@@ -497,3 +508,284 @@ class TestInterCharShift:
 
         for s1, s2 in zip(strokes1, strokes2):
             np.testing.assert_array_equal(s1, s2)
+
+
+def _create_user_stroke_json(base_dir, char, strokes, suffix="001"):
+    """テスト用のユーザーストロークJSONファイルを作成。"""
+    char_dir = base_dir / char
+    char_dir.mkdir(parents=True, exist_ok=True)
+    data = {
+        "character": char,
+        "strokes": [
+            [{"x": float(p[0]), "y": float(p[1]), "pressure": 1.0, "timestamp": 0.0}
+             for p in stroke]
+            for stroke in strokes
+        ],
+        "metadata": {},
+    }
+    (char_dir / f"{char}_{suffix}.json").write_text(
+        json.dumps(data), encoding="utf-8"
+    )
+
+
+class TestUserStrokeDB:
+    """_load_user_stroke_db のテスト。"""
+
+    def test_load_multiple_chars(self, tmp_path):
+        """複数文字・複数サンプルが正しくロードされる。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "あ",
+            [[[10, 20], [30, 40], [50, 60]], [[70, 80], [90, 100]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir, "あ",
+            [[[15, 25], [35, 45], [55, 65]]],
+            suffix="002",
+        )
+        _create_user_stroke_json(
+            user_dir, "い",
+            [[[100, 200], [300, 400]]],
+            suffix="001",
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        db = pipeline._user_stroke_db
+
+        assert "あ" in db
+        assert "い" in db
+        assert len(db["あ"]) == 2  # 2サンプル
+        assert len(db["い"]) == 1  # 1サンプル
+
+        for samples in db.values():
+            for strokes in samples:
+                for stroke in strokes:
+                    assert isinstance(stroke, np.ndarray)
+                    assert stroke.ndim == 2
+                    assert stroke.shape[1] == 2
+
+    def test_empty_dir(self, tmp_path):
+        """空ディレクトリの場合、空辞書。"""
+        user_dir = tmp_path / "empty_strokes"
+        user_dir.mkdir()
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        assert pipeline._user_stroke_db == {}
+
+    def test_none_dir(self):
+        """user_strokes_dir=None の場合、空辞書。"""
+        pipeline = PlotterPipeline()
+        assert pipeline._user_stroke_db == {}
+
+    def test_stroke_coordinates_xy_only(self, tmp_path):
+        """ストロークは x, y 座標のみで (N, 2) 配列。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "う",
+            [[[10.5, 20.3], [30.1, 40.7], [50.9, 60.2]]],
+        )
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        stroke = pipeline._user_stroke_db["う"][0][0]
+        assert stroke.shape == (3, 2)
+        np.testing.assert_allclose(stroke[0], [10.5, 20.3])
+        np.testing.assert_allclose(stroke[1], [30.1, 40.7])
+
+
+class TestDirectStrokeUsage:
+    """直接ストローク使用のテスト（_generate_char_strokes 冒頭分岐）。"""
+
+    def test_direct_stroke_skips_ml_inference(self, tmp_path):
+        """_user_stroke_db に文字がある場合、ML推論が呼ばれない。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "あ",
+            [[[0, 0], [100, 0], [100, 100]], [[0, 100], [50, 50]]],
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        mock_inference = MagicMock()
+        mock_inference.generate.return_value = [np.array([[0.1, 0.2], [0.3, 0.4]])]
+        pipeline._inference = mock_inference
+        pipeline._style_sample = MagicMock()
+
+        placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=5.0)
+        strokes = pipeline._generate_char_strokes(placement)
+
+        mock_inference.generate.assert_not_called()
+        assert len(strokes) > 0
+
+    def test_single_sample_used_directly(self, tmp_path):
+        """1サンプルの場合、そのストロークがそのまま使われる。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "え",
+            [[[0, 0], [100, 0]], [[0, 100], [100, 100]]],
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="え", x=10.0, y=20.0, font_size=5.0)
+        strokes = pipeline._generate_char_strokes(placement)
+
+        assert len(strokes) == 2
+        for s in strokes:
+            assert isinstance(s, np.ndarray)
+            assert s.ndim == 2
+
+    def test_strokes_positioned_correctly(self, tmp_path):
+        """ストロークが _position_strokes() で正しく配置される。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "漢",
+            [[[0, 0], [100, 0], [100, 100], [0, 100]]],
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="漢", x=10.0, y=20.0, font_size=6.0)
+
+        np.random.seed(0)
+        strokes = pipeline._generate_char_strokes(placement)
+        all_pts = np.concatenate(strokes, axis=0)
+
+        assert all_pts[:, 0].min() >= 9.0
+        assert all_pts[:, 0].max() <= 17.0
+        assert all_pts[:, 1].min() >= 19.0
+        assert all_pts[:, 1].max() <= 29.0
+
+    def test_missing_char_falls_through(self, tmp_path):
+        """_user_stroke_db にない文字は従来通りフォールバック。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "あ",
+            [[[0, 0], [100, 100]]],
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="か", x=10.0, y=20.0, font_size=5.0)
+        strokes = pipeline._generate_char_strokes(placement)
+
+        assert len(strokes) == 1
+        assert strokes[0].shape == (5, 2)
+
+
+class TestStrokeSynthesis:
+    """ストローク合成（複数サンプルからのランダム組み合わせ）のテスト。"""
+
+    def test_synthesis_from_multiple_samples(self, tmp_path):
+        """複数サンプルがある場合、ストロークが混合される可能性がある。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "お",
+            [[[0, 0], [10, 10]], [[20, 20], [30, 30]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir, "お",
+            [[[100, 100], [110, 110]], [[120, 120], [130, 130]]],
+            suffix="002",
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+
+        results = []
+        for seed in range(50):
+            np.random.seed(seed)
+            placement = CharPlacement(char="お", x=10.0, y=20.0, font_size=5.0)
+            strokes = pipeline._generate_char_strokes(placement)
+            assert len(strokes) == 2
+            results.append(strokes)
+
+        first_concat = np.concatenate(results[0], axis=0)
+        any_different = False
+        for r in results[1:]:
+            r_concat = np.concatenate(r, axis=0)
+            if not np.allclose(first_concat, r_concat, atol=1e-6):
+                any_different = True
+                break
+        assert any_different, "全結果が同一: 合成またはバリエーションが機能していない"
+
+    def test_synthesis_stroke_count(self, tmp_path):
+        """合成後のストローク数は各サンプルの最大ストローク数。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "か",
+            [[[0, 0], [10, 10]], [[20, 20], [30, 30]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir, "か",
+            [[[0, 0], [10, 10]], [[20, 20], [30, 30]], [[40, 40], [50, 50]]],
+            suffix="002",
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="か", x=10.0, y=20.0, font_size=5.0)
+
+        np.random.seed(42)
+        strokes = pipeline._generate_char_strokes(placement)
+        assert len(strokes) == 3
+
+
+class TestDirectStrokeGeometricVariation:
+    """直接ストロークの幾何バリエーション適用テスト。"""
+
+    def test_variation_produces_different_results(self, tmp_path):
+        """同じ文字を複数回生成して結果が異なる。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "き",
+            [[[0, 0], [50, 0], [50, 50], [0, 50], [25, 75]]],
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="き", x=10.0, y=20.0, font_size=5.0)
+
+        results = []
+        for seed in range(10):
+            np.random.seed(seed)
+            strokes = pipeline._generate_char_strokes(placement)
+            results.append(np.concatenate(strokes, axis=0))
+
+        any_different = False
+        for i in range(1, len(results)):
+            if not np.allclose(results[0], results[i], atol=1e-6):
+                any_different = True
+                break
+        assert any_different
+
+    def test_variation_preserves_stroke_structure(self, tmp_path):
+        """バリエーション後もストローク数・点数は変わらない。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "く",
+            [[[0, 0], [50, 25], [100, 0]], [[10, 50], [90, 80]]],
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="く", x=10.0, y=20.0, font_size=5.0)
+
+        for seed in range(5):
+            np.random.seed(seed)
+            strokes = pipeline._generate_char_strokes(placement)
+            assert len(strokes) == 2
+            assert strokes[0].shape[0] == 3
+            assert strokes[1].shape[0] == 2
+
+    def test_variation_within_reasonable_bounds(self, tmp_path):
+        """変形が合理的な範囲内。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir, "漢",
+            [[[0, 0], [100, 0], [100, 100], [0, 100]]],
+        )
+
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="漢", x=10.0, y=20.0, font_size=6.0)
+
+        for seed in range(20):
+            np.random.seed(seed)
+            strokes = pipeline._generate_char_strokes(placement)
+            all_pts = np.concatenate(strokes, axis=0)
+            assert all_pts[:, 0].min() >= 10.0 - 3.0
+            assert all_pts[:, 0].max() <= 10.0 + 6.0 + 3.0
+            assert all_pts[:, 1].min() >= 20.0 - 3.0
+            assert all_pts[:, 1].max() <= 20.0 + 8.0 + 3.0

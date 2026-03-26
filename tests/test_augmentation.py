@@ -160,3 +160,105 @@ class TestLineDensityScale:
         aug = HandwritingAugmenter(config=cfg, seed=42)
         result = aug.get_line_density_scale()
         assert result == 1.0
+
+
+class TestElasticDistort:
+    @pytest.fixture
+    def stroke(self) -> np.ndarray:
+        return np.array(
+            [[0.0, 0.0], [1.0, 0.5], [2.0, 1.0], [3.0, 0.5], [4.0, 0.0]],
+            dtype=np.float64,
+        )
+
+    def test_preserves_shape(self, stroke: np.ndarray):
+        aug = HandwritingAugmenter(seed=42)
+        result = aug.elastic_distort(stroke)
+        assert result.shape == stroke.shape
+
+    def test_changes_coordinates(self, stroke: np.ndarray):
+        aug = HandwritingAugmenter(seed=42)
+        result = aug.elastic_distort(stroke)
+        assert not np.array_equal(result, stroke)
+
+    def test_disabled_returns_unchanged(self, stroke: np.ndarray):
+        cfg = AugmentConfig(enabled=False)
+        aug = HandwritingAugmenter(config=cfg, seed=42)
+        result = aug.elastic_distort(stroke)
+        np.testing.assert_array_equal(result, stroke)
+
+    def test_short_stroke_safe(self):
+        aug = HandwritingAugmenter(seed=42)
+        short = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float64)
+        result = aug.elastic_distort(short)
+        np.testing.assert_array_equal(result, short)
+
+    def test_single_point_safe(self):
+        aug = HandwritingAugmenter(seed=42)
+        single = np.array([[0.0, 0.0]], dtype=np.float64)
+        result = aug.elastic_distort(single)
+        np.testing.assert_array_equal(result, single)
+
+    def test_displacement_proportional_to_amplitude(self, stroke: np.ndarray):
+        aug = HandwritingAugmenter(seed=42)
+        result = aug.elastic_distort(stroke, amplitude=0.02)
+        bbox_size = max(stroke.max(axis=0) - stroke.min(axis=0))
+        max_disp = np.abs(result - stroke).max()
+        assert max_disp < 3 * 0.02 * bbox_size, (
+            f"Displacement {max_disp:.4f} exceeds 3*amplitude*bbox ({3 * 0.02 * bbox_size:.4f})"
+        )
+
+    def test_zero_size_stroke_safe(self):
+        aug = HandwritingAugmenter(seed=42)
+        zero = np.array([[1.0, 1.0], [1.0, 1.0], [1.0, 1.0]], dtype=np.float64)
+        result = aug.elastic_distort(zero)
+        np.testing.assert_array_equal(result, zero)
+
+    def test_reproducible_with_same_seed(self, stroke: np.ndarray):
+        r1 = HandwritingAugmenter(seed=99).elastic_distort(stroke)
+        r2 = HandwritingAugmenter(seed=99).elastic_distort(stroke)
+        np.testing.assert_array_equal(r1, r2)
+
+
+class TestApplyTremor:
+    @pytest.fixture
+    def stroke(self) -> np.ndarray:
+        return np.array(
+            [[0.0, 0.0], [1.0, 0.5], [2.0, 1.0], [3.0, 0.5], [4.0, 0.0]],
+            dtype=np.float64,
+        )
+
+    def test_preserves_shape(self, stroke: np.ndarray):
+        aug = HandwritingAugmenter(seed=42)
+        result = aug.apply_tremor(stroke)
+        assert result.shape == stroke.shape
+
+    def test_changes_coordinates(self, stroke: np.ndarray):
+        aug = HandwritingAugmenter(seed=42)
+        result = aug.apply_tremor(stroke)
+        assert not np.array_equal(result, stroke)
+
+    def test_disabled_returns_unchanged(self, stroke: np.ndarray):
+        cfg = AugmentConfig(enabled=False)
+        aug = HandwritingAugmenter(config=cfg, seed=42)
+        result = aug.apply_tremor(stroke)
+        np.testing.assert_array_equal(result, stroke)
+
+    def test_short_stroke_safe(self):
+        aug = HandwritingAugmenter(seed=42)
+        single = np.array([[0.0, 0.0]], dtype=np.float64)
+        result = aug.apply_tremor(single)
+        np.testing.assert_array_equal(result, single)
+
+    def test_amplitude_bounds(self, stroke: np.ndarray):
+        amp = 0.05
+        aug = HandwritingAugmenter(seed=42)
+        result = aug.apply_tremor(stroke, amplitude=amp)
+        max_disp = np.abs(result - stroke).max()
+        assert max_disp <= amp + 1e-10, (
+            f"Tremor displacement {max_disp:.6f} exceeds amplitude {amp}"
+        )
+
+    def test_reproducible_with_same_seed(self, stroke: np.ndarray):
+        r1 = HandwritingAugmenter(seed=99).apply_tremor(stroke)
+        r2 = HandwritingAugmenter(seed=99).apply_tremor(stroke)
+        np.testing.assert_array_equal(r1, r2)
