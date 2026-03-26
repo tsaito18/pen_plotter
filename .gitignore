@@ -25,3 +25,4 @@ data/report_examples/
 *.swp
 *.swo
 data/casia_raw/
+test_env/
