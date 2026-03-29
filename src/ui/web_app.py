@@ -196,8 +196,11 @@ class PlotterPipeline:
         '／': '/',
     }
 
+    # 一筆系の文字: 弾性変形・tremorを適用しない（滑らかさを保つ）
+    _SMOOTH_CHARS = set("、。，．・ー～—―()（）「」『』【】〈〉《》〔〕")
+
     def _generate_char_strokes(self, placement: CharPlacement) -> list[Stroke]:
-        """Tier 0: 直接ストローク → Tier 1: ML推論 → Tier 2: 句読点 → Tier 3: KanjiVG → Tier 4: 括弧 → Tier 5: 矩形。"""
+        """Tier 0: 句読点/括弧 → Tier 1: 直接ストローク → Tier 2: ML推論 → Tier 3: KanjiVG → Tier 4: 矩形。"""
         if placement.char in self._SKIP_RENDER:
             return []
 
@@ -209,13 +212,26 @@ class PlotterPipeline:
                 font_size=placement.font_size, page=placement.page,
             )
 
-        # Tier 0: ユーザー直接ストローク
-        direct = self._direct_stroke(placement.char)
-        if direct is not None:
-            return self._position_strokes(direct, placement)
+        is_smooth = original_char in self._SMOOTH_CHARS or lookup_char in self._SMOOTH_CHARS
+
+        # Tier 0: 句読点・括弧（一筆系は幾何生成を優先、変形なし）
+        punct_strokes = self._simple_punct_strokes(lookup_char)
+        if punct_strokes is not None:
+            return self._position_strokes(punct_strokes, placement)
+
+        paren_strokes = self._simple_paren_strokes(original_char, placement)
+        if paren_strokes is not None:
+            return self._position_strokes(paren_strokes, placement)
+
+        # Tier 1: ユーザー直接ストローク（一筆系以外）
+        if not is_smooth:
+            direct = self._direct_stroke(placement.char)
+            if direct is not None:
+                return self._apply_distortion(self._position_strokes(direct, placement))
 
         reference = self._load_reference_strokes(placement.char)
 
+        # Tier 2: ML推論
         if self._inference is not None:
             try:
                 raw = self._inference.generate(
@@ -224,22 +240,17 @@ class PlotterPipeline:
                     temperature=self._temperature,
                     reference_strokes=reference,
                 )
-                return self._apply_distortion(self._position_strokes(raw, placement))
+                positioned = self._position_strokes(raw, placement)
+                return positioned if is_smooth else self._apply_distortion(positioned)
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
 
-        punct_strokes = self._simple_punct_strokes(lookup_char)
-        if punct_strokes is not None:
-            return self._apply_distortion(self._position_strokes(punct_strokes, placement))
-
+        # Tier 3: KanjiVG
         if self._kanjivg_dir is not None:
             char_strokes = self._load_kanjivg_json(placement)
             if char_strokes is not None:
-                return self._apply_distortion(self._position_strokes(char_strokes, placement))
-
-        paren_strokes = self._simple_paren_strokes(original_char, placement)
-        if paren_strokes is not None:
-            return self._apply_distortion(self._position_strokes(paren_strokes, placement))
+                positioned = self._position_strokes(char_strokes, placement)
+                return positioned if is_smooth else self._apply_distortion(positioned)
 
         return self._rect_fallback(placement)
 
@@ -327,16 +338,16 @@ class PlotterPipeline:
             points = []
             for i in range(20):
                 t = i / 19
-                x = 0.3 * np.cos(np.pi * 0.6 * (t - 0.5))
-                y = t
+                x = 0.15 + 0.25 * np.cos(np.pi * (t - 0.5))
+                y = 0.1 + 0.8 * t
                 points.append([x, y])
             return [np.array(points)]
         elif char in (')', '）'):
             points = []
             for i in range(20):
                 t = i / 19
-                x = 1.0 - 0.3 * np.cos(np.pi * 0.6 * (t - 0.5))
-                y = t
+                x = 0.85 - 0.25 * np.cos(np.pi * (t - 0.5))
+                y = 0.1 + 0.8 * t
                 points.append([x, y])
             return [np.array(points)]
         return None
