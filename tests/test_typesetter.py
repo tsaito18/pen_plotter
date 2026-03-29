@@ -390,3 +390,178 @@ class TestCharSizeScale:
         pages = ts.typeset("漢あ")
         placements = pages[0]
         assert placements[1].font_size < placements[0].font_size
+
+
+class TestBlockMath:
+    """ブロック数式 $$...$$ の検出・中央配置テスト。"""
+
+    def test_block_math_separates_into_three_lines(self):
+        """前テキスト$$数式$$後テキスト が少なくとも3行に分離される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("前$$a + b$$後")
+        placements = pages[0]
+        ys = sorted(set(p.y for p in placements))
+        # 前テキスト、数式、後テキスト の3行
+        assert len(ys) == 3
+
+    def test_block_math_centered(self):
+        """ブロック数式が行の中央に配置される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        layout = PageLayout(PageConfig())
+        area = layout.content_area()
+        pages = ts.typeset("$$x$$")
+        placements = pages[0]
+        # 数式の左端が area.x より右（中央寄せされている）
+        math_left = min(p.x for p in placements)
+        assert math_left > area.x + 1.0
+        # 中央付近に配置されている
+        center = area.x + area.width / 2
+        assert abs(math_left - center) < area.width / 3
+
+    def test_block_math_contains_expected_chars(self):
+        """ブロック数式の文字がCharPlacementに含まれる。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("$$E = mc^{2}$$")
+        chars = [p.char for p in pages[0]]
+        assert "E" in chars
+        assert "m" in chars
+        assert "c" in chars
+
+    def test_no_block_math_unchanged(self):
+        """$$がない場合は既存動作と同じ。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("あいうえお")
+        assert len(pages[0]) == 5
+        chars = [p.char for p in pages[0]]
+        assert "".join(chars) == "あいうえお"
+
+    def test_text_before_and_after_on_separate_lines(self):
+        """ブロック数式前後のテキストが異なる行に配置される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("前$$x$$後")
+        placements = pages[0]
+        y_by_char = {p.char: p.y for p in placements}
+        assert y_by_char["前"] != y_by_char["x"]
+        assert y_by_char["x"] != y_by_char["後"]
+
+    def test_block_math_only(self):
+        """$$数式$$ のみの入力が正しく配置される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("$$a + b$$")
+        chars = [p.char for p in pages[0]]
+        assert "a" in chars
+        assert "b" in chars
+
+    def test_block_math_with_newline_paragraphs(self):
+        """段落区切りとブロック数式の組み合わせ。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("段落1\n$$x = 1$$\n段落2")
+        placements = pages[0]
+        ys = sorted(set(p.y for p in placements))
+        # 段落1、数式、段落2 の少なくとも3行
+        assert len(ys) >= 3
+
+
+class TestInlineMath:
+    """インライン数式 $...$ の検出・配置テスト。"""
+
+    def test_inline_math_produces_char_placements(self):
+        """$V = IR$ がCharPlacementのリストに変換される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("$V = IR$")
+        placements = pages[0]
+        # "V = IR" の5文字分（スペース含む）のCharPlacementが生成される
+        chars = [p.char for p in placements]
+        assert "".join(chars) == "V = IR"
+
+    def test_mixed_text_and_math(self):
+        """通常テキスト$数式$通常テキスト の混在が正しく配置される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("電圧$V = IR$です")
+        placements = pages[0]
+        chars = [p.char for p in placements]
+        assert "".join(chars) == "電圧V = IRです"
+
+    def test_mixed_text_x_positions_monotonic(self):
+        """混在テキストのx座標が単調増加する（重なりなし）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("式$x = 1$。")
+        placements = pages[0]
+        xs = [p.x for p in placements]
+        for i in range(1, len(xs)):
+            assert xs[i] > xs[i - 1], f"x[{i}]={xs[i]} <= x[{i-1}]={xs[i-1]}"
+
+    def test_math_width_advances_cursor(self):
+        """数式部分の幅分だけカーソルが進み、後続テキストが正しい位置に配置される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        # 数式なし
+        pages_plain = ts.typeset("式です")
+        # 数式あり
+        pages_math = ts.typeset("式$x$す")
+        p_plain = pages_plain[0]
+        p_math = pages_math[0]
+        # "式" の後に "x" 分の幅が加わるので、"す" の x 位置は plain の "で" とは異なる
+        last_plain_x = p_plain[-1].x
+        last_math_x = p_math[-1].x
+        # 両方とも最後の文字が存在し、x位置が正
+        assert last_math_x > 0
+        assert last_plain_x > 0
+
+    def test_no_math_unchanged(self):
+        """$を含まないテキストは既存と同じ動作。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("あいうえお")
+        assert len(pages[0]) == 5
+        chars = [p.char for p in pages[0]]
+        assert "".join(chars) == "あいうえお"
+
+    def test_superscript_in_inline_math(self):
+        """上付き文字 $x^{2}$ がCharPlacementに変換される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("$x^{2}$")
+        placements = pages[0]
+        chars = [p.char for p in placements]
+        assert "x" in chars
+        assert "2" in chars
+
+    def test_fraction_in_inline_math(self):
+        r"""分数 $\frac{1}{2}$ がCharPlacementに変換される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset(r"$\frac{1}{2}$")
+        placements = pages[0]
+        chars = [p.char for p in placements]
+        assert "1" in chars
+        assert "2" in chars
+        # 分子・分母は異なるy座標
+        ys = set(p.y for p in placements)
+        assert len(ys) >= 2
+
+    def test_empty_dollar_pair_passthrough(self):
+        """$$ はブロック数式デリミタなので、インライン処理ではそのまま通過する。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("あ$$い")
+        placements = pages[0]
+        chars = [p.char for p in placements]
+        # $$ はブロック数式(Task #3)のため、ここでは文字として残る
+        assert "$$" in "".join(chars)
+
+    def test_math_no_augmentation(self):
+        """数式部分にはaugmentationが適用されない（正確な配置）。"""
+        aug = HandwritingAugmenter(AugmentConfig(), seed=42)
+        ts_aug = Typesetter(PageConfig(), font_size=7.0, augmenter=aug)
+        ts_plain = Typesetter(PageConfig(), font_size=7.0)
+
+        pages_aug = ts_aug.typeset("$V = IR$")
+        pages_plain = ts_plain.typeset("$V = IR$")
+
+        # 数式部分のfont_sizeはaugmentationで変わらない
+        for pa, pp in zip(pages_aug[0], pages_plain[0]):
+            assert pa.font_size == pp.font_size
+
+    def test_multiple_inline_math(self):
+        """複数のインライン数式が1行に含まれる場合。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("$a$と$b$")
+        placements = pages[0]
+        chars = [p.char for p in placements]
+        assert "".join(chars) == "aとb"

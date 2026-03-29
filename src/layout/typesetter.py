@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.layout.line_breaking import break_lines, break_paragraph, is_halfwidth
+from src.layout.line_breaking import break_paragraph, is_halfwidth
+from src.layout.math_layout import (
+    MathLayoutEngine,
+    MathParser,
+    MathPlacement,
+    _CHAR_WIDTH_RATIO,
+)
 from src.layout.page_layout import PageConfig, PageLayout
 
 _SMALL_KANA = set('っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ')
@@ -26,6 +33,30 @@ def _char_size_scale(ch: str) -> float:
     return 1.0
 
 
+_INLINE_MATH_RE = re.compile(r'(?<!\$)\$(?!\$)(.*?)\$')
+_BLOCK_MATH_RE = re.compile(r'\$\$(.*?)\$\$')
+
+
+def _split_segments(text: str) -> list[tuple[str, str]]:
+    """テキストを通常テキストと数式セグメントに分割する。
+
+    Returns:
+        [("text", "通常テキスト"), ("math", "V = IR"), ...] の形式
+    """
+    segments: list[tuple[str, str]] = []
+    last_end = 0
+    for m in _INLINE_MATH_RE.finditer(text):
+        if m.start() > last_end:
+            segments.append(("text", text[last_end:m.start()]))
+        math_content = m.group(1)
+        if math_content:
+            segments.append(("math", math_content))
+        last_end = m.end()
+    if last_end < len(text):
+        segments.append(("text", text[last_end:]))
+    return segments
+
+
 if TYPE_CHECKING:
     from src.model.augmentation import HandwritingAugmenter
 
@@ -37,6 +68,7 @@ class CharPlacement:
     y: float
     font_size: float
     page: int = 0
+    role: str | None = None
 
 
 class Typesetter:
@@ -65,15 +97,35 @@ class Typesetter:
         chars_per_line = int(area.width / self.font_size)
 
         # 段落ごとに改行し、段落先頭行のインデックスを記録
+        # block_math_lines: ブロック数式として中央配置する行のインデックス→数式ソース
         paragraphs = text.split("\n")
         lines: list[str] = []
         para_start_indices: set[int] = set()
+        block_math_lines: dict[int, str] = {}
+
         for para in paragraphs:
             para_start_indices.add(len(lines))
             if not para:
                 lines.append("")
-            else:
-                lines.extend(break_paragraph(para, chars_per_line))
+                continue
+
+            # $$...$$ でブロック数式を分割
+            parts = _BLOCK_MATH_RE.split(para)
+            for part_idx, part in enumerate(parts):
+                if part_idx % 2 == 1:
+                    # ブロック数式
+                    if part.strip():
+                        block_math_lines[len(lines)] = part.strip()
+                        lines.append("")  # プレースホルダ
+                else:
+                    # 通常テキスト
+                    if not part:
+                        continue
+                    stripped = _INLINE_MATH_RE.sub(
+                        lambda m: m.group(1).replace(' ', '\x00'), part
+                    )
+                    broken = break_paragraph(stripped, chars_per_line)
+                    lines.extend(self._rebuild_lines_with_math(part, broken))
 
         pages: list[list[CharPlacement]] = []
         current_page: list[CharPlacement] = []
@@ -88,6 +140,15 @@ class Typesetter:
                 line_idx = 0
 
             y = line_positions[line_idx]
+
+            # ブロック数式行: 中央配置
+            if global_line_idx in block_math_lines:
+                self._place_block_math(
+                    block_math_lines[global_line_idx], y, area, page_idx, current_page
+                )
+                line_idx += 1
+                continue
+
             x = area.x
             is_page_first_line = (line_idx == 0)
             if global_line_idx in para_start_indices and not is_page_first_line:
@@ -103,40 +164,164 @@ class Typesetter:
                 line_y = y
                 density_scale = 1.0
 
+            segments = _split_segments(line_text)
+
             prev_halfwidth = False
-            for ch in line_text:
-                if ch == "\n":
-                    continue
-
-                cur_halfwidth = is_halfwidth(ch)
-
-                scale = _char_size_scale(ch)
-                char_font_size = self.font_size * scale
-
-                if self._augmenter is not None:
-                    aug_x, _, aug_size = self._augmenter.augment_char_placement(
-                        x, y, char_font_size
+            for seg_type, seg_content in segments:
+                if seg_type == "math":
+                    x = self._place_math(
+                        seg_content, x, y, page_idx, current_page
                     )
-                    spacing_factor = density_scale
-                    if prev_halfwidth and cur_halfwidth:
-                        spacing_factor *= 0.5
-                    aug_x = x + (aug_x - x) * spacing_factor
-                    char_width = aug_size
-                    char_width *= density_scale
-                    current_page.append(CharPlacement(
-                        char=ch, x=aug_x, y=line_y, font_size=aug_size, page=page_idx,
-                    ))
+                    prev_halfwidth = False
                 else:
-                    char_width = char_font_size
-                    current_page.append(CharPlacement(
-                        char=ch, x=x, y=y, font_size=char_font_size, page=page_idx,
-                    ))
+                    for ch in seg_content:
+                        if ch == "\n":
+                            continue
 
-                prev_halfwidth = cur_halfwidth
+                        cur_halfwidth = is_halfwidth(ch)
+                        scale = _char_size_scale(ch)
+                        char_font_size = self.font_size * scale
 
-                x += char_width
+                        if self._augmenter is not None:
+                            aug_x, _, aug_size = self._augmenter.augment_char_placement(
+                                x, y, char_font_size
+                            )
+                            spacing_factor = density_scale
+                            if prev_halfwidth and cur_halfwidth:
+                                spacing_factor *= 0.5
+                            aug_x = x + (aug_x - x) * spacing_factor
+                            char_width = aug_size
+                            char_width *= density_scale
+                            current_page.append(CharPlacement(
+                                char=ch, x=aug_x, y=line_y, font_size=aug_size, page=page_idx,
+                            ))
+                        else:
+                            char_width = char_font_size
+                            current_page.append(CharPlacement(
+                                char=ch, x=x, y=y, font_size=char_font_size, page=page_idx,
+                            ))
+
+                        prev_halfwidth = cur_halfwidth
+                        x += char_width
 
             line_idx += 1
 
         pages.append(current_page)
         return pages
+
+    def _place_block_math(
+        self,
+        math_src: str,
+        y: float,
+        area: object,
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> None:
+        """ブロック数式を行の中央に配置する。"""
+        elements = MathParser.parse(math_src)
+        # x=0 で仮レイアウトして幅を測定
+        temp = MathLayoutEngine.layout(elements, x=0, y=y, font_size=self.font_size)
+        math_width = MathLayoutEngine.total_width(temp) if temp else 0.0
+        center_x = area.x + (area.width - math_width) / 2
+        placements = MathLayoutEngine.layout(
+            elements, x=center_x, y=y, font_size=self.font_size
+        )
+        self._convert_math_placements(placements, page_idx, output)
+
+    def _place_math(
+        self,
+        math_src: str,
+        x: float,
+        y: float,
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> float:
+        """数式をパース・レイアウトしてCharPlacementに変換する。xの次の位置を返す。"""
+        elements = MathParser.parse(math_src)
+        placements = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
+        self._convert_math_placements(placements, page_idx, output)
+        total_w = MathLayoutEngine.total_width(placements) if placements else 0.0
+        return x + total_w
+
+    @staticmethod
+    def _convert_math_placements(
+        placements: list[MathPlacement],
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> None:
+        """MathPlacement リストを CharPlacement に変換して output に追加。"""
+        for mp in placements:
+            if len(mp.text) == 1:
+                output.append(CharPlacement(
+                    char=mp.text, x=mp.x, y=mp.y,
+                    font_size=mp.font_size, page=page_idx,
+                    role=mp.role,
+                ))
+            else:
+                for i, ch in enumerate(mp.text):
+                    role = mp.role if i == 0 else None
+                    output.append(CharPlacement(
+                        char=ch,
+                        x=mp.x + i * mp.font_size * _CHAR_WIDTH_RATIO,
+                        y=mp.y,
+                        font_size=mp.font_size,
+                        page=page_idx,
+                        role=role,
+                    ))
+
+    @staticmethod
+    def _rebuild_lines_with_math(
+        original: str, broken_lines: list[str]
+    ) -> list[str]:
+        """break_paragraphの結果を元テキスト（$付き）に復元する。
+
+        break_paragraphには$を除去・スペース→\\x00変換したテキストを渡している。
+        broken_linesの各行の文字数を使って、元テキストから対応部分を切り出す。
+        """
+        segments = _split_segments(original)
+        # 元テキストをフラットな文字列として、$なしの文字列を作る
+        flat_no_dollar: list[str] = []
+        # 各位置が元テキストのどのセグメントに属するかマッピング
+        char_to_segment: list[tuple[int, int]] = []  # (seg_idx, char_idx_in_seg)
+        for seg_idx, (seg_type, seg_content) in enumerate(segments):
+            if seg_type == "math":
+                content_no_space = seg_content.replace(' ', '\x00')
+                for ci, ch in enumerate(content_no_space):
+                    flat_no_dollar.append(ch)
+                    char_to_segment.append((seg_idx, ci))
+            else:
+                for ci, ch in enumerate(seg_content):
+                    flat_no_dollar.append(ch)
+                    char_to_segment.append((seg_idx, ci))
+
+        # broken_linesの各行の文字数に基づいて元テキストを切り出す
+        result: list[str] = []
+        offset = 0
+        for bline in broken_lines:
+            line_len = len(bline)
+            # この行に含まれるセグメントを再構築
+            line_parts: list[str] = []
+            in_math_seg: int | None = None
+            math_chars: list[str] = []
+            for i in range(offset, min(offset + line_len, len(char_to_segment))):
+                seg_idx, ci = char_to_segment[i]
+                seg_type, seg_content = segments[seg_idx]
+                if seg_type == "math":
+                    if in_math_seg != seg_idx:
+                        if in_math_seg is not None:
+                            line_parts.append("$" + "".join(math_chars) + "$")
+                            math_chars = []
+                        in_math_seg = seg_idx
+                    math_chars.append(seg_content[ci] if ci < len(seg_content) else '')
+                else:
+                    if in_math_seg is not None:
+                        line_parts.append("$" + "".join(math_chars) + "$")
+                        math_chars = []
+                        in_math_seg = None
+                    line_parts.append(seg_content[ci] if ci < len(seg_content) else '')
+            if in_math_seg is not None:
+                line_parts.append("$" + "".join(math_chars) + "$")
+            result.append("".join(line_parts))
+            offset += line_len
+
+        return result if result else [""]

@@ -163,7 +163,7 @@ class PlotterPipeline:
         augmenter = self._typesetter.augmenter
         has_real_renderer = self._inference is not None or self._kanjivg_dir is not None
 
-        for p in placements:
+        for i, p in enumerate(placements):
             char_strokes = self._generate_char_strokes(p)
 
             if prev_end_x is not None and augmenter is not None and has_real_renderer and char_strokes:
@@ -175,6 +175,21 @@ class PlotterPipeline:
                 prev_end_x = last_stroke[-1, 0]
 
             strokes.extend(char_strokes)
+
+            if getattr(p, 'role', None) == "numerator":
+                next_denom = None
+                for j in range(i + 1, len(placements)):
+                    if getattr(placements[j], 'role', None) == "denominator":
+                        next_denom = placements[j]
+                        break
+                if next_denom is not None:
+                    line_x0 = min(p.x, next_denom.x) - p.font_size * 0.1
+                    line_x1 = max(
+                        p.x + p.font_size, next_denom.x + next_denom.font_size
+                    ) + p.font_size * 0.1
+                    line_y = (p.y + next_denom.y) / 2
+                    strokes.append(np.array([[line_x0, line_y], [line_x1, line_y]]))
+
         return strokes
 
     _SKIP_RENDER = set(" \t　")
@@ -234,7 +249,7 @@ class PlotterPipeline:
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
 
-        # Tier 3: 句読点・括弧の幾何生成
+        # Tier 3: 句読点・括弧・数式記号の幾何生成
         punct_strokes = self._simple_punct_strokes(lookup_char)
         if punct_strokes is not None:
             return self._position_strokes(punct_strokes, placement)
@@ -242,6 +257,10 @@ class PlotterPipeline:
         paren_strokes = self._simple_paren_strokes(original_char, placement)
         if paren_strokes is not None:
             return self._position_strokes(paren_strokes, placement)
+
+        math_strokes = self._math_symbol_strokes(lookup_char)
+        if math_strokes is not None:
+            return self._position_strokes(math_strokes, placement)
 
         # Tier 4: KanjiVG
         if self._kanjivg_dir is not None:
@@ -315,6 +334,56 @@ class PlotterPipeline:
             dy = np.random.normal(0, ns * 0.3)
             result.append(scaled + center + np.array([dx, dy]))
         return result
+
+    def _math_symbol_strokes(self, char: str) -> list[Stroke] | None:
+        """Generate normalized strokes for math symbols and Greek letters (0-1 range)."""
+        if char == "ω":
+            t = np.linspace(0, 1, 30)
+            x = t
+            y = 0.3 + 0.3 * np.abs(np.sin(2 * np.pi * t))
+            return [np.stack([x, y], axis=1)]
+        elif char == "φ":
+            angles = np.linspace(0, 2 * np.pi, 24)
+            r = 0.3
+            circle = np.stack([0.5 + r * np.cos(angles), 0.55 + r * np.sin(angles)], axis=1)
+            stem = np.array([[0.5, 0.1], [0.5, 0.9]])
+            return [circle, stem]
+        elif char == "π":
+            top = np.array([[0.15, 0.25], [0.85, 0.25]])
+            left_leg = np.array([[0.35, 0.25], [0.30, 0.85]])
+            right_leg = np.array([[0.65, 0.25], [0.70, 0.85]])
+            return [top, left_leg, right_leg]
+        elif char == "θ":
+            angles = np.linspace(0, 2 * np.pi, 24)
+            rx, ry = 0.3, 0.4
+            ellipse = np.stack([0.5 + rx * np.cos(angles), 0.5 + ry * np.sin(angles)], axis=1)
+            bar = np.array([[0.2, 0.5], [0.8, 0.5]])
+            return [ellipse, bar]
+        elif char == "α":
+            t = np.linspace(0, 2 * np.pi, 30)
+            x = 0.5 + 0.3 * np.cos(t) - 0.1 * np.sin(2 * t)
+            y = 0.5 + 0.35 * np.sin(t)
+            return [np.stack([x, y], axis=1)]
+        elif char == "Δ":
+            triangle = np.array([[0.5, 0.1], [0.1, 0.9], [0.9, 0.9], [0.5, 0.1]])
+            return [triangle]
+        elif char == "±":
+            h_top = np.array([[0.15, 0.2], [0.85, 0.2]])
+            h_mid = np.array([[0.15, 0.5], [0.85, 0.5]])
+            v_mid = np.array([[0.5, 0.2], [0.5, 0.8]])
+            return [h_top, h_mid, v_mid]
+        elif char == "≈":
+            t = np.linspace(0, 2 * np.pi, 20)
+            x = np.linspace(0.1, 0.9, 20)
+            wave1 = np.stack([x, 0.35 + 0.08 * np.sin(t)], axis=1)
+            wave2 = np.stack([x, 0.65 + 0.08 * np.sin(t)], axis=1)
+            return [wave1, wave2]
+        elif char == "∞":
+            t = np.linspace(0, 2 * np.pi, 40)
+            x = 0.5 + 0.35 * np.cos(t) / (1 + np.sin(t) ** 2)
+            y = 0.5 + 0.25 * np.sin(t) * np.cos(t) / (1 + np.sin(t) ** 2)
+            return [np.stack([x, y], axis=1)]
+        return None
 
     def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
         """Generate normalized strokes for common punctuation (0-1 range)."""

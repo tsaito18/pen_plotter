@@ -789,3 +789,115 @@ class TestDirectStrokeGeometricVariation:
             assert all_pts[:, 0].max() <= 10.0 + 6.0 + 3.0
             assert all_pts[:, 1].min() >= 20.0 - 3.0
             assert all_pts[:, 1].max() <= 20.0 + 8.0 + 3.0
+
+
+class TestMathSymbolStrokes:
+    """_math_symbol_strokes() のテスト。"""
+
+    @pytest.fixture
+    def pipeline(self):
+        return PlotterPipeline()
+
+    @pytest.mark.parametrize("char", ["ω", "φ", "π", "θ", "α", "Δ"])
+    def test_greek_letters_return_strokes(self, pipeline, char):
+        """各ギリシャ文字がストロークを返す。"""
+        result = pipeline._math_symbol_strokes(char)
+        assert result is not None
+        assert len(result) >= 1
+        for s in result:
+            assert isinstance(s, np.ndarray)
+            assert s.ndim == 2
+            assert s.shape[1] == 2
+
+    @pytest.mark.parametrize("char", ["±", "≈", "∞"])
+    def test_math_symbols_return_strokes(self, pipeline, char):
+        """各数学記号がストロークを返す。"""
+        result = pipeline._math_symbol_strokes(char)
+        assert result is not None
+        assert len(result) >= 1
+        for s in result:
+            assert isinstance(s, np.ndarray)
+            assert s.ndim == 2
+            assert s.shape[1] == 2
+
+    def test_unsupported_char_returns_none(self, pipeline):
+        """未対応の文字はNoneを返す。"""
+        assert pipeline._math_symbol_strokes("あ") is None
+        assert pipeline._math_symbol_strokes("A") is None
+
+    @pytest.mark.parametrize("char", ["ω", "φ", "π", "θ", "α", "Δ", "±", "≈", "∞"])
+    def test_strokes_in_unit_range(self, pipeline, char):
+        """全ストロークの座標が0-1範囲内。"""
+        result = pipeline._math_symbol_strokes(char)
+        assert result is not None
+        all_pts = np.concatenate(result, axis=0)
+        assert all_pts.min() >= -0.05
+        assert all_pts.max() <= 1.05
+
+    def test_math_symbol_used_in_fallback_chain(self):
+        """_generate_char_strokes() でKanjiVGの前に数式記号が使われる。"""
+        pipeline = PlotterPipeline()
+        placement = CharPlacement(char="π", x=10.0, y=20.0, font_size=6.0)
+        strokes = pipeline._generate_char_strokes(placement)
+        assert len(strokes) >= 1
+        # 矩形(5点閉)ではない
+        assert not (len(strokes) == 1 and strokes[0].shape == (5, 2))
+
+
+class TestCharPlacementRole:
+    """CharPlacement.role フィールドのテスト。"""
+
+    def test_default_role_is_none(self):
+        p = CharPlacement(char="x", x=0.0, y=0.0, font_size=6.0)
+        assert p.role is None
+
+    def test_role_can_be_set(self):
+        p = CharPlacement(char="1", x=0.0, y=0.0, font_size=4.0, role="numerator")
+        assert p.role == "numerator"
+
+    def test_place_math_copies_role(self):
+        """_place_math() が MathPlacement.role を CharPlacement.role にコピーする。"""
+        from src.layout.typesetter import Typesetter
+        from src.layout.page_layout import PageConfig
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        output: list[CharPlacement] = []
+        ts._place_math(r"\frac{a}{b}", 0.0, 0.0, 0, output)
+        roles = [p.role for p in output]
+        assert "numerator" in roles
+        assert "denominator" in roles
+
+
+class TestFractionLine:
+    """分数線（水平線）のテスト。"""
+
+    def test_fraction_line_inserted(self):
+        """role=numerator の直後に水平線ストロークが挿入される。"""
+        pipeline = PlotterPipeline()
+        placements = [
+            CharPlacement(char="1", x=10.0, y=15.0, font_size=4.0, role="numerator"),
+            CharPlacement(char="2", x=10.0, y=25.0, font_size=4.0, role="denominator"),
+        ]
+        strokes = pipeline.placements_to_strokes(placements)
+        # 分数線が追加されているはず
+        # "1" の矩形(5点) + 分数線(2点) + "2" の矩形(5点)
+        has_horizontal_line = False
+        for s in strokes:
+            if s.shape[0] == 2:
+                dy = abs(s[1, 1] - s[0, 1])
+                dx = abs(s[1, 0] - s[0, 0])
+                if dx > 0.5 and dy < 0.5:
+                    has_horizontal_line = True
+                    break
+        assert has_horizontal_line, "分数線が見つからない"
+
+    def test_no_fraction_line_without_role(self):
+        """role=None の場合は分数線なし。"""
+        pipeline = PlotterPipeline()
+        placements = [
+            CharPlacement(char="1", x=10.0, y=20.0, font_size=6.0),
+            CharPlacement(char="2", x=16.0, y=20.0, font_size=6.0),
+        ]
+        strokes = pipeline.placements_to_strokes(placements)
+        # 矩形のみ（各5点）
+        for s in strokes:
+            assert s.shape[0] != 2 or abs(s[1, 0] - s[0, 0]) < 0.5
