@@ -136,8 +136,10 @@ class TestProcessImage:
         assert (tmp_path / "A").exists()
         assert (tmp_path / "B").exists()
         assert (tmp_path / "C").exists()
-        # 2行目はスキップ（セル数2 != 文字数3）
-        assert not (tmp_path / "D").exists()
+        # 2行目はセル数2 < 文字数3なので、2文字まで処理される
+        assert (tmp_path / "D").exists()
+        assert (tmp_path / "E").exists()
+        assert not (tmp_path / "F").exists()
 
     def test_start_end_line(self, tmp_path):
         """start_line/end_lineで処理行を制限。"""

@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="スキャン画像から手書き文字ストロークを取り込む")
     parser.add_argument("--image", type=Path, required=True, help="入力画像パス")
-    parser.add_argument("--text", type=str, required=True, help="画像内のテキスト内容")
+    parser.add_argument("--text", type=str, default=None, help="画像内のテキスト内容（省略時は--autoが必要）")
+    parser.add_argument("--auto", action="store_true", help="OCRで自動テキスト認識")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -102,16 +103,24 @@ def process_image(
         line_chars = build_char_list(text_lines[line_idx])
 
         if len(row_cells) != len(line_chars):
+            # セル数と文字数が合わない場合、短い方に合わせて処理
+            n = min(len(row_cells), len(line_chars))
+            if n == 0:
+                continue
             logger.warning(
-                "行 %d: セル数(%d) != 文字数(%d)、スキップ",
+                "行 %d: セル数(%d) != 文字数(%d)、%d文字まで処理",
                 line_idx,
                 len(row_cells),
                 len(line_chars),
+                n,
             )
-            continue
+            row_cells = row_cells[:n]
+            line_chars = line_chars[:n]
 
         for char_idx, (cell_img, char) in enumerate(zip(row_cells, line_chars)):
             strokes = importer.image_to_strokes(cell_img)
+            if not strokes:
+                continue
             save_stroke_sample(char, strokes, output_dir)
             total_saved += 1
             print(
@@ -134,24 +143,39 @@ def main() -> None:
         print(f"エラー: 画像ファイルが見つかりません: {args.image}")
         sys.exit(1)
 
+    if not args.text and not args.auto:
+        print("エラー: --text または --auto を指定してください")
+        sys.exit(1)
+
     try:
         from src.collector.scan_import import ScanImporter
     except ImportError:
         print("エラー: src/collector/scan_import.py が見つかりません。")
-        print("impl-scan チームによる ScanImporter の実装を待ってください。")
         sys.exit(1)
 
     importer = ScanImporter()
 
-    all_chars = build_char_list(args.text)
-    raw_lines = args.text.split("\n")
-    text_lines = [line for line in raw_lines if line.strip()]
+    if args.auto:
+        print(f"画像: {args.image}")
+        print("OCR実行中...")
+        ocr_lines = importer.ocr_all_lines(args.image)
+        text_lines = [line for line in ocr_lines if line.strip()]
+        all_chars = []
+        for line in text_lines:
+            all_chars.extend(build_char_list(line))
+        print(f"OCR結果: {len(text_lines)}行, {len(all_chars)}文字")
+        for i, line in enumerate(text_lines):
+            print(f"  行{i}: {line}")
+        print()
+    else:
+        all_chars = build_char_list(args.text)
+        raw_lines = args.text.split("\n")
+        text_lines = [line for line in raw_lines if line.strip()]
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"画像: {args.image}")
-    print(f"テキスト文字数: {len(all_chars)}")
     print(f"出力先: {args.output_dir}")
+    print(f"テキスト文字数: {len(all_chars)}")
     print()
 
     saved = process_image(

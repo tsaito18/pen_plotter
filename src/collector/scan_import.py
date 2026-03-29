@@ -259,3 +259,28 @@ class ScanImporter:
         # (y, x) → (x, y) に変換
         points = np.array([[x, y] for y, x in order], dtype=float)
         return points
+
+    def ocr_line(self, gray: np.ndarray, y_top: int, y_bottom: int) -> str:
+        """1行分の画像をOCRしてテキストを返す。"""
+        if not hasattr(self, "_ocr_reader"):
+            import easyocr
+
+            self._ocr_reader = easyocr.Reader(["ja"], gpu=False, verbose=False)
+        line_img = gray[y_top:y_bottom, :]
+        if line_img.size == 0:
+            return ""
+        results = self._ocr_reader.readtext(line_img, detail=0, paragraph=True)
+        return "".join(results).strip() if results else ""
+
+    def ocr_all_lines(self, image_path: Path) -> list[str]:
+        """画像の全行をOCRしてテキストリストを返す。"""
+        gray = self.load_image(image_path)
+        gray = self.deskew(gray)
+        lines = self.detect_lines(gray)
+        if len(lines) < 2:
+            return []
+        result: list[str] = []
+        for i in range(len(lines) - 1):
+            text = self.ocr_line(gray, lines[i], lines[i + 1])
+            result.append(text)
+        return result
