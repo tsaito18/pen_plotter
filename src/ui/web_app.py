@@ -180,8 +180,6 @@ class PlotterPipeline:
     _SKIP_RENDER = set(" \t　")
 
     _CHAR_SUBSTITUTIONS: dict[str, str] = {
-        '（': '(',
-        '）': ')',
         '｛': '{',
         '｝': '}',
         '［': '[',

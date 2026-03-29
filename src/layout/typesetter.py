@@ -7,6 +7,7 @@ from src.layout.line_breaking import break_lines, break_paragraph, is_halfwidth
 from src.layout.page_layout import PageConfig, PageLayout
 
 _SMALL_KANA = set('っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ')
+_SMALL_PUNCT = set('・、。，．')
 
 
 def _char_size_scale(ch: str) -> float:
@@ -14,6 +15,8 @@ def _char_size_scale(ch: str) -> float:
     cp = ord(ch)
     if ch in _SMALL_KANA:
         return 0.55
+    if ch in _SMALL_PUNCT:
+        return 0.35
     if 0x3040 <= cp <= 0x309F:
         return 0.88
     if 0x30A0 <= cp <= 0x30FF:
