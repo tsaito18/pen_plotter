@@ -214,20 +214,11 @@ class PlotterPipeline:
 
         is_smooth = original_char in self._SMOOTH_CHARS or lookup_char in self._SMOOTH_CHARS
 
-        # Tier 0: 句読点・括弧（一筆系は幾何生成を優先、変形なし）
-        punct_strokes = self._simple_punct_strokes(lookup_char)
-        if punct_strokes is not None:
-            return self._position_strokes(punct_strokes, placement)
-
-        paren_strokes = self._simple_paren_strokes(original_char, placement)
-        if paren_strokes is not None:
-            return self._position_strokes(paren_strokes, placement)
-
-        # Tier 1: ユーザー直接ストローク（一筆系以外）
-        if not is_smooth:
-            direct = self._direct_stroke(placement.char)
-            if direct is not None:
-                return self._apply_distortion(self._position_strokes(direct, placement))
+        # Tier 0: ユーザー直接ストローク
+        direct = self._direct_stroke(placement.char)
+        if direct is not None:
+            positioned = self._position_strokes(direct, placement)
+            return positioned if is_smooth else self._apply_distortion(positioned)
 
         reference = self._load_reference_strokes(placement.char)
 
@@ -245,7 +236,16 @@ class PlotterPipeline:
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
 
-        # Tier 3: KanjiVG
+        # Tier 3: 句読点・括弧の幾何生成
+        punct_strokes = self._simple_punct_strokes(lookup_char)
+        if punct_strokes is not None:
+            return self._position_strokes(punct_strokes, placement)
+
+        paren_strokes = self._simple_paren_strokes(original_char, placement)
+        if paren_strokes is not None:
+            return self._position_strokes(paren_strokes, placement)
+
+        # Tier 4: KanjiVG
         if self._kanjivg_dir is not None:
             char_strokes = self._load_kanjivg_json(placement)
             if char_strokes is not None:
