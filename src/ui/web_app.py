@@ -274,7 +274,7 @@ class PlotterPipeline:
 
     @staticmethod
     def _normalize_strokes_to_unit(strokes: list[Stroke]) -> list[Stroke]:
-        """iPad座標のストロークを 0-1 範囲に正規化。"""
+        """iPad座標のストロークを 0-1 範囲に正規化（Y軸反転: Canvas→組版座標）。"""
         all_pts = np.concatenate(strokes, axis=0)
         mins = all_pts.min(axis=0)
         maxs = all_pts.max(axis=0)
@@ -282,7 +282,12 @@ class PlotterPipeline:
         if span < 1e-6:
             return strokes
         center = (mins + maxs) / 2
-        return [(s - center) / span + 0.5 for s in strokes]
+        result = []
+        for s in strokes:
+            normalized = (s - center) / span + 0.5
+            normalized[:, 1] = 1.0 - normalized[:, 1]  # Y反転
+            result.append(normalized)
+        return result
 
     def _apply_stroke_variation(self, strokes: list[Stroke]) -> list[Stroke]:
         """ストロークごとの幾何バリエーション（inference.py _generate_v3 と同等）。"""
