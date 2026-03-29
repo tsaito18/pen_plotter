@@ -1,5 +1,7 @@
 .PHONY: ui collect train pretrain finetune preview test lint format help
 
+VENV := . .venv/bin/activate &&
+
 # デフォルトパラメータ
 CHECKPOINT  ?= data/models/finetuned.pt
 PRETRAIN_CP ?= data/models/pretrain_checkpoint.pt
@@ -15,15 +17,15 @@ help: ## ヘルプを表示
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 ui: ## Web UIを起動
-	python scripts/run_ui.py --checkpoint $(CHECKPOINT) --port $(PORT)
+	$(VENV) python scripts/run_ui.py --checkpoint $(CHECKPOINT) --port $(PORT)
 
 collect: ## ストローク収集UIを起動
-	python scripts/collect_strokes.py --port $(COLLECT_PORT)
+	$(VENV) python scripts/collect_strokes.py --port $(COLLECT_PORT)
 
 train: pretrain finetune ## 訓練（pretrain + finetune）
 
 pretrain: ## 事前訓練
-	python scripts/pretrain.py \
+	$(VENV) python scripts/pretrain.py \
 		--model-version v3-user \
 		--hand-dir $(USER_DIR) \
 		--ref-dir $(REF_DIR) \
@@ -34,7 +36,7 @@ pretrain: ## 事前訓練
 		--learning-rate 0.001
 
 finetune: ## ファインチューニング
-	python scripts/finetune.py \
+	$(VENV) python scripts/finetune.py \
 		--checkpoint $(PRETRAIN_CP) \
 		--user-dir $(USER_DIR) \
 		--ref-dir $(REF_DIR) \
@@ -43,7 +45,7 @@ finetune: ## ファインチューニング
 		--learning-rate 0.0005
 
 preview: ## プレビュー画像を生成（TEXT変数で指定）
-	@python -c "\
+	@$(VENV) python -c "\
 	from src.ui.web_app import PlotterPipeline; \
 	from pathlib import Path; \
 	import time; \
@@ -58,10 +60,10 @@ preview: ## プレビュー画像を生成（TEXT変数で指定）
 	print(f'Saved: {out}')"
 
 test: ## テスト実行
-	pytest
+	$(VENV) pytest
 
 lint: ## リント
-	ruff check src/ tests/ scripts/
+	$(VENV) ruff check src/ tests/ scripts/
 
 format: ## フォーマット
-	ruff format src/ tests/ scripts/
+	$(VENV) ruff format src/ tests/ scripts/
