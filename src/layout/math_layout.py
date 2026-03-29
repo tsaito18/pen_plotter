@@ -98,13 +98,19 @@ class _ParserState:
             elif ch == "^":
                 flush_text()
                 self._advance()
-                sup_content = self._read_braced()
+                if self._peek() == "{":
+                    sup_content = self._read_braced()
+                else:
+                    sup_content = self._advance() if self._pos < len(self._src) else ""
                 elements.append(MathElement(type="sup", content=sup_content))
 
             elif ch == "_":
                 flush_text()
                 self._advance()
-                sub_content = self._read_braced()
+                if self._peek() == "{":
+                    sub_content = self._read_braced()
+                else:
+                    sub_content = self._advance() if self._pos < len(self._src) else ""
                 elements.append(MathElement(type="sub", content=sub_content))
 
             elif ch == "{" or ch == "}":
