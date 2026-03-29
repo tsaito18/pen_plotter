@@ -1,6 +1,8 @@
 import json
 import threading
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -10,7 +12,6 @@ from src.collector.ipad_sync import (
     GUIDED_CHARS,
     StrokeCollectorApp,
     _TIER1_CHARS,
-    _TIER2_CHARS,
     select_next_char,
 )
 
@@ -150,6 +151,241 @@ class TestGuidedCollection:
         assert data["current_char"] in _TIER1_CHARS
 
 
+class TestManagementAPI:
+    """サンプル管理・統計APIのエンドポイントテスト"""
+
+    def _make_sample(self, char: str) -> StrokeSample:
+        return StrokeSample(
+            character=char,
+            strokes=[
+                [
+                    StrokePoint(x=0, y=0, pressure=1.0, timestamp=0),
+                    StrokePoint(x=1, y=1, pressure=1.0, timestamp=10),
+                ]
+            ],
+        )
+
+    def _start_server(self, app: StrokeCollectorApp) -> None:
+        t = threading.Thread(target=app.serve, daemon=True)
+        t.start()
+        time.sleep(0.3)
+
+    def _encode_path(self, path: str) -> str:
+        """パス中のクエリパラメータをURLエンコードする。"""
+        if "?" not in path:
+            return path
+        base, query = path.split("?", 1)
+        params = urllib.parse.parse_qs(query, keep_blank_values=True)
+        encoded = urllib.parse.urlencode(
+            {k: v[0] for k, v in params.items()}, quote_via=urllib.parse.quote
+        )
+        return f"{base}?{encoded}"
+
+    def _get(self, port: int, path: str) -> tuple[int, dict | list | str]:
+        url = f"http://127.0.0.1:{port}{self._encode_path(path)}"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return resp.status, data
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8")
+            try:
+                return e.code, json.loads(body)
+            except json.JSONDecodeError:
+                return e.code, body
+
+    def _delete(self, port: int, path: str) -> tuple[int, dict | str]:
+        url = f"http://127.0.0.1:{port}{self._encode_path(path)}"
+        req = urllib.request.Request(url, method="DELETE")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return resp.status, data
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8")
+            try:
+                return e.code, json.loads(body)
+            except json.JSONDecodeError:
+                return e.code, body
+
+    def _post(self, port: int, path: str, body: dict | None = None) -> tuple[int, dict | str]:
+        url = f"http://127.0.0.1:{port}{path}"
+        data = json.dumps(body or {}).encode("utf-8") if body else b"{}"
+        req = urllib.request.Request(
+            url,
+            data=data,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8")
+            try:
+                return e.code, json.loads(raw)
+            except json.JSONDecodeError:
+                return e.code, raw
+
+    def test_get_samples_endpoint(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        app.save_stroke(self._make_sample("あ"))
+        self._start_server(app)
+
+        status, data = self._get(app.port, "/api/samples?char=あ")
+
+        assert status == 200
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert "filename" in data[0]
+        assert "stroke_count" in data[0]
+
+    def test_get_samples_unknown_char(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        self._start_server(app)
+
+        status, data = self._get(app.port, "/api/samples?char=ん")
+
+        assert status == 200
+        assert data == []
+
+    def test_delete_single_sample_endpoint(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        for _ in range(2):
+            app.save_stroke(self._make_sample("あ"))
+            time.sleep(0.001)
+        path = app.save_stroke(self._make_sample("あ"))
+        filename = path.name
+        self._start_server(app)
+
+        status, data = self._delete(app.port, f"/api/samples?char=あ&file={filename}")
+
+        assert status == 200
+        assert data["status"] == "ok"
+        assert data["remaining"] == 2
+        assert not path.exists()
+
+    def test_delete_all_samples_endpoint(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        for _ in range(3):
+            app.save_stroke(self._make_sample("あ"))
+            time.sleep(0.001)
+        self._start_server(app)
+
+        status, data = self._delete(app.port, "/api/samples?char=あ")
+
+        assert status == 200
+        assert data["deleted_count"] == 3
+
+    def test_delete_missing_sample_returns_404(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        self._start_server(app)
+
+        status, _data = self._delete(app.port, "/api/samples?char=あ&file=nonexistent.json")
+
+        assert status == 404
+
+    def test_stats_endpoint(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        for _ in range(3):
+            app.save_stroke(self._make_sample("の"))
+            time.sleep(0.001)
+        app.save_stroke(self._make_sample("は"))
+        self._start_server(app)
+
+        status, data = self._get(app.port, "/api/stats")
+
+        assert status == 200
+        assert "tiers" in data
+        assert "total_samples" in data
+        assert data["total_samples"] == 4
+
+    def test_undo_last_endpoint(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        app.save_stroke(self._make_sample("あ"))
+        time.sleep(0.001)
+        last_path = app.save_stroke(self._make_sample("あ"))
+        self._start_server(app)
+
+        status, data = self._post(app.port, "/api/undo-last")
+
+        assert status == 200
+        assert data["status"] == "ok"
+        assert data["deleted_file"] == last_path.name
+        assert data["character"] == "あ"
+        assert not last_path.exists()
+
+    def test_undo_last_empty(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        self._start_server(app)
+
+        status, _data = self._post(app.port, "/api/undo-last")
+
+        assert status == 404
+
+    def test_progress_with_char_param(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        app.save_stroke(self._make_sample("い"))
+        self._start_server(app)
+
+        status, data = self._get(app.port, "/api/progress?char=い")
+
+        assert status == 200
+        assert data["current_char"] == "い"
+        assert data["samples_for_current"] == 1
+
+    def test_html_contains_management_tab(self, tmp_path):
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        self._start_server(app)
+
+        url = f"http://127.0.0.1:{app.port}/"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            html = resp.read().decode("utf-8")
+
+        assert "管理" in html
+
+    def test_anomalies_endpoint(self, tmp_path):
+        """GET /api/anomalies → 異常サンプルのみ返る"""
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        # 正常サンプル（十分なポイント・サイズ・時間）
+        normal = StrokeSample(
+            character="あ",
+            strokes=[
+                [
+                    StrokePoint(x=100.0, y=100.0, pressure=1.0, timestamp=0.0),
+                    StrokePoint(x=200.0, y=100.0, pressure=1.0, timestamp=500.0),
+                    StrokePoint(x=300.0, y=200.0, pressure=1.0, timestamp=1000.0),
+                ],
+                [
+                    StrokePoint(x=100.0, y=300.0, pressure=1.0, timestamp=1500.0),
+                    StrokePoint(x=200.0, y=300.0, pressure=1.0, timestamp=2000.0),
+                    StrokePoint(x=300.0, y=400.0, pressure=1.0, timestamp=2500.0),
+                ],
+            ],
+        )
+        app.save_stroke(normal)
+        # 異常サンプル（点数少 = 2ポイント）
+        anomalous = StrokeSample(
+            character="い",
+            strokes=[
+                [
+                    StrokePoint(x=100.0, y=100.0, pressure=1.0, timestamp=0.0),
+                    StrokePoint(x=200.0, y=200.0, pressure=1.0, timestamp=2000.0),
+                ],
+            ],
+        )
+        app.save_stroke(anomalous)
+        self._start_server(app)
+
+        status, data = self._get(app.port, "/api/anomalies")
+
+        assert status == 200
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["character"] == "い"
+        assert "点数少" in data[0]["reasons"]
+
+
 class TestSelectNextChar:
     """select_next_char の優先度ロジックテスト"""
 
@@ -170,7 +406,7 @@ class TestSelectNextChar:
         """0サンプルの文字が1サンプルの文字より優先される"""
         tier1_list = [c for c in GUIDED_CHARS if c in _TIER1_CHARS]
         # 半分を1サンプルにする
-        counts = {c: 1 for c in tier1_list[:len(tier1_list) // 2]}
+        counts = {c: 1 for c in tier1_list[: len(tier1_list) // 2]}
         result = select_next_char(counts, target_samples=3, seed=42)
         assert counts.get(result, 0) == 0
 

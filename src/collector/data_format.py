@@ -40,9 +40,7 @@ class StrokeSample:
         return json.dumps(
             {
                 "character": self.character,
-                "strokes": [
-                    [pt.to_dict() for pt in stroke] for stroke in self.strokes
-                ],
+                "strokes": [[pt.to_dict() for pt in stroke] for stroke in self.strokes],
                 "metadata": self.metadata,
             },
             ensure_ascii=False,
@@ -53,10 +51,7 @@ class StrokeSample:
         data = json.loads(json_str)
         return cls(
             character=data["character"],
-            strokes=[
-                [StrokePoint.from_dict(pt) for pt in stroke]
-                for stroke in data["strokes"]
-            ],
+            strokes=[[StrokePoint.from_dict(pt) for pt in stroke] for stroke in data["strokes"]],
             metadata=data.get("metadata", {}),
         )
 
