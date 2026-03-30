@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -128,6 +129,17 @@ class StrokeRecorder:
         filepath.unlink()
         return True
 
+    def set_metadata(self, character: str, filename: str, key: str, value: object) -> bool:
+        if "/" in filename or ".." in filename or not re.match(r"^.+_\d+\.json$", filename):
+            raise ValueError(f"Invalid filename: {filename}")
+        filepath = self.output_dir / character / filename
+        if not filepath.exists():
+            return False
+        sample = StrokeSample.load(filepath)
+        sample.metadata[key] = value
+        sample.save(filepath)
+        return True
+
     def delete_all_samples(self, character: str) -> int:
         char_dir = self.output_dir / character
         if not char_dir.exists():
@@ -161,21 +173,82 @@ class StrokeRecorder:
         infos.sort(key=lambda x: x["timestamp"])
         return infos
 
+    def find_stroke_mismatches(self) -> list[dict]:
+        """同一文字内で画数が不一致のサンプルを検出する。"""
+        results: list[dict] = []
+        for character in self.list_characters():
+            char_dir = self.output_dir / character
+            if not char_dir.exists():
+                continue
+
+            sample_infos: list[dict] = []
+            for path in sorted(char_dir.glob("*.json")):
+                sample = StrokeSample.load(path)
+                if sample.metadata.get("ignore_stroke_mismatch"):
+                    continue
+                stroke_count = len(sample.strokes)
+                point_count = sum(len(stroke) for stroke in sample.strokes)
+                sample_infos.append(
+                    {
+                        "filename": path.name,
+                        "stroke_count": stroke_count,
+                        "point_count": point_count,
+                        "strokes": [
+                            [p.to_dict() for p in stroke] for stroke in sample.strokes
+                        ],
+                    }
+                )
+
+            if len(sample_infos) < 2:
+                continue
+
+            counts = Counter(s["stroke_count"] for s in sample_infos)
+            mode_count = counts.most_common(1)[0][0]
+
+            has_outlier = any(s["stroke_count"] != mode_count for s in sample_infos)
+            if not has_outlier:
+                continue
+
+            for s in sample_infos:
+                s["is_outlier"] = s["stroke_count"] != mode_count
+
+            results.append(
+                {
+                    "character": character,
+                    "mode_count": mode_count,
+                    "samples": sample_infos,
+                }
+            )
+        return results
+
     def find_anomalies(self, canvas_size: float = 512.0) -> list[dict]:
         """全文字をスキャンし異常サンプルを検出する。"""
         min_bbox = canvas_size * 0.1
         anomalies: list[dict] = []
         for character in self.list_characters():
-            for info in self.get_sample_info(character):
+            char_dir = self.output_dir / character
+            if not char_dir.exists():
+                continue
+            for path in sorted(char_dir.glob("*.json")):
+                sample = StrokeSample.load(path)
+                if sample.metadata.get("ignore_anomaly"):
+                    continue
+
+                stroke_count = len(sample.strokes)
+                point_count = sum(len(stroke) for stroke in sample.strokes)
+                strokes_dicts = [
+                    [p.to_dict() for p in stroke] for stroke in sample.strokes
+                ]
+
                 reasons: list[str] = []
-                if info["point_count"] < 5:
+                if point_count < 5:
                     reasons.append("点数少")
-                if info["stroke_count"] > 10:
+                if stroke_count > 10:
                     reasons.append("画数多")
 
                 all_x: list[float] = []
                 all_y: list[float] = []
-                for stroke in info["strokes"]:
+                for stroke in strokes_dicts:
                     for pt in stroke:
                         all_x.append(pt["x"])
                         all_y.append(pt["y"])
@@ -185,13 +258,13 @@ class StrokeRecorder:
                     if max(x_range, y_range) < min_bbox:
                         reasons.append("描画領域小")
 
-                if info["strokes"]:
-                    first_ts = info["strokes"][0][0]["timestamp"]
-                    last_ts = info["strokes"][-1][-1]["timestamp"]
+                if strokes_dicts:
+                    first_ts = strokes_dicts[0][0]["timestamp"]
+                    last_ts = strokes_dicts[-1][-1]["timestamp"]
                     if last_ts - first_ts < 500:
                         reasons.append("描画時間短")
 
-                for stroke in info["strokes"]:
+                for stroke in strokes_dicts:
                     if len(stroke) == 1:
                         reasons.append("単点ストローク")
                         break
@@ -200,11 +273,11 @@ class StrokeRecorder:
                     anomalies.append(
                         {
                             "character": character,
-                            "filename": info["filename"],
-                            "stroke_count": info["stroke_count"],
-                            "point_count": info["point_count"],
+                            "filename": path.name,
+                            "stroke_count": stroke_count,
+                            "point_count": point_count,
                             "reasons": reasons,
-                            "strokes": info["strokes"],
+                            "strokes": strokes_dicts,
                         }
                     )
         return anomalies

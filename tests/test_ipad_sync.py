@@ -344,6 +344,79 @@ class TestManagementAPI:
 
         assert "管理" in html
 
+    def test_set_metadata_endpoint(self, tmp_path):
+        """POST /api/samples/metadata → 200 {"status": "ok"}"""
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        path = app.save_stroke(self._make_sample("あ"))
+        self._start_server(app)
+
+        status, data = self._post(
+            app.port,
+            "/api/samples/metadata",
+            {"char": "あ", "file": path.name, "key": "ignore_anomaly", "value": True},
+        )
+
+        assert status == 200
+        assert data["status"] == "ok"
+
+    def test_set_metadata_missing_file_returns_404(self, tmp_path):
+        """存在しないファイルへの metadata 設定 → 404"""
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        self._start_server(app)
+
+        status, _data = self._post(
+            app.port,
+            "/api/samples/metadata",
+            {"char": "あ", "file": "nonexistent_12345.json", "key": "ignore_anomaly", "value": True},
+        )
+
+        assert status == 404
+
+    def test_stroke_mismatches_endpoint(self, tmp_path):
+        """GET /api/stroke-mismatches → 画数不一致のグループ一覧"""
+        app = StrokeCollectorApp(output_dir=tmp_path, port=0)
+        # "あ" に 3画×2, 5画×1
+        for _ in range(2):
+            app.save_stroke(
+                StrokeSample(
+                    character="あ",
+                    strokes=[
+                        [
+                            StrokePoint(x=0, y=0, pressure=1.0, timestamp=0),
+                            StrokePoint(x=1, y=1, pressure=1.0, timestamp=10),
+                        ]
+                        for _ in range(3)
+                    ],
+                )
+            )
+            time.sleep(0.001)
+        app.save_stroke(
+            StrokeSample(
+                character="あ",
+                strokes=[
+                    [
+                        StrokePoint(x=0, y=0, pressure=1.0, timestamp=0),
+                        StrokePoint(x=1, y=1, pressure=1.0, timestamp=10),
+                    ]
+                    for _ in range(5)
+                ],
+            )
+        )
+        self._start_server(app)
+
+        status, data = self._get(app.port, "/api/stroke-mismatches")
+
+        assert status == 200
+        assert isinstance(data, list)
+        assert len(data) == 1
+        group = data[0]
+        assert group["character"] == "あ"
+        assert group["mode_count"] == 3
+        assert len(group["samples"]) == 3
+        outliers = [s for s in group["samples"] if s["is_outlier"]]
+        assert len(outliers) == 1
+        assert outliers[0]["stroke_count"] == 5
+
     def test_anomalies_endpoint(self, tmp_path):
         """GET /api/anomalies → 異常サンプルのみ返る"""
         app = StrokeCollectorApp(output_dir=tmp_path, port=0)

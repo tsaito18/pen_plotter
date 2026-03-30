@@ -130,6 +130,12 @@ class StrokeCollectorApp:
     def get_anomalies(self) -> list[dict]:
         return self._recorder.find_anomalies()
 
+    def get_stroke_mismatches(self) -> list[dict]:
+        return self._recorder.find_stroke_mismatches()
+
+    def set_sample_metadata(self, character: str, filename: str, key: str, value: object) -> bool:
+        return self._recorder.set_metadata(character, filename, key, value)
+
     def get_collection_stats(self) -> dict:
         tier_stats = {
             "tier1": {"total": 0, "completed": 0, "samples": 0},
@@ -253,6 +259,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/stats":
             stats = self.app.get_collection_stats()
             self._json_respond(200, stats)
+        elif path == "/api/stroke-mismatches":
+            mismatches = self.app.get_stroke_mismatches()
+            self._json_respond(200, mismatches)
         elif path == "/api/anomalies":
             anomalies = self.app.get_anomalies()
             self._json_respond(200, anomalies)
@@ -268,6 +277,22 @@ class _RequestHandler(BaseHTTPRequestHandler):
             sample = self.app.parse_stroke_data(data)
             saved = self.app.save_stroke(sample)
             self._json_respond(200, {"status": "ok", "path": str(saved)})
+        elif path == "/api/samples/metadata":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            data = json.loads(raw.decode("utf-8"))
+            char = data.get("char", "")
+            filename = data.get("file", "")
+            key = data.get("key", "")
+            value = data.get("value")
+            try:
+                result = self.app.set_sample_metadata(char, filename, key, value)
+                if result:
+                    self._json_respond(200, {"status": "ok"})
+                else:
+                    self._json_respond(404, {"error": "sample not found"})
+            except ValueError as e:
+                self._json_respond(400, {"error": str(e)})
         elif path == "/api/undo-last":
             self._handle_undo_last()
         else:
@@ -627,15 +652,27 @@ _HTML_PAGE = """\
   .delete-btn:active { opacity: 0.7; }
 
   /* === 異常サンプル === */
-  .anomaly-card {
-    display: flex; align-items: center; gap: 12px;
-    background: #fff; border-radius: 12px; padding: 10px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-    border-left: 3px solid #ff3b30;
+  .anomaly-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px;
   }
-  .anomaly-char { font-size: 2rem; font-weight: 300; min-width: 50px; text-align: center; }
-  .anomaly-info { flex: 1; }
-  .anomaly-meta { font-size: 0.75rem; color: #8e8e93; }
+  .anomaly-card {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    background: #fff; border-radius: 12px; padding: 10px 10px 10px 13px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    position: relative; overflow: hidden;
+  }
+  .anomaly-card::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px; background: #ff3b30;
+  }
+  .anomaly-card .thumbnail-canvas {
+    width: 100px; height: 100px;
+  }
+  .anomaly-char { font-size: 1.4rem; font-weight: 300; text-align: center; }
+  .anomaly-info { text-align: center; }
+  .anomaly-meta { font-size: 0.7rem; color: #8e8e93; }
   .anomaly-reason {
     display: inline-block; font-size: 0.65rem; font-weight: 600;
     padding: 2px 6px; border-radius: 6px;
@@ -647,12 +684,67 @@ _HTML_PAGE = """\
     padding: 40px 0; font-weight: 500;
   }
   .anomaly-delete-btn {
-    width: 36px; height: 36px; border-radius: 18px;
+    width: 28px; height: 28px; border-radius: 14px;
     background: #ff3b30; color: #fff; border: none;
-    font-size: 1rem; cursor: pointer; flex-shrink: 0;
+    font-size: 0.85rem; cursor: pointer;
     display: flex; align-items: center; justify-content: center;
   }
   .anomaly-delete-btn:active { opacity: 0.7; }
+  .anomaly-ignore-btn {
+    padding: 4px 10px; border-radius: 8px; border: 1px solid #34c759;
+    background: #f0faf3; color: #34c759; font-weight: 600;
+    font-size: 0.7rem; cursor: pointer; white-space: nowrap;
+  }
+  .anomaly-ignore-btn:active { opacity: 0.7; }
+  .anomaly-actions {
+    display: flex; gap: 6px;
+    align-items: center;
+  }
+
+  /* === 画数不一致グループ === */
+  .mismatch-section-title {
+    font-size: 0.9rem; font-weight: 600; color: #1c1c1e;
+    padding: 12px 0 6px;
+    border-top: 1px solid #e5e5ea;
+    margin-top: 12px;
+  }
+  .mismatch-card {
+    background: #fff; border-radius: 12px; padding: 12px 12px 12px 15px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    margin-bottom: 8px;
+    position: relative; overflow: hidden;
+  }
+  .mismatch-card::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px; background: #ff9500;
+  }
+  .mismatch-header {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 8px;
+  }
+  .mismatch-char { font-size: 2rem; font-weight: 300; }
+  .mismatch-label { font-size: 0.8rem; color: #8e8e93; }
+  .mismatch-samples {
+    display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  .mismatch-thumb {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 6px; border-radius: 8px; border: 2px solid transparent;
+  }
+  .mismatch-thumb.outlier {
+    border-color: #ff3b30; background: #fff5f5;
+  }
+  .mismatch-thumb canvas {
+    width: 90px; height: 90px; border-radius: 6px;
+    border: 1px solid #e5e5ea; background: #fafafa;
+  }
+  .mismatch-thumb .thumb-label {
+    font-size: 0.7rem; color: #8e8e93;
+  }
+  .mismatch-thumb.outlier .thumb-label { color: #ff3b30; font-weight: 600; }
+  .mismatch-actions {
+    display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end;
+  }
 
   /* === 取り消しトースト === */
   .undo-toast {
@@ -1117,80 +1209,235 @@ function filterGallery(filter) {
   }
 }
 
+function ignoreSample(ch, filename, cardEl) {
+  fetch('/api/samples/metadata', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({char: ch, file: filename, key: 'ignore_anomaly', value: true})
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.status === 'ok' && cardEl) {
+      cardEl.style.transition = 'opacity 0.2s';
+      cardEl.style.opacity = '0';
+      setTimeout(function() { cardEl.remove(); checkAnomalyEmpty(); }, 200);
+    }
+  });
+}
+
+function checkAnomalyEmpty() {
+  var grid = document.getElementById('charGrid');
+  var remaining = grid.querySelectorAll('.anomaly-card, .mismatch-card');
+  if (remaining.length === 0) {
+    grid.innerHTML = '<div class="anomaly-empty">異常なサンプルはありません ✓</div>';
+  }
+}
+
 function loadAnomalies() {
   var grid = document.getElementById('charGrid');
   grid.innerHTML = '<div style="color:#8e8e93;font-size:0.85rem;">読み込み中...</div>';
-  fetch('/api/anomalies')
-    .then(function(r) { return r.json(); })
-    .then(function(anomalies) {
-      grid.innerHTML = '';
-      if (anomalies.length === 0) {
-        grid.style.display = 'block';
-        grid.innerHTML = '<div class="anomaly-empty">異常なサンプルはありません ✓</div>';
-        return;
-      }
-      grid.style.display = 'flex';
-      grid.style.flexDirection = 'column';
-      grid.style.gap = '8px';
+  grid.style.display = 'block';
+  grid.style.flexDirection = '';
+  grid.style.gap = '';
+
+  Promise.all([
+    fetch('/api/anomalies').then(function(r) { return r.json(); }),
+    fetch('/api/stroke-mismatches').then(function(r) { return r.json(); })
+  ]).then(function(results) {
+    var anomalies = results[0];
+    var mismatches = results[1];
+    grid.innerHTML = '';
+
+    if (anomalies.length === 0 && mismatches.length === 0) {
+      grid.innerHTML = '<div class="anomaly-empty">異常なサンプルはありません ✓</div>';
+      return;
+    }
+
+    if (anomalies.length > 0) {
+      var listDiv = document.createElement('div');
+      listDiv.className = 'anomaly-list';
       anomalies.forEach(function(item) {
         var card = document.createElement('div');
         card.className = 'anomaly-card';
 
         var cvs = document.createElement('canvas');
-        cvs.width = 240; cvs.height = 240;
-        cvs.style.width = '120px';
-        cvs.style.height = '120px';
-        cvs.style.borderRadius = '8px';
-        cvs.style.border = '1px solid #e5e5ea';
-        cvs.style.background = '#fafafa';
-        cvs.style.flexShrink = '0';
+        cvs.className = 'thumbnail-canvas';
+        cvs.width = 200; cvs.height = 200;
         card.appendChild(cvs);
 
-        var info = document.createElement('div');
-        info.className = 'anomaly-info';
         var charSpan = document.createElement('div');
         charSpan.className = 'anomaly-char';
-        charSpan.style.display = 'inline';
         charSpan.textContent = item.character;
-        info.appendChild(charSpan);
-        var meta = document.createElement('div');
-        meta.className = 'anomaly-meta';
-        meta.textContent = item.filename + ' — ' + item.stroke_count + '画 / ' + item.point_count + '点';
-        info.appendChild(meta);
+        card.appendChild(charSpan);
+
         var reasons = document.createElement('div');
-        reasons.style.marginTop = '4px';
         item.reasons.forEach(function(r) {
           var badge = document.createElement('span');
           badge.className = 'anomaly-reason';
           badge.textContent = r;
           reasons.appendChild(badge);
         });
-        info.appendChild(reasons);
-        card.appendChild(info);
+        card.appendChild(reasons);
+
+        var meta = document.createElement('div');
+        meta.className = 'anomaly-meta';
+        meta.textContent = item.stroke_count + '画 / ' + item.point_count + '点';
+        card.appendChild(meta);
+
+        var actions = document.createElement('div');
+        actions.className = 'anomaly-actions';
 
         var delBtn = document.createElement('button');
         delBtn.className = 'anomaly-delete-btn';
         delBtn.textContent = '✕';
-        delBtn.onclick = function(e) {
+        delBtn.onclick = (function(cardRef) {
+          return function(e) {
+            e.stopPropagation();
+            if (!confirm('このサンプルを削除しますか？')) return;
+            fetch('/api/samples?char=' + encodeURIComponent(item.character) + '&file=' + encodeURIComponent(item.filename), {
+              method: 'DELETE'
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (d.status === 'ok') {
+                cardRef.style.transition = 'opacity 0.2s';
+                cardRef.style.opacity = '0';
+                setTimeout(function() { cardRef.remove(); checkAnomalyEmpty(); }, 200);
+              }
+            });
+          };
+        })(card);
+        actions.appendChild(delBtn);
+
+        var ignoreBtn = document.createElement('button');
+        ignoreBtn.className = 'anomaly-ignore-btn';
+        ignoreBtn.textContent = '異常ではない';
+        ignoreBtn.onclick = (function(cardRef) {
+          return function(e) {
+            e.stopPropagation();
+            ignoreSample(item.character, item.filename, cardRef);
+          };
+        })(card);
+        actions.appendChild(ignoreBtn);
+
+        card.appendChild(actions);
+        listDiv.appendChild(card);
+        renderStrokeThumbnail(cvs, item.strokes, 200);
+      });
+      grid.appendChild(listDiv);
+    }
+
+    if (mismatches.length > 0) {
+      loadStrokeMismatches(grid, mismatches);
+    }
+  });
+}
+
+function loadStrokeMismatches(container, mismatches) {
+  var title = document.createElement('div');
+  title.className = 'mismatch-section-title';
+  title.textContent = '画数不一致 (' + mismatches.length + '文字)';
+  container.appendChild(title);
+
+  mismatches.forEach(function(group) {
+    var card = document.createElement('div');
+    card.className = 'mismatch-card';
+
+    var header = document.createElement('div');
+    header.className = 'mismatch-header';
+    var charEl = document.createElement('span');
+    charEl.className = 'mismatch-char';
+    charEl.textContent = group.character;
+    header.appendChild(charEl);
+    var labelEl = document.createElement('span');
+    labelEl.className = 'mismatch-label';
+    labelEl.textContent = '画数不一致（最頻: ' + group.mode_count + '画）';
+    header.appendChild(labelEl);
+    card.appendChild(header);
+
+    var samplesDiv = document.createElement('div');
+    samplesDiv.className = 'mismatch-samples';
+    group.samples.forEach(function(sample) {
+      var thumb = document.createElement('div');
+      thumb.className = 'mismatch-thumb' + (sample.is_outlier ? ' outlier' : '');
+
+      var cvs = document.createElement('canvas');
+      cvs.width = 180; cvs.height = 180;
+      thumb.appendChild(cvs);
+
+      var label = document.createElement('div');
+      label.className = 'thumb-label';
+      label.textContent = sample.stroke_count + '画' + (sample.is_outlier ? ' ⚠' : '');
+      thumb.appendChild(label);
+
+      if (sample.is_outlier) {
+        var delBtn = document.createElement('button');
+        delBtn.className = 'anomaly-delete-btn';
+        delBtn.textContent = '✕';
+        delBtn.onclick = (function(thumbRef, cardRef) {
+          return function(e) {
+            e.stopPropagation();
+            if (!confirm('このサンプルを削除しますか？')) return;
+            fetch('/api/samples?char=' + encodeURIComponent(group.character) + '&file=' + encodeURIComponent(sample.filename), {
+              method: 'DELETE'
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (d.status === 'ok') {
+                thumbRef.style.transition = 'opacity 0.2s';
+                thumbRef.style.opacity = '0';
+                setTimeout(function() {
+                  thumbRef.remove();
+                  var remaining = cardRef.querySelectorAll('.mismatch-thumb.outlier');
+                  if (remaining.length === 0) {
+                    cardRef.style.transition = 'opacity 0.2s';
+                    cardRef.style.opacity = '0';
+                    setTimeout(function() { cardRef.remove(); checkAnomalyEmpty(); }, 200);
+                  }
+                }, 200);
+              }
+            });
+          };
+        })(thumb, card);
+        thumb.appendChild(delBtn);
+      }
+
+      samplesDiv.appendChild(thumb);
+      renderStrokeThumbnail(cvs, sample.strokes, 180);
+    });
+    card.appendChild(samplesDiv);
+
+    var hasOutliers = group.samples.some(function(s) { return s.is_outlier; });
+    if (hasOutliers) {
+      var actionsDiv = document.createElement('div');
+      actionsDiv.className = 'mismatch-actions';
+      var ignoreBtn = document.createElement('button');
+      ignoreBtn.className = 'anomaly-ignore-btn';
+      ignoreBtn.textContent = '異常ではない';
+      ignoreBtn.onclick = (function(cardRef) {
+        return function(e) {
           e.stopPropagation();
-          if (!confirm('このサンプルを削除しますか？')) return;
-          fetch('/api/samples?char=' + encodeURIComponent(item.character) + '&file=' + encodeURIComponent(item.filename), {
-            method: 'DELETE'
-          })
-          .then(function(r) { return r.json(); })
-          .then(function(d) {
-            if (d.status === 'ok') {
-              loadAnomalies();
-              loadGallery();
-            }
+          var outliers = group.samples.filter(function(s) { return s.is_outlier; });
+          var promises = outliers.map(function(s) {
+            return fetch('/api/samples/metadata', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({char: group.character, file: s.filename, key: 'ignore_stroke_mismatch', value: true})
+            }).then(function(r) { return r.json(); });
+          });
+          Promise.all(promises).then(function() {
+            cardRef.style.transition = 'opacity 0.2s';
+            cardRef.style.opacity = '0';
+            setTimeout(function() { cardRef.remove(); checkAnomalyEmpty(); }, 200);
           });
         };
-        card.appendChild(delBtn);
+      })(card);
+      actionsDiv.appendChild(ignoreBtn);
+      card.appendChild(actionsDiv);
+    }
 
-        grid.appendChild(card);
-        renderStrokeThumbnail(cvs, item.strokes, 240);
-      });
-    });
+    container.appendChild(card);
+  });
 }
 
 var detailChar = '';

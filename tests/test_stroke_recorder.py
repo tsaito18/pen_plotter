@@ -348,3 +348,114 @@ class TestFindAnomalies:
         assert "描画領域小" in reasons
         assert "描画時間短" in reasons
         assert "単点ストローク" in reasons
+
+    def test_ignored_anomaly_excluded(self, tmp_path: Path):
+        """ignore_anomaly=True のサンプルは find_anomalies() から除外される"""
+        recorder = StrokeRecorder(output_dir=tmp_path)
+        sample = _make_sample_with_ts(
+            "あ", num_strokes=1, points_per_stroke=3, bbox_size=200.0, total_time_ms=2000.0
+        )
+        filepath = recorder.save_sample(sample)
+
+        anomalies_before = recorder.find_anomalies()
+        assert len(anomalies_before) == 1
+
+        recorder.set_metadata("あ", filepath.name, "ignore_anomaly", True)
+
+        anomalies_after = recorder.find_anomalies()
+        assert anomalies_after == []
+
+
+class TestFindStrokeMismatches:
+    def test_no_mismatch_when_consistent(self, tmp_path):
+        """全サンプルが同じ画数 → 空リスト"""
+        recorder = StrokeRecorder(output_dir=tmp_path)
+        for _ in range(3):
+            recorder.save_sample(_make_sample("あ", num_strokes=3))
+        assert recorder.find_stroke_mismatches() == []
+
+    def test_detects_outlier(self, tmp_path):
+        """mode=3画のところ1つだけ5画 → その1サンプルが検出される"""
+        recorder = StrokeRecorder(output_dir=tmp_path)
+        recorder.save_sample(_make_sample("あ", num_strokes=3))
+        recorder.save_sample(_make_sample("あ", num_strokes=3))
+        recorder.save_sample(_make_sample("あ", num_strokes=5))
+
+        result = recorder.find_stroke_mismatches()
+
+        assert len(result) == 1
+        group = result[0]
+        assert group["character"] == "あ"
+        assert group["mode_count"] == 3
+        assert len(group["samples"]) == 3
+        outliers = [s for s in group["samples"] if s["is_outlier"]]
+        assert len(outliers) == 1
+        assert outliers[0]["stroke_count"] == 5
+
+    def test_single_sample_no_mismatch(self, tmp_path):
+        """1サンプルしかない文字 → 検出なし"""
+        recorder = StrokeRecorder(output_dir=tmp_path)
+        recorder.save_sample(_make_sample("あ", num_strokes=3))
+        assert recorder.find_stroke_mismatches() == []
+
+    def test_all_different_strokes(self, tmp_path):
+        """全サンプルが異なる画数（mode が1つ） → mode以外が異常"""
+        recorder = StrokeRecorder(output_dir=tmp_path)
+        recorder.save_sample(_make_sample("あ", num_strokes=2))
+        recorder.save_sample(_make_sample("あ", num_strokes=3))
+        recorder.save_sample(_make_sample("あ", num_strokes=4))
+
+        result = recorder.find_stroke_mismatches()
+
+        assert len(result) == 1
+        group = result[0]
+        outliers = [s for s in group["samples"] if s["is_outlier"]]
+        non_outliers = [s for s in group["samples"] if not s["is_outlier"]]
+        assert len(non_outliers) == 1
+        assert non_outliers[0]["stroke_count"] == group["mode_count"]
+        assert len(outliers) == 2
+
+    def test_ignored_mismatch_excluded(self, tmp_path):
+        """metadata.ignore_stroke_mismatch=true のサンプルはスキップ"""
+        recorder = StrokeRecorder(output_dir=tmp_path)
+        recorder.save_sample(_make_sample("あ", num_strokes=3))
+        recorder.save_sample(_make_sample("あ", num_strokes=3))
+        outlier_path = recorder.save_sample(_make_sample("あ", num_strokes=5))
+
+        result_before = recorder.find_stroke_mismatches()
+        assert len(result_before) == 1
+
+        recorder.set_metadata("あ", outlier_path.name, "ignore_stroke_mismatch", True)
+
+        result_after = recorder.find_stroke_mismatches()
+        assert result_after == []
+
+
+class TestSetMetadata:
+    def test_set_metadata_adds_key(self, tmp_path: Path):
+        """save_sample → set_metadata → load_samples で metadata に反映される"""
+        recorder = StrokeRecorder(output_dir=tmp_path)
+        sample = _make_sample("あ")
+        filepath = recorder.save_sample(sample)
+
+        result = recorder.set_metadata("あ", filepath.name, "ignore_anomaly", True)
+
+        assert result is True
+        loaded = recorder.load_samples("あ")
+        assert len(loaded) == 1
+        assert loaded[0].metadata.get("ignore_anomaly") is True
+
+    def test_set_metadata_nonexistent_returns_false(self, tmp_path: Path):
+        """存在しないファイルに対して False を返す"""
+        recorder = StrokeRecorder(output_dir=tmp_path)
+
+        result = recorder.set_metadata("あ", "nonexistent_12345.json", "ignore_anomaly", True)
+
+        assert result is False
+
+    def test_set_metadata_validates_filename(self, tmp_path: Path):
+        """不正なファイル名に対して ValueError を送出する"""
+        recorder = StrokeRecorder(output_dir=tmp_path)
+
+        with pytest.raises(ValueError):
+            recorder.set_metadata("あ", "../evil.json", "ignore_anomaly", True)
