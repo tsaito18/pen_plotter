@@ -443,10 +443,14 @@ _HTML_PAGE = """\
 
   /* ボタン群（左手で押す） */
   .controls {
-    display: flex; flex-direction: column; gap: 6px;
+    display: flex; flex-direction: column; gap: 5px;
   }
+  .btn-row {
+    display: flex; gap: 5px;
+  }
+  .btn-row button { flex: 1; }
   .controls button {
-    width: 100%; font-size: 0.95rem; padding: 14px 0; border-radius: 10px;
+    width: 100%; font-size: 0.9rem; padding: 10px 0; border-radius: 10px;
     border: none; cursor: pointer; font-weight: 500;
     transition: opacity 0.15s, transform 0.1s;
   }
@@ -838,8 +842,10 @@ _HTML_PAGE = """\
     </div>
     <div class="controls">
       <button id="sendBtn">送信</button>
-      <button id="undoBtn">戻す</button>
-      <button id="clearBtn">消去</button>
+      <div class="btn-row">
+        <button id="undoBtn">戻す</button>
+        <button id="clearBtn">消去</button>
+      </div>
       <button id="skipBtn">Skip</button>
     </div>
     <div class="progress-area">
