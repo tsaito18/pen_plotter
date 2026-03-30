@@ -443,14 +443,14 @@ _HTML_PAGE = """\
 
   /* ボタン群（左手で押す） */
   .controls {
-    display: flex; flex-direction: column; gap: 5px;
+    display: flex; flex-direction: column; gap: 8px;
   }
   .btn-row {
-    display: flex; gap: 5px;
+    display: flex; gap: 8px;
   }
   .btn-row button { flex: 1; }
   .controls button {
-    width: 100%; font-size: 0.9rem; padding: 10px 0; border-radius: 10px;
+    width: 100%; font-size: 0.9rem; padding: 12px 0; border-radius: 10px;
     border: none; cursor: pointer; font-weight: 500;
     transition: opacity 0.15s, transform 0.1s;
   }
