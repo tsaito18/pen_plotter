@@ -109,10 +109,10 @@ class TestGCodeGeneratorVarySpeed:
         assert first_feed is not None
         assert first_feed < gcode_generator.config.draw_speed
 
-    def test_vary_speed_end_faster(
+    def test_vary_speed_end_slower(
         self, gcode_generator: GCodeGenerator, square_stroke: Stroke
     ):
-        """終点付近のフィードレートが draw_speed より速い"""
+        """終点付近のフィードレートが draw_speed より遅い（S字カーブで減速）"""
         lines = gcode_generator.generate([square_stroke], vary_speed=True)
         g1_lines = [l for l in lines if l.startswith("G1")]
         last_feed = None
@@ -120,7 +120,35 @@ class TestGCodeGeneratorVarySpeed:
             if part.startswith("F"):
                 last_feed = float(part[1:])
         assert last_feed is not None
-        assert last_feed > gcode_generator.config.draw_speed
+        assert last_feed < gcode_generator.config.draw_speed
+
+    def test_vary_speed_middle_fastest(
+        self, gcode_generator: GCodeGenerator, square_stroke: Stroke
+    ):
+        """中盤のフィードレートが始点・終点より速い（ベル型S字カーブ）"""
+        lines = gcode_generator.generate([square_stroke], vary_speed=True)
+        g1_lines = [l for l in lines if l.startswith("G1")]
+        feed_rates = []
+        for l in g1_lines:
+            for part in l.split():
+                if part.startswith("F"):
+                    feed_rates.append(float(part[1:]))
+        assert len(feed_rates) >= 3
+        mid = len(feed_rates) // 2
+        assert feed_rates[mid] > feed_rates[0]
+        assert feed_rates[mid] > feed_rates[-1]
+
+    def test_vary_speed_feed_rate_is_integer(
+        self, gcode_generator: GCodeGenerator, square_stroke: Stroke
+    ):
+        """F値が整数であること（小数点を含まない）"""
+        lines = gcode_generator.generate([square_stroke], vary_speed=True)
+        g1_lines = [l for l in lines if l.startswith("G1")]
+        for l in g1_lines:
+            for part in l.split():
+                if part.startswith("F"):
+                    f_value = part[1:]
+                    assert "." not in f_value, f"F値に小数点が含まれている: {part}"
 
     def test_vary_speed_two_point_stroke(
         self, gcode_generator: GCodeGenerator, line_stroke: Stroke

@@ -42,13 +42,14 @@ class GCodeGenerator:
         ]
 
     def _compute_feed_rate(self, t: float) -> float:
-        """ストローク内位置 t (0→1) に応じたフィードレートを計算"""
-        base = self.config.draw_speed
-        if t < 0.15:
-            return base * 0.7
-        elif t > 0.85:
-            return base * 1.3
-        return base
+        """ストローク内位置 t (0→1) に応じたフィードレートをS字カーブで計算
+
+        ベル型カーブ: 始点・終点で0.7倍、中盤で1.3倍に滑らかに変化
+        """
+        import math
+
+        factor = 0.7 + 0.6 * math.sin(math.pi * t)
+        return int(self.config.draw_speed * factor)
 
     def _stroke_to_gcode(
         self, stroke: Stroke, vary_speed: bool = True

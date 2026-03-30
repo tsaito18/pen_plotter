@@ -550,6 +550,7 @@ class PlotterPipeline:
         strokes: list[Stroke],
         ruled_lines: list[Stroke],
         save_path: str | Path,
+        page_number: int | None = None,
     ) -> None:
         """罫線（薄グレー）+ 文字ストローク（青）を高解像度で描画。"""
         import matplotlib.pyplot as plt
@@ -573,6 +574,14 @@ class PlotterPipeline:
             if len(stroke) >= 2:
                 _draw_stroke_with_width(ax, stroke)
 
+        if page_number is not None:
+            page_x = cfg.paper_width / 2
+            page_y = cfg.paper_height - self._page_config.margin_bottom / 2
+            ax.text(
+                page_x, page_y, f"P. {page_number}",
+                ha="center", va="center", fontsize=8, color="#666666",
+            )
+
         ax.set_xlim(-2, cfg.paper_width + 2)
         ax.set_ylim(-2, cfg.paper_height + 2)
         ax.set_aspect("equal")
@@ -582,18 +591,32 @@ class PlotterPipeline:
         fig.savefig(str(save_path), dpi=300)
         plt.close(fig)
 
-    def generate_preview(self, text: str, save_path: str | Path) -> None:
+    def generate_preview(self, text: str, save_path: str | Path) -> list[Path]:
         save_path = Path(save_path)
         pages = self.text_to_placements(text)
         ruled_lines = self._typesetter._layout.ruled_line_strokes()
+
         if not pages or not pages[0]:
             self._preview_with_ruled_lines([], ruled_lines, save_path)
-            return
-        strokes = self.placements_to_strokes(pages[0])
-        optimized = optimize_stroke_order(strokes)
-        self._preview_with_ruled_lines(
-            optimized, ruled_lines, save_path,
-        )
+            return [save_path]
+
+        if len(pages) == 1:
+            strokes = self.placements_to_strokes(pages[0])
+            optimized = optimize_stroke_order(strokes)
+            self._preview_with_ruled_lines(optimized, ruled_lines, save_path, page_number=1)
+            return [save_path]
+
+        stem = save_path.stem
+        suffix = save_path.suffix
+        parent = save_path.parent
+        result: list[Path] = []
+        for i, page_placements in enumerate(pages, start=1):
+            page_path = parent / f"{stem}_p{i}{suffix}"
+            strokes = self.placements_to_strokes(page_placements)
+            optimized = optimize_stroke_order(strokes)
+            self._preview_with_ruled_lines(optimized, ruled_lines, page_path, page_number=i)
+            result.append(page_path)
+        return result
 
     def generate_gcode_file(self, text: str, save_path: str | Path) -> None:
         save_path = Path(save_path)
@@ -617,8 +640,8 @@ class PlotterPipeline:
 
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                 path = Path(f.name)
-            self.generate_preview(text, save_path=path)
-            return str(path)
+            paths = self.generate_preview(text, save_path=path)
+            return [str(p) for p in paths]
 
         def _on_generate(text: str):
             import tempfile
@@ -634,7 +657,7 @@ class PlotterPipeline:
             with gr.Row():
                 preview_btn = gr.Button("Preview")
                 gcode_btn = gr.Button("Generate G-code")
-            preview_img = gr.Image(label="Preview")
+            preview_img = gr.Gallery(label="Preview")
             gcode_file = gr.File(label="G-code")
 
             preview_btn.click(_on_preview, inputs=text_input, outputs=preview_img)

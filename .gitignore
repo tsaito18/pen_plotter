@@ -26,3 +26,4 @@ data/report_examples/
 *.swo
 data/casia_raw/
 test_env/
+data/user_strokes_old/

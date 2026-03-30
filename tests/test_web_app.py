@@ -901,3 +901,145 @@ class TestFractionLine:
         # 矩形のみ（各5点）
         for s in strokes:
             assert s.shape[0] != 2 or abs(s[1, 0] - s[0, 0]) < 0.5
+
+
+class TestMultiPagePreview:
+    """マルチページプレビューのテスト。"""
+
+    @pytest.fixture
+    def pipeline(self):
+        return PlotterPipeline()
+
+    def test_single_page_returns_list_with_original_path(self, pipeline, tmp_path):
+        """1ページのテキストは元のパスをそのまま使い、list[Path]で返す。"""
+        save_path = tmp_path / "preview.png"
+        result = pipeline.generate_preview("テスト", save_path=save_path)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0] == save_path
+        assert save_path.exists()
+
+    def test_multipage_returns_numbered_paths(self, pipeline, tmp_path):
+        """複数ページになるテキストはページ番号付きファイルを返す。"""
+        # line_spacing=8mm, content_height≈252mm → 約31行/ページ, chars_per_line≈28
+        # 32行以上で2ページになる
+        long_text = "\n".join(["あ" * 20] * 40)
+        save_path = tmp_path / "preview.png"
+        result = pipeline.generate_preview(long_text, save_path=save_path)
+        assert isinstance(result, list)
+        assert len(result) >= 2
+        for p in result:
+            assert p.exists()
+        assert result[0] == tmp_path / "preview_p1.png"
+        assert result[1] == tmp_path / "preview_p2.png"
+
+    def test_empty_text_returns_single_page(self, pipeline, tmp_path):
+        """空テキストは1ページ（空ページ）を返す。"""
+        save_path = tmp_path / "empty.png"
+        result = pipeline.generate_preview("", save_path=save_path)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0] == save_path
+        assert save_path.exists()
+
+    def test_existing_single_page_test_compat(self, pipeline, tmp_path):
+        """既存テストと同じ使い方でファイルが生成される（後方互換）。"""
+        preview_path = tmp_path / "preview.png"
+        result = pipeline.generate_preview("テスト", save_path=preview_path)
+        assert preview_path.exists()
+        assert result[0] == preview_path
+
+
+class TestGradioGallery:
+    """Gradio UIがGalleryコンポーネントを使用するテスト。"""
+
+    @pytest.fixture
+    def app(self):
+        try:
+            import gradio as gr  # noqa: F401
+        except ImportError:
+            pytest.skip("gradio not installed")
+        pipeline = PlotterPipeline()
+        return pipeline.create_app()
+
+    def test_create_app_has_gallery(self, app):
+        """create_appがgr.Galleryコンポーネントを含む。"""
+        import gradio as gr
+
+        gallery_found = False
+        for block in app.blocks.values():
+            if isinstance(block, gr.Gallery):
+                gallery_found = True
+                break
+        assert gallery_found, "gr.Gallery component not found in app"
+
+    def test_create_app_no_single_image(self, app):
+        """gr.Imageがプレビュー用に使われていない。"""
+        import gradio as gr
+
+        for block in app.blocks.values():
+            if isinstance(block, gr.Image):
+                if hasattr(block, 'label') and block.label == "Preview":
+                    pytest.fail("gr.Image with label 'Preview' should be replaced by gr.Gallery")
+
+
+class TestPageNumber:
+    """ページ番号描画のテスト。"""
+
+    def test_page_number_draws_text(self, tmp_path):
+        """page_number指定時にax.textが呼ばれること。"""
+        from unittest.mock import patch
+
+        pipeline = PlotterPipeline()
+        save_path = tmp_path / "page_num.png"
+        strokes = [np.array([[10.0, 10.0], [20.0, 20.0]])]
+        ruled_lines = []
+
+        with patch("matplotlib.axes.Axes.text") as mock_text:
+            pipeline._preview_with_ruled_lines(strokes, ruled_lines, save_path, page_number=1)
+            mock_text.assert_called_once()
+            call_args = mock_text.call_args
+            assert "P. 1" in str(call_args)
+
+    def test_page_number_none_no_text(self, tmp_path):
+        """page_number=Noneではax.textが呼ばれないこと。"""
+        from unittest.mock import patch
+
+        pipeline = PlotterPipeline()
+        save_path = tmp_path / "no_page_num.png"
+        strokes = [np.array([[10.0, 10.0], [20.0, 20.0]])]
+        ruled_lines = []
+
+        with patch("matplotlib.axes.Axes.text") as mock_text:
+            pipeline._preview_with_ruled_lines(strokes, ruled_lines, save_path, page_number=None)
+            mock_text.assert_not_called()
+
+    def test_page_number_position(self, tmp_path):
+        """ページ番号がページ下部中央に配置されること。"""
+        from unittest.mock import patch
+
+        pipeline = PlotterPipeline()
+        save_path = tmp_path / "pos.png"
+
+        with patch("matplotlib.axes.Axes.text") as mock_text:
+            pipeline._preview_with_ruled_lines([], [], save_path, page_number=3)
+            call_args, call_kwargs = mock_text.call_args
+            x, y, text = call_args[0], call_args[1], call_args[2]
+            paper_w = pipeline._plotter_config.paper_width
+            paper_h = pipeline._plotter_config.paper_height
+            margin_bottom = pipeline._page_config.margin_bottom
+            assert abs(x - paper_w / 2) < 0.1
+            assert abs(y - (paper_h - margin_bottom / 2)) < 0.1
+            assert text == "P. 3"
+
+    def test_page_number_format(self, tmp_path):
+        """ページ番号が "P. N" 形式であること。"""
+        from unittest.mock import patch
+
+        pipeline = PlotterPipeline()
+        save_path = tmp_path / "fmt.png"
+
+        with patch("matplotlib.axes.Axes.text") as mock_text:
+            pipeline._preview_with_ruled_lines([], [], save_path, page_number=12)
+            call_args = mock_text.call_args
+            assert call_args[0][2] == "P. 12"

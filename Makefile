@@ -54,7 +54,7 @@ preview: ## プレビュー画像を生成（TEXT変数で指定）
 		kanjivg_dir=Path('$(REF_DIR)'), \
 		user_strokes_dir=Path('$(USER_DIR)'), \
 	); \
-	text = '$(TEXT)' if '$(TEXT)' else '1. 実験目的\n抵抗とコンデンサを組み合わせたCR直列回路の基本的な特性を測定する。'; \
+	text = '$(TEXT)' if '$(TEXT)' else '1. 実験目的\n抵抗とコンデンサを組み合わせたCR直列回路において、時定数$$\\\\tau = RC$$を測定する。\n電圧の減衰は$$V(t) = V_0 e^{-t/RC}$$で表される。'; \
 	out = f'/tmp/preview_{int(time.time())}.png'; \
 	p.generate_preview(text, out); \
 	print(f'Saved: {out}')"

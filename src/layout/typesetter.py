@@ -103,14 +103,36 @@ class Typesetter:
         para_start_indices: set[int] = set()
         block_math_lines: dict[int, str] = {}
 
+        heading_lines: dict[int, int] = {}  # global_line_idx → heading_level
+        heading_font_scales = {1: 1.3, 2: 1.15, 3: 1.0}
+
         for para in paragraphs:
+            # 見出し判定
+            heading_level = 0
+            display_para = para
+            if para.startswith('###'):
+                heading_level = 3
+                display_para = para[3:].strip()
+            elif para.startswith('##'):
+                heading_level = 2
+                display_para = para[2:].strip()
+            elif para.startswith('#'):
+                heading_level = 1
+                display_para = para[1:].strip()
+
+            if heading_level > 0:
+                # 見出し前に空行（ページ先頭でない場合）
+                if len(lines) > 0 and lines != ['']:
+                    lines.append("")
+                heading_lines[len(lines)] = heading_level
+
             para_start_indices.add(len(lines))
-            if not para:
+            if not display_para:
                 lines.append("")
                 continue
 
             # $$...$$ でブロック数式を分割
-            parts = _BLOCK_MATH_RE.split(para)
+            parts = _BLOCK_MATH_RE.split(display_para)
             for part_idx, part in enumerate(parts):
                 if part_idx % 2 == 1:
                     # ブロック数式
@@ -125,7 +147,12 @@ class Typesetter:
                         lambda m: m.group(1).replace(' ', '\x00'), part
                     )
                     broken = break_paragraph(stripped, chars_per_line)
-                    lines.extend(self._rebuild_lines_with_math(part, broken))
+                    result_lines = self._rebuild_lines_with_math(part, broken)
+                    # 見出しの場合、全行を見出し行として登録
+                    if heading_level > 0:
+                        for i in range(len(result_lines)):
+                            heading_lines[len(lines) + i] = heading_level
+                    lines.extend(result_lines)
 
         pages: list[list[CharPlacement]] = []
         current_page: list[CharPlacement] = []
@@ -149,9 +176,17 @@ class Typesetter:
                 line_idx += 1
                 continue
 
+            # 見出し行のフォントサイズスケール
+            is_heading = global_line_idx in heading_lines
+            if is_heading:
+                h_level = heading_lines[global_line_idx]
+                line_font_size = self.font_size * heading_font_scales[h_level]
+            else:
+                line_font_size = self.font_size
+
             x = area.x
             is_page_first_line = (line_idx == 0)
-            if global_line_idx in para_start_indices and not is_page_first_line:
+            if global_line_idx in para_start_indices and not is_page_first_line and not is_heading:
                 x += self.font_size
 
             # 行単位のベースライン揺らぎ + 密度スケール
@@ -179,8 +214,11 @@ class Typesetter:
                             continue
 
                         cur_halfwidth = is_halfwidth(ch)
-                        scale = _char_size_scale(ch)
-                        char_font_size = self.font_size * scale
+                        if is_heading:
+                            char_font_size = line_font_size
+                        else:
+                            scale = _char_size_scale(ch)
+                            char_font_size = self.font_size * scale
 
                         if self._augmenter is not None:
                             aug_x, _, aug_size = self._augmenter.augment_char_placement(

@@ -565,3 +565,95 @@ class TestInlineMath:
         placements = pages[0]
         chars = [p.char for p in placements]
         assert "".join(chars) == "aとb"
+
+
+class TestHeadings:
+    """セクション見出し（# で大きく表示）のテスト。"""
+
+    def test_h1_larger_font_size(self):
+        """# 見出し が通常テキストより大きい font_size（1.3倍）で配置される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("# 見出し")
+        placements = pages[0]
+        chars = [p.char for p in placements]
+        assert "見" in chars
+        assert "#" not in chars
+        for p in placements:
+            assert p.font_size == pytest.approx(7.0 * 1.3)
+
+    def test_h2_medium_font_size(self):
+        """## 小見出し が font_size * 1.15 で配置される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("## 小見出し")
+        placements = pages[0]
+        chars = [p.char for p in placements]
+        assert "小" in chars
+        assert "#" not in chars
+        for p in placements:
+            assert p.font_size == pytest.approx(7.0 * 1.15)
+
+    def test_h3_normal_font_size(self):
+        """### 見出し3 は通常サイズ（1.0倍）で配置される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("### 見出し3")
+        placements = pages[0]
+        chars = [p.char for p in placements]
+        assert "見" in chars
+        assert "#" not in chars
+        for p in placements:
+            assert p.font_size == pytest.approx(7.0 * 1.0)
+
+    def test_heading_preceded_by_blank_line(self):
+        """見出し前に空行が入る（ページ先頭では不要）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("前の段落\n# 見出し")
+        placements = pages[0]
+        y_mae = [p.y for p in placements if p.char == "前"][0]
+        y_midashi = [p.y for p in placements if p.char == "見"][0]
+        # 通常の2行分の間隔より大きい（空行1行分が入るため）
+        ts_normal = Typesetter(PageConfig(), font_size=7.0)
+        pages_normal = ts_normal.typeset("前の段落\n次の段落")
+        pn = pages_normal[0]
+        y_mae_n = [p.y for p in pn if p.char == "前"][0]
+        y_tsugi_n = [p.y for p in pn if p.char == "次"][0]
+        normal_gap = abs(y_tsugi_n - y_mae_n)
+        heading_gap = abs(y_midashi - y_mae)
+        assert heading_gap > normal_gap
+
+    def test_heading_at_page_start_no_blank_line(self):
+        """ページ先頭の見出しでは空行を入れない。"""
+        cfg = PageConfig()
+        ts = Typesetter(cfg, font_size=7.0)
+        layout = PageLayout(cfg)
+        line_positions = layout.line_positions()
+        pages = ts.typeset("# 見出し")
+        placements = pages[0]
+        # ページ先頭の行位置に配置される
+        assert placements[0].y == pytest.approx(line_positions[0])
+
+    def test_no_heading_unchanged(self):
+        """# なしテキストは既存動作と同じ。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("あいうえお")
+        assert len(pages[0]) == 5
+        for p in pages[0]:
+            assert p.font_size == pytest.approx(7.0 * 0.88)  # ひらがなスケール
+
+    def test_heading_strips_hash_and_space(self):
+        """# と後続スペースが除去され、テキスト部分のみ配置される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("# テスト")
+        chars = [p.char for p in pages[0]]
+        assert "".join(chars) == "テスト"
+
+    def test_heading_no_indent(self):
+        """見出し行はインデントしない（段落先頭でも）。"""
+        cfg = PageConfig()
+        ts = Typesetter(cfg, font_size=7.0)
+        layout = PageLayout(cfg)
+        area = layout.content_area()
+        pages = ts.typeset("前の段落\n# 見出し")
+        placements = pages[0]
+        heading_chars = [p for p in placements if p.char == "見"]
+        assert len(heading_chars) == 1
+        assert heading_chars[0].x == pytest.approx(area.x)

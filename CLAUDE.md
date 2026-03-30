@@ -27,7 +27,7 @@
 ### ディレクトリ構成
 - `src/gcode/` — G-code生成・最適化・プレビュー
 - `src/collector/` — 手書きサンプル収集（iPad UI, KanjiVGパーサー, CASIAパーサー）
-- `src/model/` — ML モデル（V2: CharEncoder + StyleEncoder + LSTM+MDN）
+- `src/model/` — ML モデル（V3: StrokeDeformer per-point offset + StyleEncoder）
 - `src/layout/` — 組版エンジン
 - `src/comm/` — GRBL シリアル通信
 - `src/ui/` — Gradio Web UI
@@ -44,7 +44,7 @@ StrokeDeformer(参照点 + 正規化位置t + 局所曲率 + style_vector + stro
 ```
 - KanjiVGの正しい形を前提に、per-point offsetで変形（生成ではなく転写）
 - ユーザーデータのみで訓練（CASIA不使用 — 中国語/日本語ストロークの不一致）
-- 137文字 / 269サンプル収集済み（data/user_strokes/）
+- 330文字 / 761サンプル収集済み（data/user_strokes/）
 - V2 (LSTM+MDN) は300k samples, A100でも読めない品質で断念
 - train-inference gap解消済み: smooth+clampを訓練/推論で統一（共有定数/関数）
 
@@ -55,7 +55,7 @@ StrokeDeformer(参照点 + 正規化位置t + 局所曲率 + style_vector + stro
 | `scripts/pretrain.py` | 事前訓練（CharEncoder+StyleEncoder+Generator） |
 | `scripts/finetune.py` | ファインチューニング（StyleEncoderのみ） |
 | `scripts/train_model.py` | V1訓練（旧方式、char_dimなし） |
-| `scripts/collect_strokes.py` | ガイド付き手書きサンプル収集（292文字セット） |
+| `scripts/collect_strokes.py` | ガイド付き手書きサンプル収集（381文字セット） |
 | `scripts/run_ui.py` | Gradio Web UI起動 |
 
 ## コーディング規約
@@ -100,9 +100,9 @@ StrokeDeformer(参照点 + 正規化位置t + 局所曲率 + style_vector + stro
 - Phase 4 完了: 組版エンジン（ページレイアウト・禁則処理・数式・表）
 - Phase 5 完了: サンプル収集基盤（データ形式・KanjiVGパーサー・iPad Web UI・ストローク正規化）
 - Phase 6 完了: MLモデル V2→V3移行完了（V2 LSTM+MDN断念、V3 StrokeDeformer採用）
-- Phase 7 部分完了: V3スタイル転写動作、組版改善、幾何バリエーション、リアルさ改善（太さ変化・密度変動・段落インデント・局所曲率・クランプ±1.2）
-- 訓練: ユーザーデータのみ（137文字/269サンプル）、CASIA不使用、loss=10.4
-- 423テスト全パス
+- Phase 7 部分完了: V3スタイル転写動作、組版改善、幾何バリエーション、リアルさ改善（太さ変化・密度変動・段落インデント・局所曲率・クランプ±1.2）、数式レイアウト統合（インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線）、直接ストローク使用・ストローク合成・弾性変形・tremor
+- 訓練: ユーザーデータのみ（330文字/761サンプル）、CASIA不使用
+- 555テスト全パス
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -133,14 +133,16 @@ StrokeDeformer(参照点 + 正規化位置t + 局所曲率 + style_vector + stro
 - ストローク太さ変化は控えめ（width=0.7+0.3*exp(-2t)）
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 
-### 全体進捗（2026-03-24時点）
-- 423テスト全パス
+### 全体進捗（2026-03-30時点）
+- 555テスト全パス
 - KanjiVG 6,699文字変換済み（SVGパーサー: smooth cubic bezier s/S対応済み）
 - 3段階フォールバック（ML推論→KanjiVG→矩形）動作
-- ガイド付きストローク収集UI（292文字セット）実装済み
-- ユーザーサンプル: 137文字 / 269サンプル収集済み（data/user_strokes/）
+- ガイド付きストローク収集UI（381文字セット）実装済み
+- ユーザーサンプル: 330文字 / 761サンプル収集済み（data/user_strokes/）
 - V3 StrokeDeformer（per-point offset MLP）でユーザーデータ訓練完了
 - 組版改善: A4縦、罫線8mm、ひらがな88%/カタカナ85%/小書き55%/句読点35%、High DPI(300)
+- 数式レイアウト統合: インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線, ^/_ブレースなし記法
+- 直接ストローク使用 + ストローク合成 + 弾性変形 + tremor 実装済み
 - 幾何ストローク生成: 、。・（）
 - 訓練サーバー: homesrv (i5-9600K, GTX 1050 Ti 4GB, CUDA 12.1, PyTorch 2.5.1) — mise + uv でパッケージ管理
 - Colab Pro: A100 40GB, AMP対応
