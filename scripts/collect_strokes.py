@@ -20,9 +20,18 @@ def main() -> None:
         help="保存先ディレクトリ (default: data/user_strokes)",
     )
     parser.add_argument("--port", type=int, default=8080, help="ポート番号 (default: 8080)")
+    parser.add_argument(
+        "--kanjivg-dir",
+        type=Path,
+        default=Path("data/strokes"),
+        help="KanjiVGストロークデータのディレクトリ (default: data/strokes)",
+    )
     args = parser.parse_args()
 
-    app = StrokeCollectorApp(output_dir=args.output_dir, port=args.port)
+    kanjivg_dir = args.kanjivg_dir if args.kanjivg_dir.exists() else None
+    app = StrokeCollectorApp(
+        output_dir=args.output_dir, port=args.port, kanjivg_dir=kanjivg_dir
+    )
     print(f"収集サーバー起動: http://localhost:{args.port}/")
     print(f"保存先: {args.output_dir}")
     print("iPad/PCのブラウザでアクセスし、文字を書いて送信してください。")

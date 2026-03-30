@@ -95,13 +95,36 @@ def select_next_char(
 
 
 class StrokeCollectorApp:
-    def __init__(self, output_dir: Path, port: int = 8080, target_samples: int = 3) -> None:
+    def __init__(
+        self,
+        output_dir: Path,
+        port: int = 8080,
+        target_samples: int = 3,
+        kanjivg_dir: Path | str | None = None,
+    ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.port = port
         self.target_samples = target_samples
         self._recorder = StrokeRecorder(output_dir=self.output_dir)
         self._next_char_cache: str | None = None
+        self._kanjivg_dir = Path(kanjivg_dir) if kanjivg_dir else None
+
+    def get_kanjivg_strokes(self, char: str) -> list[list[dict[str, float]]] | None:
+        """KanjiVGのストロークデータを返す。"""
+        if self._kanjivg_dir is None:
+            return None
+        char_dir = self._kanjivg_dir / char
+        if not char_dir.is_dir():
+            return None
+        json_files = sorted(char_dir.glob(f"{char}_*.json"))
+        if not json_files:
+            return None
+        try:
+            data = json.loads(json_files[0].read_text(encoding="utf-8"))
+            return data.get("strokes", None)
+        except (json.JSONDecodeError, KeyError):
+            return None
 
     def build_html(self) -> str:
         return _HTML_PAGE
@@ -265,6 +288,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/anomalies":
             anomalies = self.app.get_anomalies()
             self._json_respond(200, anomalies)
+        elif path == "/api/kanjivg":
+            char = params.get("char", "")
+            strokes = self.app.get_kanjivg_strokes(char)
+            if strokes is not None:
+                self._json_respond(200, {"strokes": strokes})
+            else:
+                self._json_respond(200, {"strokes": []})
         else:
             self._respond(404, "text/plain", b"Not Found")
 
@@ -380,6 +410,10 @@ _HTML_PAGE = """\
   .char-display {
     background: #fff; border-radius: 14px; padding: 16px;
     text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  #guideCanvas {
+    width: 100%; max-width: 200px; aspect-ratio: 1;
+    display: block; margin: 0 auto;
   }
   #guidedChar {
     font-size: 6rem; line-height: 1; color: #1c1c1e;
@@ -793,7 +827,8 @@ _HTML_PAGE = """\
       <button id="manageTab" class="tab" onclick="switchMode('manage')">管理</button>
     </div>
     <div class="char-display">
-      <div id="guidedChar"></div>
+      <canvas id="guideCanvas" width="200" height="200"></canvas>
+      <div id="guidedChar" style="display:none;"></div>
       <div id="tierBadge"></div>
       <div id="sampleDots"></div>
     </div>
@@ -936,6 +971,75 @@ _HTML_PAGE = """\
     ctx.stroke();
   }
 
+  let kvgCache = {};
+
+  function drawKanjiVGGuide(char) {
+    const gc = document.getElementById('guideCanvas');
+    const gctx = gc.getContext('2d');
+    const guidedEl = document.getElementById('guidedChar');
+    const rect = gc.getBoundingClientRect();
+    gc.width = rect.width * window.devicePixelRatio;
+    gc.height = rect.height * window.devicePixelRatio;
+    gctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+    function renderGuide(guideStrokes) {
+      gctx.clearRect(0, 0, gc.width, gc.height);
+      if (!guideStrokes || guideStrokes.length === 0) {
+        // KanjiVGデータなし → テキスト表示にフォールバック
+        guidedEl.style.display = 'block';
+        gc.style.display = 'none';
+        return;
+      }
+      guidedEl.style.display = 'none';
+      gc.style.display = 'block';
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const s of guideStrokes) {
+        for (const p of s) {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        }
+      }
+      const kvgW = maxX - minX || 1;
+      const kvgH = maxY - minY || 1;
+      const cw = rect.width;
+      const ch2 = rect.height;
+      const margin = cw * 0.08;
+      const drawW = cw - margin * 2;
+      const drawH = ch2 - margin * 2;
+      const scale = Math.min(drawW / kvgW, drawH / kvgH);
+      const offX = margin + (drawW - kvgW * scale) / 2 - minX * scale;
+      const offY = margin + (drawH - kvgH * scale) / 2 - minY * scale;
+
+      gctx.strokeStyle = '#1c1c1e';
+      gctx.lineWidth = 2.5;
+      gctx.lineCap = 'round';
+      gctx.lineJoin = 'round';
+      for (const s of guideStrokes) {
+        if (s.length < 2) continue;
+        gctx.beginPath();
+        gctx.moveTo(s[0].x * scale + offX, s[0].y * scale + offY);
+        for (let i = 1; i < s.length; i++) {
+          gctx.lineTo(s[i].x * scale + offX, s[i].y * scale + offY);
+        }
+        gctx.stroke();
+      }
+    }
+
+    if (kvgCache[char]) {
+      renderGuide(kvgCache[char]);
+      return;
+    }
+    fetch('/api/kanjivg?char=' + encodeURIComponent(char))
+      .then(r => r.json())
+      .then(data => {
+        kvgCache[char] = data.strokes || [];
+        renderGuide(kvgCache[char]);
+      });
+  }
+
   function redraw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     for (const stroke of strokes) {
@@ -1066,6 +1170,9 @@ _HTML_PAGE = """\
         if (data.current_char) {
           guidedEl.textContent = data.current_char;
           charInput.value = data.current_char;
+
+          // KanjiVGお手本を描画
+          drawKanjiVGGuide(data.current_char);
 
           // Tier badge
           if (data.tier === '★ 最優先') {
