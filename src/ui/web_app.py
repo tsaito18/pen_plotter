@@ -227,7 +227,12 @@ class PlotterPipeline:
 
         is_smooth = original_char in self._SMOOTH_CHARS or lookup_char in self._SMOOTH_CHARS
 
-        # Tier 0: ユーザー直接ストローク
+        # Tier 0: 句読点の幾何生成（KanjiVGデータの不具合を回避）
+        punct_strokes = self._simple_punct_strokes(lookup_char)
+        if punct_strokes is not None:
+            return self._position_strokes(punct_strokes, placement)
+
+        # Tier 1: ユーザー直接ストローク
         direct = self._direct_stroke(placement.char)
         if direct is not None:
             positioned = self._position_strokes(direct, placement)
@@ -249,11 +254,7 @@ class PlotterPipeline:
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
 
-        # Tier 3: 句読点・括弧・数式記号の幾何生成
-        punct_strokes = self._simple_punct_strokes(lookup_char)
-        if punct_strokes is not None:
-            return self._position_strokes(punct_strokes, placement)
-
+        # Tier 3: 括弧・数式記号の幾何生成
         paren_strokes = self._simple_paren_strokes(original_char, placement)
         if paren_strokes is not None:
             return self._position_strokes(paren_strokes, placement)
