@@ -412,7 +412,7 @@ _HTML_PAGE = """\
     text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
   }
   #guideCanvas {
-    width: 100%; max-width: 200px; aspect-ratio: 1;
+    width: 100%; max-width: 160px; aspect-ratio: 1;
     display: block; margin: 0 auto;
   }
   #guidedChar {
@@ -827,7 +827,7 @@ _HTML_PAGE = """\
       <button id="manageTab" class="tab" onclick="switchMode('manage')">管理</button>
     </div>
     <div class="char-display">
-      <canvas id="guideCanvas" width="200" height="200"></canvas>
+      <canvas id="guideCanvas" width="160" height="160"></canvas>
       <div id="guidedChar" style="display:none;"></div>
       <div id="tierBadge"></div>
       <div id="sampleDots"></div>
@@ -982,10 +982,16 @@ _HTML_PAGE = """\
     gc.height = rect.height * window.devicePixelRatio;
     gctx.scale(window.devicePixelRatio, window.devicePixelRatio);
 
+    const strokeColors = [
+      '#e63946','#457b9d','#2a9d8f','#e9c46a','#f4a261',
+      '#264653','#a855f7','#06b6d4','#84cc16','#f97316',
+      '#ec4899','#6366f1','#14b8a6','#eab308','#ef4444',
+      '#8b5cf6','#0ea5e9','#22c55e','#f59e0b','#d946ef',
+    ];
+
     function renderGuide(guideStrokes) {
       gctx.clearRect(0, 0, gc.width, gc.height);
       if (!guideStrokes || guideStrokes.length === 0) {
-        // KanjiVGデータなし → テキスト表示にフォールバック
         guidedEl.style.display = 'block';
         gc.style.display = 'none';
         return;
@@ -1006,25 +1012,37 @@ _HTML_PAGE = """\
       const kvgH = maxY - minY || 1;
       const cw = rect.width;
       const ch2 = rect.height;
-      const margin = cw * 0.08;
+      const margin = cw * 0.1;
       const drawW = cw - margin * 2;
       const drawH = ch2 - margin * 2;
       const scale = Math.min(drawW / kvgW, drawH / kvgH);
       const offX = margin + (drawW - kvgW * scale) / 2 - minX * scale;
-      const offY = margin + (drawH - kvgH * scale) / 2 - minY * scale;
+      // Y反転: KanjiVGデータはY大=上、Canvas座標はY大=下
+      const offY = margin + (drawH - kvgH * scale) / 2 + maxY * scale;
 
-      gctx.strokeStyle = '#1c1c1e';
-      gctx.lineWidth = 2.5;
       gctx.lineCap = 'round';
       gctx.lineJoin = 'round';
-      for (const s of guideStrokes) {
+      for (let si = 0; si < guideStrokes.length; si++) {
+        const s = guideStrokes[si];
         if (s.length < 2) continue;
+        const color = strokeColors[si % strokeColors.length];
+        gctx.strokeStyle = color;
+        gctx.lineWidth = 2;
         gctx.beginPath();
-        gctx.moveTo(s[0].x * scale + offX, s[0].y * scale + offY);
+        gctx.moveTo(s[0].x * scale + offX, -s[0].y * scale + offY);
         for (let i = 1; i < s.length; i++) {
-          gctx.lineTo(s[i].x * scale + offX, s[i].y * scale + offY);
+          gctx.lineTo(s[i].x * scale + offX, -s[i].y * scale + offY);
         }
         gctx.stroke();
+
+        // 書き順番号をストロークの始点に表示
+        const numX = s[0].x * scale + offX;
+        const numY = -s[0].y * scale + offY;
+        gctx.fillStyle = color;
+        gctx.font = 'bold 11px -apple-system, sans-serif';
+        gctx.textAlign = 'center';
+        gctx.textBaseline = 'bottom';
+        gctx.fillText(String(si + 1), numX, numY - 3);
       }
     }
 
