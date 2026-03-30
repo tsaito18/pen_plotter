@@ -290,17 +290,18 @@ class PlotterPipeline:
             return None
 
         if len(samples) == 1:
-            raw_strokes = samples[0]
+            normalized = self._normalize_strokes_to_unit(samples[0])
         else:
-            # ストローク合成: 各ストロークをランダムなサンプルから選択
-            min_stroke_count = min(len(s) for s in samples)
-            raw_strokes = []
+            # 各サンプルを先に正規化してから合成（座標系を統一）
+            normalized_samples = [self._normalize_strokes_to_unit(s) for s in samples]
+            min_stroke_count = min(len(s) for s in normalized_samples)
+            normalized = []
             for i in range(min_stroke_count):
-                candidates = [s[i] for s in samples if i < len(s)]
-                raw_strokes.append(candidates[np.random.randint(len(candidates))])
+                candidates = [s[i] for s in normalized_samples if i < len(s)]
+                normalized.append(candidates[np.random.randint(len(candidates))])
 
-        varied = self._apply_stroke_variation(raw_strokes)
-        return self._normalize_strokes_to_unit(varied)
+        varied = self._apply_stroke_variation(normalized)
+        return varied
 
     @staticmethod
     def _normalize_strokes_to_unit(strokes: list[Stroke]) -> list[Stroke]:
