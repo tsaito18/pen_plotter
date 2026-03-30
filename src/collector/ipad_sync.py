@@ -1073,8 +1073,17 @@ _HTML_PAGE = """\
     }
   }
 
+  // Apple Pencil のみ受け付け（pen）。PC環境ではmouseも許可
+  let hasPenInput = false;
+  function isPenOrMouse(e) {
+    if (e.pointerType === 'pen') { hasPenInput = true; return true; }
+    if (e.pointerType === 'mouse' && !hasPenInput) return true;
+    return false;
+  }
+
   canvas.addEventListener('pointerdown', function(e) {
     e.preventDefault();
+    if (!isPenOrMouse(e)) return;
     drawing = true;
     currentStroke = [canvasCoords(e)];
   });
