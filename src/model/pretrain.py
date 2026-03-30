@@ -473,10 +473,16 @@ class CASIADeformationDataset(Dataset):
         target_size: float = 10.0,
         max_samples: int = 0,
         num_points: int = 32,
+        use_aligner: bool = False,
     ) -> None:
         self.num_points = num_points
         self.target_size = target_size
         parser = CASIAParser()
+
+        if use_aligner:
+            from src.model.stroke_aligner import StrokeAligner
+
+            aligner = StrokeAligner(num_points=num_points)
 
         ref_dir = Path(ref_dir)
         ref_files: dict[str, Path] = {}
@@ -534,12 +540,45 @@ class CASIADeformationDataset(Dataset):
         for i, (ch, _, _, _) in enumerate(self.char_samples):
             self.char_to_indices.setdefault(ch, []).append(i)
 
-        self.samples: list[tuple[int, int, int]] = []
+        self.samples: list[tuple[int, int, int, int]] = []
+        self.sample_reversed: list[bool] = []
         for char_idx, (ch, casia_strokes, kvg_strokes, _) in enumerate(self.char_samples):
-            n_common = min(len(casia_strokes), len(kvg_strokes))
-            for stroke_idx in range(n_common):
-                if len(casia_strokes[stroke_idx]) >= 2 and len(kvg_strokes[stroke_idx]) >= 2:
-                    self.samples.append((char_idx, stroke_idx, len(casia_strokes)))
+            if use_aligner:
+                casia_valid = [(i, s) for i, s in enumerate(casia_strokes) if len(s) >= 2]
+                kvg_valid = [(i, s) for i, s in enumerate(kvg_strokes) if len(s) >= 2]
+                if casia_valid and kvg_valid:
+                    casia_arrs = [s for _, s in casia_valid]
+                    kvg_arrs = [s for _, s in kvg_valid]
+                    # Normalize CASIA to KanjiVG scale for alignment
+                    all_c = np.concatenate(casia_arrs)
+                    all_k = np.concatenate(kvg_arrs)
+                    c_min, c_range = (
+                        all_c.min(axis=0),
+                        (all_c.max(axis=0) - all_c.min(axis=0)).max(),
+                    )
+                    k_min, k_range = (
+                        all_k.min(axis=0),
+                        (all_k.max(axis=0) - all_k.min(axis=0)).max(),
+                    )
+                    if c_range > 0:
+                        sc = k_range / c_range
+                        casia_norm = [(a - c_min) * sc + k_min for a in casia_arrs]
+                    else:
+                        casia_norm = casia_arrs
+                    aresult = aligner.align(casia_norm, kvg_arrs)
+                    for u_i, r_i, rev in zip(
+                        aresult.user_indices, aresult.ref_indices, aresult.reversed_flags
+                    ):
+                        c_orig = casia_valid[u_i][0]
+                        k_orig = kvg_valid[r_i][0]
+                        self.samples.append((char_idx, c_orig, k_orig, len(casia_strokes)))
+                        self.sample_reversed.append(rev)
+            else:
+                n_common = min(len(casia_strokes), len(kvg_strokes))
+                for stroke_idx in range(n_common):
+                    if len(casia_strokes[stroke_idx]) >= 2 and len(kvg_strokes[stroke_idx]) >= 2:
+                        self.samples.append((char_idx, stroke_idx, stroke_idx, len(casia_strokes)))
+                        self.sample_reversed.append(False)
 
         print(
             f"[V3] Loaded {len(self.samples)} stroke samples "
@@ -551,11 +590,15 @@ class CASIADeformationDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict:
-        char_idx, stroke_idx, num_strokes = self.samples[idx]
+        char_idx, casia_stroke_idx, kvg_stroke_idx, num_strokes = self.samples[idx]
         character, casia_strokes, kvg_strokes, _ = self.char_samples[char_idx]
 
-        ref_resampled = resample_stroke(kvg_strokes[stroke_idx], self.num_points)
-        hand_resampled = resample_stroke(casia_strokes[stroke_idx], self.num_points)
+        hand = casia_strokes[casia_stroke_idx]
+        if self.sample_reversed[idx]:
+            hand = hand[::-1].copy()
+
+        ref_resampled = resample_stroke(kvg_strokes[kvg_stroke_idx], self.num_points)
+        hand_resampled = resample_stroke(hand, self.num_points)
 
         # Style: use a different writer's sample of same character if available
         style_tensor = strokes_to_deltas_from_arrays(casia_strokes)
@@ -569,7 +612,7 @@ class CASIADeformationDataset(Dataset):
         return {
             "reference_points": torch.tensor(ref_resampled, dtype=torch.float32),
             "target_points": torch.tensor(hand_resampled, dtype=torch.float32),
-            "stroke_index": stroke_idx,
+            "stroke_index": kvg_stroke_idx,
             "style_strokes": style_tensor,
             "character": character,
         }

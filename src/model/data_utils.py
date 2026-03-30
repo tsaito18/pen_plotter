@@ -6,8 +6,13 @@ to delta sequences with pen-up/pen-down state for autoregressive generation.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
+
+if TYPE_CHECKING:
+    from src.model.stroke_aligner import StrokeAligner
 
 
 def _build_delta_tensor(
@@ -109,9 +114,7 @@ def compute_normalization_stats(
     }
 
 
-def normalize_deltas(
-    tensor: torch.Tensor, stats: dict[str, float]
-) -> torch.Tensor:
+def normalize_deltas(tensor: torch.Tensor, stats: dict[str, float]) -> torch.Tensor:
     """Normalize dx/dy columns, leaving pen_state unchanged.
 
     Args:
@@ -199,9 +202,7 @@ def compute_reference_stats(tensors: list[torch.Tensor]) -> dict[str, float]:
     }
 
 
-def normalize_reference(
-    tensor: torch.Tensor, stats: dict[str, float]
-) -> torch.Tensor:
+def normalize_reference(tensor: torch.Tensor, stats: dict[str, float]) -> torch.Tensor:
     """Normalize reference coordinates. Separator points (-1, -1) become (0, 0).
 
     Works with (N, 2) or (batch, N, 2).
@@ -214,9 +215,7 @@ def normalize_reference(
     return result
 
 
-def denormalize_point(
-    dx: float, dy: float, stats: dict[str, float]
-) -> tuple[float, float]:
+def denormalize_point(dx: float, dy: float, stats: dict[str, float]) -> tuple[float, float]:
     """Reverse normalization for a single point.
 
     Args:
@@ -255,9 +254,7 @@ def stroke_to_deltas_2d(points: list | np.ndarray) -> torch.Tensor:
     return result
 
 
-def normalize_deltas_2d(
-    tensor: torch.Tensor, stats: dict[str, float]
-) -> torch.Tensor:
+def normalize_deltas_2d(tensor: torch.Tensor, stats: dict[str, float]) -> torch.Tensor:
     """Normalize 2D deltas (no pen_state column).
 
     Args:
@@ -304,6 +301,7 @@ def compute_stroke_offsets(
     hand_strokes: list[np.ndarray],
     ref_strokes: list[np.ndarray],
     num_points: int = 32,
+    aligner: StrokeAligner | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """Compute per-point offsets between handwritten and reference strokes.
 
@@ -311,21 +309,37 @@ def compute_stroke_offsets(
         hand_strokes: List of handwritten stroke arrays, each (N, 2).
         ref_strokes: List of reference stroke arrays, each (M, 2).
         num_points: Number of points to resample each stroke to.
+        aligner: If provided, use alignment-based pairing instead of index-based.
 
     Returns:
         List of (ref_resampled, offset) tuples where both are (num_points, 2).
     """
-    n_strokes = min(len(hand_strokes), len(ref_strokes))
-    results: list[tuple[np.ndarray, np.ndarray]] = []
+    if aligner is None:
+        n_strokes = min(len(hand_strokes), len(ref_strokes))
+        results: list[tuple[np.ndarray, np.ndarray]] = []
+        for i in range(n_strokes):
+            if len(hand_strokes[i]) < 2 or len(ref_strokes[i]) < 2:
+                continue
+            ref_resampled = resample_stroke(ref_strokes[i], num_points)
+            hand_resampled = resample_stroke(hand_strokes[i], num_points)
+            offset = hand_resampled - ref_resampled
+            results.append((ref_resampled, offset))
+        return results
 
-    for i in range(n_strokes):
-        if len(hand_strokes[i]) < 2 or len(ref_strokes[i]) < 2:
+    alignment = aligner.align(hand_strokes, ref_strokes)
+    results = []
+    for u_idx, r_idx, rev in zip(
+        alignment.user_indices, alignment.ref_indices, alignment.reversed_flags
+    ):
+        if len(hand_strokes[u_idx]) < 2 or len(ref_strokes[r_idx]) < 2:
             continue
-        ref_resampled = resample_stroke(ref_strokes[i], num_points)
-        hand_resampled = resample_stroke(hand_strokes[i], num_points)
+        hand = hand_strokes[u_idx]
+        if rev:
+            hand = hand[::-1].copy()
+        ref_resampled = resample_stroke(ref_strokes[r_idx], num_points)
+        hand_resampled = resample_stroke(hand, num_points)
         offset = hand_resampled - ref_resampled
         results.append((ref_resampled, offset))
-
     return results
 
 

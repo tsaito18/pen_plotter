@@ -322,6 +322,7 @@ class FinetuneDeformationDataset(Dataset):
         ref_dir: Path,
         num_points: int = 32,
         augment: bool = False,
+        use_aligner: bool = True,
     ) -> None:
         self.num_points = num_points
         self.augment = augment
@@ -343,35 +344,94 @@ class FinetuneDeformationDataset(Dataset):
                     for f in sorted(char_dir.glob("*.json")):
                         self.char_samples.append((char_dir.name, f, ref_chars[char_dir.name]))
 
-        self.samples: list[tuple[int, int, int]] = []
+        if use_aligner:
+            from src.model.stroke_aligner import StrokeAligner
+
+            aligner = StrokeAligner(num_points=num_points)
+
+        self.samples: list[tuple[int, int, int, int]] = []
+        self.sample_reversed: list[bool] = []
         for char_idx, (ch, user_path, ref_path) in enumerate(self.char_samples):
             user_data = json.loads(user_path.read_text(encoding="utf-8"))
             ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
-            n_common = min(len(user_data["strokes"]), len(ref_data["strokes"]))
-            for stroke_idx in range(n_common):
-                user_stroke = user_data["strokes"][stroke_idx]
-                ref_stroke = ref_data["strokes"][stroke_idx]
-                if len(user_stroke) >= 2 and len(ref_stroke) >= 2:
-                    self.samples.append((char_idx, stroke_idx, len(user_data["strokes"])))
+
+            if use_aligner:
+                self._align_strokes(char_idx, user_data, ref_data, aligner)
+            else:
+                n_common = min(len(user_data["strokes"]), len(ref_data["strokes"]))
+                for stroke_idx in range(n_common):
+                    if (
+                        len(user_data["strokes"][stroke_idx]) >= 2
+                        and len(ref_data["strokes"][stroke_idx]) >= 2
+                    ):
+                        self.samples.append(
+                            (char_idx, stroke_idx, stroke_idx, len(user_data["strokes"]))
+                        )
+                        self.sample_reversed.append(False)
+
+    def _align_strokes(
+        self,
+        char_idx: int,
+        user_data: dict,
+        ref_data: dict,
+        aligner: object,
+    ) -> None:
+        """Run aligner on one character's strokes and populate self.samples."""
+        user_valid = [(i, s) for i, s in enumerate(user_data["strokes"]) if len(s) >= 2]
+        ref_valid = [(i, s) for i, s in enumerate(ref_data["strokes"]) if len(s) >= 2]
+        if not user_valid or not ref_valid:
+            return
+
+        user_arrays = [
+            np.array([[pt["x"], pt["y"]] for pt in s], dtype=np.float32) for _, s in user_valid
+        ]
+        ref_arrays = [
+            np.array([[pt["x"], pt["y"]] for pt in s], dtype=np.float32) for _, s in ref_valid
+        ]
+
+        all_u = np.concatenate(user_arrays)
+        all_r = np.concatenate(ref_arrays)
+        u_min, u_range = all_u.min(axis=0), (all_u.max(axis=0) - all_u.min(axis=0)).max()
+        r_min, r_range = all_r.min(axis=0), (all_r.max(axis=0) - all_r.min(axis=0)).max()
+        if u_range > 0:
+            scale = r_range / u_range
+            user_norm = [(a - u_min) * scale + r_min for a in user_arrays]
+        else:
+            user_norm = user_arrays
+
+        from src.model.stroke_aligner import StrokeAligner
+
+        assert isinstance(aligner, StrokeAligner)
+        result = aligner.align(user_norm, ref_arrays)
+        for u_arr_idx, r_arr_idx, rev in zip(
+            result.user_indices, result.ref_indices, result.reversed_flags
+        ):
+            u_orig = user_valid[u_arr_idx][0]
+            r_orig = ref_valid[r_arr_idx][0]
+            self.samples.append((char_idx, u_orig, r_orig, len(user_data["strokes"])))
+            self.sample_reversed.append(rev)
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict:
-        char_idx, stroke_idx, num_strokes = self.samples[idx]
+        char_idx, user_stroke_idx, ref_stroke_idx, num_strokes = self.samples[idx]
         character, user_path, ref_path = self.char_samples[char_idx]
 
         user_data = json.loads(user_path.read_text(encoding="utf-8"))
         ref_data = json.loads(ref_path.read_text(encoding="utf-8"))
 
         user_stroke_pts = np.array(
-            [[pt["x"], pt["y"]] for pt in user_data["strokes"][stroke_idx]],
+            [[pt["x"], pt["y"]] for pt in user_data["strokes"][user_stroke_idx]],
             dtype=np.float32,
         )
         ref_stroke_pts = np.array(
-            [[pt["x"], pt["y"]] for pt in ref_data["strokes"][stroke_idx]],
+            [[pt["x"], pt["y"]] for pt in ref_data["strokes"][ref_stroke_idx]],
             dtype=np.float32,
         )
+
+        if self.sample_reversed[idx]:
+            user_stroke_pts = user_stroke_pts[::-1].copy()
 
         # Normalize user strokes to same [0, target_size] range as KanjiVG reference
         all_user_pts = np.concatenate(
@@ -431,7 +491,7 @@ class FinetuneDeformationDataset(Dataset):
         return {
             "reference_points": torch.tensor(ref_resampled, dtype=torch.float32),
             "target_points": torch.tensor(hand_resampled, dtype=torch.float32),
-            "stroke_index": stroke_idx,
+            "stroke_index": ref_stroke_idx,
             "style_strokes": style_tensor,
             "character": character,
         }
@@ -467,6 +527,7 @@ class DeformationFinetuner:
         output_dir: Path,
         device: str | None = None,
         num_workers: int = 0,
+        use_aligner: bool = False,
     ) -> None:
         from src.model.stroke_deformer import AffineStrokeDeformer, StrokeDeformer
 
@@ -506,7 +567,9 @@ class DeformationFinetuner:
         for p in self.deformer.parameters():
             p.requires_grad = False
 
-        self.dataset = FinetuneDeformationDataset(user_data_dir, ref_dir, num_points=num_points)
+        self.dataset = FinetuneDeformationDataset(
+            user_data_dir, ref_dir, num_points=num_points, use_aligner=use_aligner
+        )
         self.dataloader = DataLoader(
             self.dataset,
             batch_size=config.batch_size,
@@ -609,6 +672,7 @@ class UserDeformationTrainer:
         output_dir: Path,
         device: str | None = None,
         num_workers: int = 0,
+        use_aligner: bool = False,
     ) -> None:
         from src.model.stroke_deformer import StrokeDeformer
 
@@ -622,6 +686,7 @@ class UserDeformationTrainer:
             ref_dir,
             num_points=config.num_points,
             augment=True,
+            use_aligner=use_aligner,
         )
         self.dataloader = DataLoader(
             self.dataset,
@@ -684,7 +749,9 @@ class UserDeformationTrainer:
                 predicted = smooth_offsets(predicted)
                 predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
 
-                loss = deformation_loss(predicted, target_offsets) + 0.1 * smoothness_loss(predicted)
+                loss = deformation_loss(predicted, target_offsets) + 0.1 * smoothness_loss(
+                    predicted
+                )
 
                 self.optimizer.zero_grad()
                 loss.backward()

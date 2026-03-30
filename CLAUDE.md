@@ -39,6 +39,7 @@ KanjiVG参照ストローク → リサンプリング（32点）
 StyleEncoder(user_samples) → style_vector（どんな書き癖か）
 StrokeDeformer(参照点 + 正規化位置t + 局所曲率 + style_vector + stroke_embed) → オフセット (N, 2)
 → smooth_offsets(kernel=11) → clamp(±1.2) → 変形済みストローク
+StrokeAligner(Hungarian + MHD) → ストローク順序/方向のアライメント（マージ/スプリット検出付き）
 + ストローク単位の幾何バリエーション（回転・スケール・シフト）
 + 文字配置の揺らぎ（ベースライン・字間・サイズ・傾き）+ ストローク太さ変化
 ```
@@ -102,7 +103,8 @@ StrokeDeformer(参照点 + 正規化位置t + 局所曲率 + style_vector + stro
 - Phase 6 完了: MLモデル V2→V3移行完了（V2 LSTM+MDN断念、V3 StrokeDeformer採用）
 - Phase 7 部分完了: V3スタイル転写動作、組版改善、幾何バリエーション、リアルさ改善（太さ変化・密度変動・段落インデント・局所曲率・クランプ±1.2）、数式レイアウト統合（インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線）、直接ストローク使用・ストローク合成・弾性変形・tremor
 - 訓練: ユーザーデータのみ（330文字/761サンプル）、CASIA不使用
-- 555テスト全パス
+- ストロークアライメント（Hungarian + MHD + マージ/スプリット検出）実装済み — 訓練時use_aligner=True対応
+- 591テスト全パス
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -134,7 +136,7 @@ StrokeDeformer(参照点 + 正規化位置t + 局所曲率 + style_vector + stro
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 
 ### 全体進捗（2026-03-30時点）
-- 555テスト全パス
+- 591テスト全パス
 - KanjiVG 6,699文字変換済み（SVGパーサー: smooth cubic bezier s/S対応済み）
 - 3段階フォールバック（ML推論→KanjiVG→矩形）動作
 - ガイド付きストローク収集UI（381文字セット）実装済み

@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ml = ["torch", "torchvision"]
+ml = ["torch", "torchvision", "scipy"]
 ui = ["gradio"]
 dev = ["pytest", "ruff"]
 

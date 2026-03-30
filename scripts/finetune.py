@@ -53,6 +53,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0,
         help="DataLoader worker processes (0=main process)",
     )
+    parser.add_argument(
+        "--use-aligner",
+        action="store_true",
+        help="Enable stroke alignment (Hungarian + MHD) for stroke order/count mismatch",
+    )
     return parser.parse_args(argv)
 
 
@@ -105,6 +110,7 @@ def main(argv: list[str] | None = None) -> dict:
             output_dir=args.output_dir,
             device=args.device,
             num_workers=args.num_workers,
+            use_aligner=args.use_aligner,
         )
     else:
         finetuner = Finetuner(

@@ -33,7 +33,8 @@ pretrain: ## 事前訓練
 		--batch-size 256 \
 		--hidden-dim 128 \
 		--style-dim 128 \
-		--learning-rate 0.001
+		--learning-rate 0.001 \
+		--use-aligner
 
 finetune: ## ファインチューニング
 	$(VENV) python scripts/finetune.py \
@@ -42,7 +43,8 @@ finetune: ## ファインチューニング
 		--ref-dir $(REF_DIR) \
 		--epochs $(EPOCHS_FT) \
 		--batch-size 8 \
-		--learning-rate 0.0005
+		--learning-rate 0.0005 \
+		--use-aligner
 
 preview: ## プレビュー画像を生成（TEXT変数で指定）
 	@$(VENV) python -c "\
