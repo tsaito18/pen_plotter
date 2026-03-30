@@ -284,13 +284,20 @@ class PlotterPipeline:
     _NOISE_SCALE = 0.3
 
     def _direct_stroke(self, char: str) -> list[Stroke] | None:
-        """ユーザー直接ストロークをランダム選択して正規化(0-1)で返す。"""
+        """ユーザー直接ストロークを合成して正規化(0-1)で返す。"""
         samples = self._user_stroke_db.get(char)
         if not samples:
             return None
 
-        # サンプル単位でランダム選択（ストロークごとの混合はしない）
-        raw_strokes = samples[np.random.randint(len(samples))]
+        if len(samples) == 1:
+            raw_strokes = samples[0]
+        else:
+            # ストローク合成: 各ストロークをランダムなサンプルから選択
+            min_stroke_count = min(len(s) for s in samples)
+            raw_strokes = []
+            for i in range(min_stroke_count):
+                candidates = [s[i] for s in samples if i < len(s)]
+                raw_strokes.append(candidates[np.random.randint(len(candidates))])
 
         varied = self._apply_stroke_variation(raw_strokes)
         return self._normalize_strokes_to_unit(varied)
