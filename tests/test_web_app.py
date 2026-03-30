@@ -703,8 +703,8 @@ class TestStrokeSynthesis:
                 break
         assert any_different, "全結果が同一: 合成またはバリエーションが機能していない"
 
-    def test_synthesis_stroke_count(self, tmp_path):
-        """合成後のストローク数は各サンプルの最大ストローク数。"""
+    def test_synthesis_selects_whole_sample(self, tmp_path):
+        """サンプル単位で選択（ストロークごとの混合ではない）。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
             user_dir, "か",
@@ -720,9 +720,10 @@ class TestStrokeSynthesis:
         pipeline = PlotterPipeline(user_strokes_dir=user_dir)
         placement = CharPlacement(char="か", x=10.0, y=20.0, font_size=5.0)
 
+        # サンプル単位選択なので、ストローク数は2か3（どちらかのサンプルが丸ごと選ばれる）
         np.random.seed(42)
         strokes = pipeline._generate_char_strokes(placement)
-        assert len(strokes) == 3
+        assert len(strokes) in (2, 3)
 
 
 class TestDirectStrokeGeometricVariation:
