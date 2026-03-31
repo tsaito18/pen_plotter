@@ -183,7 +183,11 @@ class PlotterPipeline:
         result = self._stroke_aligner.align(scaled_sample, ref)
 
         mapping: dict[int, Stroke] = {}
+        used_user_indices: set[int] = set()
         for i, (u_idx, r_idx) in enumerate(zip(result.user_indices, result.ref_indices)):
+            if u_idx in used_user_indices:
+                continue  # 同じユーザーストロークの二重マッピングを防止
+            used_user_indices.add(u_idx)
             stroke = scaled_sample[u_idx]
             if hasattr(result, "reversed_flags") and result.reversed_flags[i]:
                 stroke = stroke[::-1].copy()
