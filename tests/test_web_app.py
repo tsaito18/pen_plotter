@@ -10,14 +10,24 @@ from src.ui.web_app import PlotterPipeline
 
 
 def _create_kanjivg_json(base_dir, char, num_strokes=3, num_points=8):
-    """テスト用のKanjiVG JSONファイルを作成。"""
+    """テスト用のKanjiVG JSONファイルを作成。
+
+    ユーザーストロークと幾何的に類似した形状を生成し、
+    StrokeAlignerのquality_thresholdを通過できるようにする。
+    """
     char_dir = base_dir / char
     char_dir.mkdir(parents=True, exist_ok=True)
+    templates = [
+        [(0, 0), (25, 0), (50, 0), (50, 12), (50, 25), (50, 37), (50, 50), (50, 50)],
+        [(60, 0), (60, 7), (60, 14), (60, 21), (60, 28), (60, 35), (60, 42), (60, 50)],
+        [(0, 60), (7, 60), (14, 60), (21, 60), (28, 60), (35, 60), (42, 60), (50, 60)],
+    ]
     strokes = []
     for s in range(num_strokes):
+        template = templates[s % len(templates)]
+        points = template[:num_points]
         stroke = [
-            {"x": float(i + s), "y": float(i * 0.5 + s), "pressure": 1.0, "timestamp": 0.0}
-            for i in range(num_points)
+            {"x": float(p[0]), "y": float(p[1]), "pressure": 1.0, "timestamp": 0.0} for p in points
         ]
         strokes.append(stroke)
     data = {"character": char, "strokes": strokes, "metadata": {"source": "kanjivg"}}
@@ -368,9 +378,7 @@ class TestFallbackStrokes:
                 "strokes": [[{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}]],
                 "metadata": {},
             }
-            (char_dir / f"{char}_001.json").write_text(
-                json.dumps(stroke_data), encoding="utf-8"
-            )
+            (char_dir / f"{char}_001.json").write_text(json.dumps(stroke_data), encoding="utf-8")
 
         pipeline = PlotterPipeline(user_strokes_dir=user_dir)
 
@@ -422,6 +430,7 @@ class TestInterCharShift:
     def test_shift_amount_within_range(self, tmp_path):
         """シフト量が0〜0.2mmの範囲内。"""
         from src.model.augmentation import AugmentConfig
+
         _create_kanjivg_json(tmp_path, "あ", num_strokes=2, num_points=5)
         _create_kanjivg_json(tmp_path, "い", num_strokes=2, num_points=5)
         cfg = AugmentConfig(enabled=False)
@@ -431,9 +440,7 @@ class TestInterCharShift:
             pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
             pipeline._typesetter._augmenter = HandwritingAugmenter(config=cfg)
 
-            baseline_placement = [
-                CharPlacement(char="い", x=16.0, y=20.0, font_size=6.0)
-            ]
+            baseline_placement = [CharPlacement(char="い", x=16.0, y=20.0, font_size=6.0)]
             baseline_strokes = pipeline.placements_to_strokes(baseline_placement)
             baseline_min_x = np.concatenate(baseline_strokes, axis=0)[:, 0].min()
 
@@ -451,9 +458,7 @@ class TestInterCharShift:
         """シフト量がランダムに変動する。"""
         pipeline = self._make_pipeline_with_two_chars(tmp_path)
 
-        baseline_placement = [
-            CharPlacement(char="い", x=16.0, y=20.0, font_size=6.0)
-        ]
+        baseline_placement = [CharPlacement(char="い", x=16.0, y=20.0, font_size=6.0)]
         baseline_strokes = pipeline.placements_to_strokes(baseline_placement)
         baseline_min_x = np.concatenate(baseline_strokes, axis=0)[:, 0].min()
 
@@ -467,13 +472,12 @@ class TestInterCharShift:
             shifts.append(baseline_min_x - shifted_min_x)
 
         unique_shifts = set(round(s, 6) for s in shifts)
-        assert len(unique_shifts) > 1, (
-            f"All shift amounts are identical: {shifts[:5]}"
-        )
+        assert len(unique_shifts) > 1, f"All shift amounts are identical: {shifts[:5]}"
 
     def test_first_char_not_shifted(self, tmp_path):
         """最初の文字はシフトされない（distortion無効で比較）。"""
         from src.model.augmentation import AugmentConfig
+
         _create_kanjivg_json(tmp_path, "あ", num_strokes=2, num_points=5)
         _create_kanjivg_json(tmp_path, "い", num_strokes=2, num_points=5)
         cfg = AugmentConfig(enabled=False)
@@ -517,15 +521,15 @@ def _create_user_stroke_json(base_dir, char, strokes, suffix="001"):
     data = {
         "character": char,
         "strokes": [
-            [{"x": float(p[0]), "y": float(p[1]), "pressure": 1.0, "timestamp": 0.0}
-             for p in stroke]
+            [
+                {"x": float(p[0]), "y": float(p[1]), "pressure": 1.0, "timestamp": 0.0}
+                for p in stroke
+            ]
             for stroke in strokes
         ],
         "metadata": {},
     }
-    (char_dir / f"{char}_{suffix}.json").write_text(
-        json.dumps(data), encoding="utf-8"
-    )
+    (char_dir / f"{char}_{suffix}.json").write_text(json.dumps(data), encoding="utf-8")
 
 
 class TestUserStrokeDB:
@@ -535,17 +539,20 @@ class TestUserStrokeDB:
         """複数文字・複数サンプルが正しくロードされる。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "あ",
+            user_dir,
+            "あ",
             [[[10, 20], [30, 40], [50, 60]], [[70, 80], [90, 100]]],
             suffix="001",
         )
         _create_user_stroke_json(
-            user_dir, "あ",
+            user_dir,
+            "あ",
             [[[15, 25], [35, 45], [55, 65]]],
             suffix="002",
         )
         _create_user_stroke_json(
-            user_dir, "い",
+            user_dir,
+            "い",
             [[[100, 200], [300, 400]]],
             suffix="001",
         )
@@ -581,7 +588,8 @@ class TestUserStrokeDB:
         """ストロークは x, y 座標のみで (N, 2) 配列。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "う",
+            user_dir,
+            "う",
             [[[10.5, 20.3], [30.1, 40.7], [50.9, 60.2]]],
         )
         pipeline = PlotterPipeline(user_strokes_dir=user_dir)
@@ -598,7 +606,8 @@ class TestDirectStrokeUsage:
         """_user_stroke_db に文字がある場合、ML推論が呼ばれない。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "あ",
+            user_dir,
+            "あ",
             [[[0, 0], [100, 0], [100, 100]], [[0, 100], [50, 50]]],
         )
 
@@ -618,7 +627,8 @@ class TestDirectStrokeUsage:
         """1サンプルの場合、そのストロークがそのまま使われる。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "え",
+            user_dir,
+            "え",
             [[[0, 0], [100, 0]], [[0, 100], [100, 100]]],
         )
 
@@ -635,7 +645,8 @@ class TestDirectStrokeUsage:
         """ストロークが _position_strokes() で正しく配置される。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "漢",
+            user_dir,
+            "漢",
             [[[0, 0], [100, 0], [100, 100], [0, 100]]],
         )
 
@@ -655,7 +666,8 @@ class TestDirectStrokeUsage:
         """_user_stroke_db にない文字は従来通りフォールバック。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "あ",
+            user_dir,
+            "あ",
             [[[0, 0], [100, 100]]],
         )
 
@@ -674,12 +686,14 @@ class TestStrokeSynthesis:
         """複数サンプルがある場合、ストロークが混合される可能性がある。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "お",
+            user_dir,
+            "お",
             [[[0, 0], [10, 10]], [[20, 20], [30, 30]]],
             suffix="001",
         )
         _create_user_stroke_json(
-            user_dir, "お",
+            user_dir,
+            "お",
             [[[100, 100], [110, 110]], [[120, 120], [130, 130]]],
             suffix="002",
         )
@@ -707,12 +721,14 @@ class TestStrokeSynthesis:
         """合成はサンプル間の最小ストローク数を使う。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "か",
+            user_dir,
+            "か",
             [[[0, 0], [10, 10]], [[20, 20], [30, 30]]],
             suffix="001",
         )
         _create_user_stroke_json(
-            user_dir, "か",
+            user_dir,
+            "か",
             [[[0, 0], [10, 10]], [[20, 20], [30, 30]], [[40, 40], [50, 50]]],
             suffix="002",
         )
@@ -732,7 +748,8 @@ class TestDirectStrokeGeometricVariation:
         """同じ文字を複数回生成して結果が異なる。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "き",
+            user_dir,
+            "き",
             [[[0, 0], [50, 0], [50, 50], [0, 50], [25, 75]]],
         )
 
@@ -756,7 +773,8 @@ class TestDirectStrokeGeometricVariation:
         """バリエーション後もストローク数・点数は変わらない。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "く",
+            user_dir,
+            "く",
             [[[0, 0], [50, 25], [100, 0]], [[10, 50], [90, 80]]],
         )
 
@@ -774,7 +792,8 @@ class TestDirectStrokeGeometricVariation:
         """変形が合理的な範囲内。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
-            user_dir, "漢",
+            user_dir,
+            "漢",
             [[[0, 0], [100, 0], [100, 100], [0, 100]]],
         )
 
@@ -859,6 +878,7 @@ class TestCharPlacementRole:
         """_place_math() が MathPlacement.role を CharPlacement.role にコピーする。"""
         from src.layout.typesetter import Typesetter
         from src.layout.page_layout import PageConfig
+
         ts = Typesetter(PageConfig(), font_size=7.0)
         output: list[CharPlacement] = []
         ts._place_math(r"\frac{a}{b}", 0.0, 0.0, 0, output)
@@ -979,7 +999,7 @@ class TestGradioGallery:
 
         for block in app.blocks.values():
             if isinstance(block, gr.Image):
-                if hasattr(block, 'label') and block.label == "Preview":
+                if hasattr(block, "label") and block.label == "Preview":
                     pytest.fail("gr.Image with label 'Preview' should be replaced by gr.Gallery")
 
 
@@ -1043,3 +1063,322 @@ class TestPageNumber:
             pipeline._preview_with_ruled_lines([], [], save_path, page_number=12)
             call_args = mock_text.call_args
             assert call_args[0][2] == "P. 12"
+
+
+class TestAlignmentCache:
+    """KanjiVGアンカーによるアライメントキャッシュのテスト。"""
+
+    def test_cache_built_for_char_with_kanjivg_and_multiple_samples(self, tmp_path):
+        """KanjiVGあり+複数サンプルの文字でキャッシュが構築される。"""
+        kanjivg_dir = tmp_path / "kanjivg"
+        user_dir = tmp_path / "user_strokes"
+        _create_kanjivg_json(kanjivg_dir, "あ", num_strokes=3, num_points=8)
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[0, 0], [50, 0], [50, 50]], [[60, 0], [60, 50]], [[0, 60], [50, 60]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[5, 5], [55, 5], [55, 55]], [[65, 5], [65, 55]], [[5, 65], [55, 65]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(kanjivg_dir=kanjivg_dir, user_strokes_dir=user_dir)
+        assert "あ" in pipeline._alignment_cache
+
+    def test_cache_not_built_without_kanjivg(self, tmp_path):
+        """KanjiVGなしの文字はキャッシュに入らない。"""
+        kanjivg_dir = tmp_path / "kanjivg"
+        kanjivg_dir.mkdir()
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[0, 0], [50, 50]], [[60, 60], [100, 100]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[5, 5], [55, 55]], [[65, 65], [105, 105]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(kanjivg_dir=kanjivg_dir, user_strokes_dir=user_dir)
+        assert "え" not in pipeline._alignment_cache
+
+    def test_cache_not_built_for_single_sample(self, tmp_path):
+        """1サンプルの文字はキャッシュ不要（合成しない）。"""
+        kanjivg_dir = tmp_path / "kanjivg"
+        user_dir = tmp_path / "user_strokes"
+        _create_kanjivg_json(kanjivg_dir, "い", num_strokes=2, num_points=8)
+        _create_user_stroke_json(
+            user_dir,
+            "い",
+            [[[0, 0], [50, 50]], [[60, 60], [100, 100]]],
+            suffix="001",
+        )
+        pipeline = PlotterPipeline(kanjivg_dir=kanjivg_dir, user_strokes_dir=user_dir)
+        assert "い" not in pipeline._alignment_cache
+
+    def test_cache_has_available_ref_indices(self, tmp_path):
+        """キャッシュが available_ref_indices を持つ。"""
+        kanjivg_dir = tmp_path / "kanjivg"
+        user_dir = tmp_path / "user_strokes"
+        _create_kanjivg_json(kanjivg_dir, "あ", num_strokes=3, num_points=8)
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[0, 0], [50, 0], [50, 50]], [[60, 0], [60, 50]], [[0, 60], [50, 60]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[5, 5], [55, 5], [55, 55]], [[65, 5], [65, 55]], [[5, 65], [55, 65]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(kanjivg_dir=kanjivg_dir, user_strokes_dir=user_dir)
+        cache = pipeline._alignment_cache["あ"]
+        assert len(cache.available_ref_indices) > 0
+
+    def test_cache_empty_without_kanjivg_dir(self, tmp_path):
+        """kanjivg_dir未指定時はキャッシュ空。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[0, 0], [50, 50]], [[60, 60], [100, 100]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[5, 5], [55, 55]], [[65, 65], [105, 105]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        assert pipeline._alignment_cache == {}
+
+
+class TestSynthesizeFromCache:
+    """キャッシュからのストローク合成テスト。"""
+
+    def test_synthesize_returns_correct_stroke_count(self, tmp_path):
+        """合成結果のストローク数がavailable_ref_indicesと一致。"""
+        kanjivg_dir = tmp_path / "kanjivg"
+        user_dir = tmp_path / "user_strokes"
+        _create_kanjivg_json(kanjivg_dir, "あ", num_strokes=3, num_points=8)
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[0, 0], [50, 0], [50, 50]], [[60, 0], [60, 50]], [[0, 60], [50, 60]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[5, 5], [55, 5], [55, 55]], [[65, 5], [65, 55]], [[5, 65], [55, 65]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(kanjivg_dir=kanjivg_dir, user_strokes_dir=user_dir)
+        cache = pipeline._alignment_cache["あ"]
+        result = pipeline._synthesize_from_cache(cache)
+        assert len(result) == len(cache.available_ref_indices)
+
+    def test_synthesize_produces_variation(self, tmp_path):
+        """複数回合成すると異なる結果が得られる。"""
+        kanjivg_dir = tmp_path / "kanjivg"
+        user_dir = tmp_path / "user_strokes"
+        _create_kanjivg_json(kanjivg_dir, "あ", num_strokes=3, num_points=8)
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[0, 0], [50, 0], [50, 50]], [[60, 0], [60, 50]], [[0, 60], [50, 60]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[0, 0], [40, 10], [45, 55]], [[55, 5], [58, 48]], [[5, 58], [48, 62]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(kanjivg_dir=kanjivg_dir, user_strokes_dir=user_dir)
+        cache = pipeline._alignment_cache["あ"]
+
+        results = []
+        for seed in range(30):
+            np.random.seed(seed)
+            result = pipeline._synthesize_from_cache(cache)
+            results.append([s.copy() for s in result])
+
+        first = np.concatenate(results[0], axis=0)
+        any_different = any(
+            not np.allclose(first, np.concatenate(r, axis=0), atol=1e-6) for r in results[1:]
+        )
+        assert any_different, "合成結果が全て同一"
+
+    def test_synthesize_strokes_in_unit_range(self, tmp_path):
+        """合成ストロークが概ね0-1範囲。"""
+        kanjivg_dir = tmp_path / "kanjivg"
+        user_dir = tmp_path / "user_strokes"
+        _create_kanjivg_json(kanjivg_dir, "あ", num_strokes=3, num_points=8)
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[0, 0], [50, 0], [50, 50]], [[60, 0], [60, 50]], [[0, 60], [50, 60]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[5, 5], [55, 5], [55, 55]], [[65, 5], [65, 55]], [[5, 65], [55, 65]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(kanjivg_dir=kanjivg_dir, user_strokes_dir=user_dir)
+        cache = pipeline._alignment_cache["あ"]
+        result = pipeline._synthesize_from_cache(cache)
+        all_pts = np.concatenate(result, axis=0)
+        assert all_pts.min() >= -0.5, f"min={all_pts.min()}"
+        assert all_pts.max() <= 1.5, f"max={all_pts.max()}"
+
+
+class TestCommonBboxNormalization:
+    """共通bbox正規化（Layer 2）のテスト。"""
+
+    def test_common_bbox_synthesis_without_kanjivg(self, tmp_path):
+        """KanjiVGなしの複数サンプル文字で共通bbox合成が動作する。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[0, 0], [50, 0]], [[0, 50], [50, 50]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[10, 10], [60, 10]], [[10, 60], [60, 60]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="え", x=10.0, y=20.0, font_size=5.0)
+        strokes = pipeline._generate_char_strokes(placement)
+        assert len(strokes) == 2
+
+    def test_common_bbox_produces_variation(self, tmp_path):
+        """共通bbox合成が異なる結果を生成する。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[0, 0], [50, 0]], [[0, 50], [50, 50]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[10, 10], [60, 10]], [[10, 60], [60, 60]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="え", x=10.0, y=20.0, font_size=5.0)
+
+        results = []
+        for seed in range(50):
+            np.random.seed(seed)
+            strokes = pipeline._generate_char_strokes(placement)
+            results.append(np.concatenate(strokes, axis=0))
+
+        first = results[0]
+        any_different = any(not np.allclose(first, r, atol=1e-6) for r in results[1:])
+        assert any_different, "共通bbox合成結果が全て同一"
+
+    def test_common_bbox_spatial_consistency(self, tmp_path):
+        """共通bbox正規化で座標の空間的一貫性が保たれる。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[0, 0], [30, 0], [30, 30]], [[70, 70], [100, 70], [100, 100]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[5, 5], [35, 5], [35, 35]], [[75, 75], [105, 75], [105, 105]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+
+        np.random.seed(42)
+        result = pipeline._direct_stroke("え")
+        assert result is not None
+        center0 = result[0].mean(axis=0)
+        center1 = result[1].mean(axis=0)
+        assert center0[0] < center1[0], "ストロークの空間的順序が保たれていない"
+
+
+class TestHybridSynthesisIntegration:
+    """ハイブリッド合成の統合テスト（cache → common_bbox → single のフォールバック）。"""
+
+    def test_cache_used_when_available(self, tmp_path):
+        """キャッシュがある文字はキャッシュから合成される。"""
+        kanjivg_dir = tmp_path / "kanjivg"
+        user_dir = tmp_path / "user_strokes"
+        _create_kanjivg_json(kanjivg_dir, "あ", num_strokes=3, num_points=8)
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[0, 0], [50, 0], [50, 50]], [[60, 0], [60, 50]], [[0, 60], [50, 60]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "あ",
+            [[[5, 5], [55, 5], [55, 55]], [[65, 5], [65, 55]], [[5, 65], [55, 65]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(kanjivg_dir=kanjivg_dir, user_strokes_dir=user_dir)
+        assert "あ" in pipeline._alignment_cache
+
+        result = pipeline._direct_stroke("あ")
+        assert result is not None
+        assert len(result) > 0
+
+    def test_common_bbox_fallback_when_no_cache(self, tmp_path):
+        """キャッシュがない複数サンプル文字は共通bbox合成。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[0, 0], [50, 0]], [[0, 50], [50, 50]]],
+            suffix="001",
+        )
+        _create_user_stroke_json(
+            user_dir,
+            "え",
+            [[[10, 10], [60, 10]], [[10, 60], [60, 60]]],
+            suffix="002",
+        )
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        assert "え" not in pipeline._alignment_cache
+
+        result = pipeline._direct_stroke("え")
+        assert result is not None
+        assert len(result) == 2
+
+    def test_single_sample_fallback(self, tmp_path):
+        """1サンプルの文字はそのまま正規化。"""
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(
+            user_dir,
+            "お",
+            [[[0, 0], [50, 0]], [[0, 50], [50, 50]]],
+            suffix="001",
+        )
+        pipeline = PlotterPipeline(user_strokes_dir=user_dir)
+        result = pipeline._direct_stroke("お")
+        assert result is not None
+        assert len(result) == 2

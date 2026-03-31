@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +13,7 @@ from src.collector.kanjivg_parser import KanjiVGParser
 from src.gcode.config import PlotterConfig
 from src.gcode.generator import GCodeGenerator
 from src.gcode.optimizer import optimize_stroke_order
-from src.gcode.preview import _draw_stroke_with_width, preview_strokes
+from src.gcode.preview import _draw_stroke_with_width
 from src.layout.line_breaking import is_halfwidth
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement, Typesetter
@@ -20,6 +22,22 @@ from src.model.augmentation import HandwritingAugmenter
 Stroke = npt.NDArray[np.float64]
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CharCoverageReport:
+    user_strokes: list[str] = field(default_factory=list)
+    ml_inference: list[str] = field(default_factory=list)
+    kanjivg: list[str] = field(default_factory=list)
+    geometric: list[str] = field(default_factory=list)
+    rect_fallback: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AlignedStrokeCache:
+    aligned_samples: list[dict[int, Stroke]]
+    available_ref_indices: list[int]
 
 
 class PlotterPipeline:
@@ -73,6 +91,7 @@ class PlotterPipeline:
             self._style_sample = self._load_style_from_user_strokes(user_strokes_dir)
 
         self._user_stroke_db = self._load_user_stroke_db(user_strokes_dir)
+        self._last_coverage = CharCoverageReport()
 
         self._kanjivg_parser: KanjiVGParser | None = None
         self._kanjivg_dir: Path | None = None
@@ -81,6 +100,106 @@ class PlotterPipeline:
             if d.is_dir():
                 self._kanjivg_parser = KanjiVGParser()
                 self._kanjivg_dir = d
+
+        try:
+            from src.model.stroke_aligner import StrokeAligner
+
+            self._stroke_aligner: StrokeAligner | None = StrokeAligner(
+                quality_threshold=5.0,
+            )
+        except ImportError:
+            self._stroke_aligner = None
+
+        self._alignment_cache = self._build_alignment_cache()
+
+    def _build_alignment_cache(self) -> dict[str, AlignedStrokeCache]:
+        """初期化時にKanjiVGアンカーでアライメントキャッシュを構築。"""
+        cache: dict[str, AlignedStrokeCache] = {}
+        if self._stroke_aligner is None or self._kanjivg_dir is None:
+            return cache
+
+        for char, samples in self._user_stroke_db.items():
+            if len(samples) < 2:
+                continue
+
+            ref = self._load_reference_strokes(char)
+            if ref is None:
+                continue
+
+            aligned_samples: list[dict[int, Stroke]] = []
+            for sample in samples:
+                aligned = self._align_sample_to_ref(sample, ref)
+                if aligned is not None:
+                    aligned_samples.append(aligned)
+
+            if len(aligned_samples) < 2:
+                continue
+
+            common_indices = set(aligned_samples[0].keys())
+            for a in aligned_samples[1:]:
+                common_indices &= set(a.keys())
+            available = sorted(common_indices)
+
+            if not available:
+                continue
+
+            cache[char] = AlignedStrokeCache(
+                aligned_samples=aligned_samples,
+                available_ref_indices=available,
+            )
+
+        logger.info("Built alignment cache for %d chars", len(cache))
+        return cache
+
+    def _align_sample_to_ref(
+        self,
+        sample: list[Stroke],
+        ref: list[Stroke],
+    ) -> dict[int, Stroke] | None:
+        """1サンプルをKanjiVG参照ストロークに揃えて {ref_idx: normalized_stroke} を返す。"""
+        if self._stroke_aligner is None:
+            return None
+
+        ref_all = np.concatenate(ref, axis=0)
+        ref_mins = ref_all.min(axis=0)
+        ref_maxs = ref_all.max(axis=0)
+        ref_center = (ref_mins + ref_maxs) / 2
+        ref_span = (ref_maxs - ref_mins).max()
+        if ref_span < 1e-6:
+            return None
+
+        sample_all = np.concatenate(sample, axis=0)
+        s_mins = sample_all.min(axis=0)
+        s_maxs = sample_all.max(axis=0)
+        s_center = (s_mins + s_maxs) / 2
+        s_span = (s_maxs - s_mins).max()
+        if s_span < 1e-6:
+            return None
+
+        scale = ref_span / s_span
+        scaled_sample = [(s - s_center) * scale + ref_center for s in sample]
+
+        result = self._stroke_aligner.align(scaled_sample, ref)
+
+        mapping: dict[int, Stroke] = {}
+        for i, (u_idx, r_idx) in enumerate(zip(result.user_indices, result.ref_indices)):
+            stroke = scaled_sample[u_idx]
+            if hasattr(result, "reversed_flags") and result.reversed_flags[i]:
+                stroke = stroke[::-1].copy()
+            normalized = (stroke - ref_center) / ref_span + 0.5
+            normalized[:, 1] = 1.0 - normalized[:, 1]
+            mapping[r_idx] = normalized
+
+        return mapping if mapping else None
+
+    def _synthesize_from_cache(self, cache: AlignedStrokeCache) -> list[Stroke]:
+        """キャッシュからストロークをランダム選択して合成。"""
+        result: list[Stroke] = []
+        for ref_idx in cache.available_ref_indices:
+            candidates = [s[ref_idx] for s in cache.aligned_samples if ref_idx in s]
+            chosen = candidates[np.random.randint(len(candidates))]
+            result.append(chosen.copy())
+        return result
 
     @staticmethod
     def _load_user_stroke_db(
@@ -156,17 +275,30 @@ class PlotterPipeline:
     def text_to_placements(self, text: str) -> list[list[CharPlacement]]:
         return self._typesetter.typeset(text)
 
-    def placements_to_strokes(self, placements: list[CharPlacement]) -> list[Stroke]:
+    def placements_to_strokes(
+        self,
+        placements: list[CharPlacement],
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> list[Stroke]:
         """各文字のストロークを3段階フォールバックで生成。"""
+        self._last_coverage = CharCoverageReport()
         strokes: list[Stroke] = []
         prev_end_x: float | None = None
         augmenter = self._typesetter.augmenter
         has_real_renderer = self._inference is not None or self._kanjivg_dir is not None
+        total = len(placements)
 
         for i, p in enumerate(placements):
+            if progress_callback:
+                progress_callback(i / max(total, 1), f"ストローク生成中 ({i + 1}/{total})")
             char_strokes = self._generate_char_strokes(p)
 
-            if prev_end_x is not None and augmenter is not None and has_real_renderer and char_strokes:
+            if (
+                prev_end_x is not None
+                and augmenter is not None
+                and has_real_renderer
+                and char_strokes
+            ):
                 shift = augmenter.random_uniform(0, 0.1)
                 char_strokes = [s - np.array([shift, 0.0]) for s in char_strokes]
 
@@ -176,17 +308,18 @@ class PlotterPipeline:
 
             strokes.extend(char_strokes)
 
-            if getattr(p, 'role', None) == "numerator":
+            if getattr(p, "role", None) == "numerator":
                 next_denom = None
                 for j in range(i + 1, len(placements)):
-                    if getattr(placements[j], 'role', None) == "denominator":
+                    if getattr(placements[j], "role", None) == "denominator":
                         next_denom = placements[j]
                         break
                 if next_denom is not None:
                     line_x0 = min(p.x, next_denom.x) - p.font_size * 0.1
-                    line_x1 = max(
-                        p.x + p.font_size, next_denom.x + next_denom.font_size
-                    ) + p.font_size * 0.1
+                    line_x1 = (
+                        max(p.x + p.font_size, next_denom.x + next_denom.font_size)
+                        + p.font_size * 0.1
+                    )
                     line_y = (p.y + next_denom.y) / 2
                     strokes.append(np.array([[line_x0, line_y], [line_x1, line_y]]))
 
@@ -195,18 +328,18 @@ class PlotterPipeline:
     _SKIP_RENDER = set(" \t　")
 
     _CHAR_SUBSTITUTIONS: dict[str, str] = {
-        '｛': '{',
-        '｝': '}',
-        '［': '[',
-        '］': ']',
-        '！': '!',
-        '？': '?',
-        '：': ':',
-        '；': ';',
-        '＝': '=',
-        '＋': '+',
-        '－': '-',
-        '／': '/',
+        "｛": "{",
+        "｝": "}",
+        "［": "[",
+        "］": "]",
+        "！": "!",
+        "？": "?",
+        "：": ":",
+        "；": ";",
+        "＝": "=",
+        "＋": "+",
+        "－": "-",
+        "／": "/",
     }
 
     # 一筆系の文字: 弾性変形・tremorを適用しない（滑らかさを保つ）
@@ -214,15 +347,21 @@ class PlotterPipeline:
 
     def _generate_char_strokes(self, placement: CharPlacement) -> list[Stroke]:
         """Tier 0: 句読点/括弧 → Tier 1: 直接ストローク → Tier 2: ML推論 → Tier 3: KanjiVG → Tier 4: 矩形。"""
+        cov = self._last_coverage
+
         if placement.char in self._SKIP_RENDER:
+            cov.skipped.append(placement.char)
             return []
 
         original_char = placement.char
         lookup_char = self._CHAR_SUBSTITUTIONS.get(original_char, original_char)
         if lookup_char != original_char:
             placement = CharPlacement(
-                char=lookup_char, x=placement.x, y=placement.y,
-                font_size=placement.font_size, page=placement.page,
+                char=lookup_char,
+                x=placement.x,
+                y=placement.y,
+                font_size=placement.font_size,
+                page=placement.page,
             )
 
         is_smooth = original_char in self._SMOOTH_CHARS or lookup_char in self._SMOOTH_CHARS
@@ -230,11 +369,13 @@ class PlotterPipeline:
         # Tier 0: 句読点の幾何生成（KanjiVGデータの不具合を回避）
         punct_strokes = self._simple_punct_strokes(lookup_char)
         if punct_strokes is not None:
+            cov.geometric.append(original_char)
             return self._position_strokes(punct_strokes, placement)
 
         # Tier 1: ユーザー直接ストローク
         direct = self._direct_stroke(placement.char)
         if direct is not None:
+            cov.user_strokes.append(original_char)
             positioned = self._position_strokes(direct, placement)
             return positioned if is_smooth else self._apply_distortion(positioned)
 
@@ -249,6 +390,7 @@ class PlotterPipeline:
                     temperature=self._temperature,
                     reference_strokes=reference,
                 )
+                cov.ml_inference.append(original_char)
                 positioned = self._position_strokes(raw, placement)
                 return positioned if is_smooth else self._apply_distortion(positioned)
             except Exception:
@@ -257,19 +399,23 @@ class PlotterPipeline:
         # Tier 3: 括弧・数式記号の幾何生成
         paren_strokes = self._simple_paren_strokes(original_char, placement)
         if paren_strokes is not None:
+            cov.geometric.append(original_char)
             return self._position_strokes(paren_strokes, placement)
 
         math_strokes = self._math_symbol_strokes(lookup_char)
         if math_strokes is not None:
+            cov.geometric.append(original_char)
             return self._position_strokes(math_strokes, placement)
 
         # Tier 4: KanjiVG
         if self._kanjivg_dir is not None:
             char_strokes = self._load_kanjivg_json(placement)
             if char_strokes is not None:
+                cov.kanjivg.append(original_char)
                 positioned = self._position_strokes(char_strokes, placement)
                 return positioned if is_smooth else self._apply_distortion(positioned)
 
+        cov.rect_fallback.append(original_char)
         return self._rect_fallback(placement)
 
     def _apply_distortion(self, strokes: list[Stroke]) -> list[Stroke]:
@@ -284,24 +430,57 @@ class PlotterPipeline:
     _NOISE_SCALE = 0.3
 
     def _direct_stroke(self, char: str) -> list[Stroke] | None:
-        """ユーザー直接ストロークを合成して正規化(0-1)で返す。"""
+        """ユーザー直接ストロークを3層フォールバックで合成して正規化(0-1)で返す。"""
         samples = self._user_stroke_db.get(char)
         if not samples:
             return None
 
+        # Layer 1: KanjiVGアンカー（キャッシュあり）
+        cache = self._alignment_cache.get(char)
+        if cache is not None:
+            normalized = self._synthesize_from_cache(cache)
+            return self._apply_stroke_variation(normalized)
+
         if len(samples) == 1:
+            # Layer 3: 単一サンプル → そのまま正規化
             normalized = self._normalize_strokes_to_unit(samples[0])
         else:
-            # 各サンプルを先に正規化してから合成（座標系を統一）
-            normalized_samples = [self._normalize_strokes_to_unit(s) for s in samples]
-            min_stroke_count = min(len(s) for s in normalized_samples)
-            normalized = []
-            for i in range(min_stroke_count):
-                candidates = [s[i] for s in normalized_samples if i < len(s)]
-                normalized.append(candidates[np.random.randint(len(candidates))])
+            # Layer 2: 共通bbox正規化で合成
+            normalized = self._synthesize_common_bbox(samples)
 
-        varied = self._apply_stroke_variation(normalized)
-        return varied
+        return self._apply_stroke_variation(normalized)
+
+    def _synthesize_common_bbox(self, samples: list[list[Stroke]]) -> list[Stroke]:
+        """共通bbox正規化で複数サンプルからストロークを合成。"""
+        centers: list[npt.NDArray[np.float64]] = []
+        spans: list[float] = []
+        for sample in samples:
+            all_pts = np.concatenate(sample, axis=0)
+            mins = all_pts.min(axis=0)
+            maxs = all_pts.max(axis=0)
+            centers.append((mins + maxs) / 2)
+            spans.append(float((maxs - mins).max()))
+
+        common_center = np.mean(centers, axis=0)
+        common_span = float(np.mean(spans))
+        if common_span < 1e-6:
+            return self._normalize_strokes_to_unit(samples[0])
+
+        normalized_samples: list[list[Stroke]] = []
+        for sample in samples:
+            normalized = []
+            for s in sample:
+                n = (s - common_center) / common_span + 0.5
+                n[:, 1] = 1.0 - n[:, 1]
+                normalized.append(n)
+            normalized_samples.append(normalized)
+
+        min_stroke_count = min(len(s) for s in normalized_samples)
+        result: list[Stroke] = []
+        for i in range(min_stroke_count):
+            candidates = [s[i] for s in normalized_samples if i < len(s)]
+            result.append(candidates[np.random.randint(len(candidates))])
+        return result
 
     @staticmethod
     def _normalize_strokes_to_unit(strokes: list[Stroke]) -> list[Stroke]:
@@ -390,13 +569,13 @@ class PlotterPipeline:
 
     def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
         """Generate normalized strokes for common punctuation (0-1 range)."""
-        if char in ('、', ','):
+        if char in ("、", ","):
             return [np.array([[0.6, 0.2], [0.3, 0.8]])]
-        elif char in ('。', '.'):
+        elif char in ("。", "."):
             angles = np.linspace(0, 2 * np.pi, 16)
             r = 0.3
             return [np.stack([0.5 + r * np.cos(angles), 0.5 + r * np.sin(angles)], axis=1)]
-        elif char == '・':
+        elif char == "・":
             angles = np.linspace(0, 2 * np.pi, 12)
             r = 0.15
             return [np.stack([0.5 + r * np.cos(angles), 0.5 + r * np.sin(angles)], axis=1)]
@@ -404,7 +583,7 @@ class PlotterPipeline:
 
     def _simple_paren_strokes(self, char: str, placement: CharPlacement) -> list[Stroke] | None:
         """Generate normalized arc strokes for parentheses (0-1 range)."""
-        if char in ('(', '（'):
+        if char in ("(", "（"):
             points = []
             for i in range(20):
                 t = i / 19
@@ -412,7 +591,7 @@ class PlotterPipeline:
                 y = 0.1 + 0.8 * t
                 points.append([x, y])
             return [np.array(points)]
-        elif char in (')', '）'):
+        elif char in (")", "）"):
             points = []
             for i in range(20):
                 t = i / 19
@@ -505,8 +684,8 @@ class PlotterPipeline:
         else:
             cell_width = fs * char_scale
 
-        scale_w = cell_width / ranges[0] if ranges[0] > 1e-6 else float('inf')
-        scale_h = target_h / ranges[1] if ranges[1] > 1e-6 else float('inf')
+        scale_w = cell_width / ranges[0] if ranges[0] > 1e-6 else float("inf")
+        scale_h = target_h / ranges[1] if ranges[1] > 1e-6 else float("inf")
         scale = min(scale_w, scale_h)
 
         scaled = [(stroke - mins) * scale for stroke in strokes]
@@ -564,8 +743,12 @@ class PlotterPipeline:
 
         paper_rect = patches.Rectangle(
             (cfg.paper_origin_x, cfg.paper_origin_y),
-            cfg.paper_width, cfg.paper_height,
-            linewidth=1, edgecolor="gray", facecolor="lightyellow", linestyle="--",
+            cfg.paper_width,
+            cfg.paper_height,
+            linewidth=1,
+            edgecolor="gray",
+            facecolor="lightyellow",
+            linestyle="--",
         )
         ax.add_patch(paper_rect)
 
@@ -581,8 +764,13 @@ class PlotterPipeline:
             page_x = cfg.paper_width / 2
             page_y = cfg.paper_height - self._page_config.margin_bottom / 2
             ax.text(
-                page_x, page_y, f"P. {page_number}",
-                ha="center", va="center", fontsize=8, color="#666666",
+                page_x,
+                page_y,
+                f"P. {page_number}",
+                ha="center",
+                va="center",
+                fontsize=8,
+                color="#666666",
             )
 
         ax.set_xlim(-2, cfg.paper_width + 2)
@@ -594,19 +782,41 @@ class PlotterPipeline:
         fig.savefig(str(save_path), dpi=300)
         plt.close(fig)
 
-    def generate_preview(self, text: str, save_path: str | Path) -> list[Path]:
+    def generate_preview(
+        self,
+        text: str,
+        save_path: str | Path,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> list[Path]:
         save_path = Path(save_path)
+
+        if progress_callback:
+            progress_callback(0.0, "組版中...")
+
         pages = self.text_to_placements(text)
         ruled_lines = self._typesetter._layout.ruled_line_strokes()
 
         if not pages or not pages[0]:
             self._preview_with_ruled_lines([], ruled_lines, save_path)
+            if progress_callback:
+                progress_callback(1.0, "完了")
             return [save_path]
 
+        if progress_callback:
+            progress_callback(0.1, "ストローク生成中...")
+
+        def _stroke_progress(frac: float, desc: str) -> None:
+            if progress_callback:
+                progress_callback(0.1 + frac * 0.7, desc)
+
         if len(pages) == 1:
-            strokes = self.placements_to_strokes(pages[0])
+            strokes = self.placements_to_strokes(pages[0], progress_callback=_stroke_progress)
+            if progress_callback:
+                progress_callback(0.8, "プレビュー描画中...")
             optimized = optimize_stroke_order(strokes)
             self._preview_with_ruled_lines(optimized, ruled_lines, save_path, page_number=1)
+            if progress_callback:
+                progress_callback(1.0, "完了")
             return [save_path]
 
         stem = save_path.stem
@@ -615,55 +825,62 @@ class PlotterPipeline:
         result: list[Path] = []
         for i, page_placements in enumerate(pages, start=1):
             page_path = parent / f"{stem}_p{i}{suffix}"
-            strokes = self.placements_to_strokes(page_placements)
+            strokes = self.placements_to_strokes(
+                page_placements, progress_callback=_stroke_progress
+            )
+            if progress_callback:
+                progress_callback(0.8, f"プレビュー描画中 (p{i})...")
             optimized = optimize_stroke_order(strokes)
             self._preview_with_ruled_lines(optimized, ruled_lines, page_path, page_number=i)
             result.append(page_path)
+
+        if progress_callback:
+            progress_callback(1.0, "完了")
         return result
 
-    def generate_gcode_file(self, text: str, save_path: str | Path) -> None:
+    def generate_gcode_file(
+        self,
+        text: str,
+        save_path: str | Path,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> None:
         save_path = Path(save_path)
+
+        if progress_callback:
+            progress_callback(0.0, "組版中...")
+
         pages = self.text_to_placements(text)
         if not pages or not pages[0]:
             gcode = self._generator.generate([])
             self._generator.save(gcode, save_path)
+            if progress_callback:
+                progress_callback(1.0, "完了")
             return
-        strokes = self.placements_to_strokes(pages[0])
+
+        if progress_callback:
+            progress_callback(0.1, "ストローク生成中...")
+
+        def _stroke_progress(frac: float, desc: str) -> None:
+            if progress_callback:
+                progress_callback(0.1 + frac * 0.6, desc)
+
+        strokes = self.placements_to_strokes(pages[0], progress_callback=_stroke_progress)
+
+        if progress_callback:
+            progress_callback(0.7, "G-code 変換中...")
+
         gcode = self.strokes_to_gcode(strokes)
         self._generator.save(gcode, save_path)
 
+        if progress_callback:
+            progress_callback(1.0, "完了")
+
     def create_app(self):
         try:
-            import gradio as gr
+            import gradio as gr  # noqa: F401
         except ImportError:
             return None
 
-        def _on_preview(text: str):
-            import tempfile
+        from src.ui.gradio_app import create_app
 
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                path = Path(f.name)
-            paths = self.generate_preview(text, save_path=path)
-            return [str(p) for p in paths]
-
-        def _on_generate(text: str):
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(suffix=".gcode", delete=False) as f:
-                path = Path(f.name)
-            self.generate_gcode_file(text, save_path=path)
-            return str(path)
-
-        with gr.Blocks(title="Pen Plotter") as app:
-            gr.Markdown("# Pen Plotter Preview")
-            text_input = gr.Textbox(label="Text", lines=5)
-            with gr.Row():
-                preview_btn = gr.Button("Preview")
-                gcode_btn = gr.Button("Generate G-code")
-            preview_img = gr.Gallery(label="Preview")
-            gcode_file = gr.File(label="G-code")
-
-            preview_btn.click(_on_preview, inputs=text_input, outputs=preview_img)
-            gcode_btn.click(_on_generate, inputs=text_input, outputs=gcode_file)
-
-        return app
+        return create_app(self)
