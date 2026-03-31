@@ -105,7 +105,7 @@ class PlotterPipeline:
             from src.model.stroke_aligner import StrokeAligner
 
             self._stroke_aligner: StrokeAligner | None = StrokeAligner(
-                quality_threshold=5.0,
+                quality_threshold=50.0,
             )
         except ImportError:
             self._stroke_aligner = None
@@ -135,10 +135,11 @@ class PlotterPipeline:
             if len(aligned_samples) < 2:
                 continue
 
-            common_indices = set(aligned_samples[0].keys())
-            for a in aligned_samples[1:]:
-                common_indices &= set(a.keys())
-            available = sorted(common_indices)
+            # union: いずれかのサンプルにあるストロークは全て使う
+            all_indices: set[int] = set()
+            for a in aligned_samples:
+                all_indices |= set(a.keys())
+            available = sorted(all_indices)
 
             if not available:
                 continue
@@ -803,35 +804,32 @@ class PlotterPipeline:
             return [save_path]
 
         if progress_callback:
-            progress_callback(0.1, "ストローク生成中...")
+            progress_callback(0.05, "ストローク生成中...")
 
-        def _stroke_progress(frac: float, desc: str) -> None:
-            if progress_callback:
-                progress_callback(0.1 + frac * 0.7, desc)
-
-        if len(pages) == 1:
-            strokes = self.placements_to_strokes(pages[0], progress_callback=_stroke_progress)
-            if progress_callback:
-                progress_callback(0.8, "プレビュー描画中...")
-            optimized = optimize_stroke_order(strokes)
-            self._preview_with_ruled_lines(optimized, ruled_lines, save_path, page_number=1)
-            if progress_callback:
-                progress_callback(1.0, "完了")
-            return [save_path]
-
+        n_pages = len(pages)
         stem = save_path.stem
         suffix = save_path.suffix
         parent = save_path.parent
         result: list[Path] = []
+
         for i, page_placements in enumerate(pages, start=1):
-            page_path = parent / f"{stem}_p{i}{suffix}"
+            page_base = (i - 1) / n_pages
+            page_span = 1.0 / n_pages
+
+            def _page_stroke_progress(frac: float, desc: str, _base=page_base, _span=page_span) -> None:
+                if progress_callback:
+                    progress_callback(_base + frac * _span * 0.8, desc)
+
+            page_path = save_path if n_pages == 1 else parent / f"{stem}_p{i}{suffix}"
             strokes = self.placements_to_strokes(
-                page_placements, progress_callback=_stroke_progress
+                page_placements, progress_callback=_page_stroke_progress
             )
             if progress_callback:
-                progress_callback(0.8, f"プレビュー描画中 (p{i})...")
+                progress_callback(page_base + page_span * 0.8, f"最適化+描画中 ({i}/{n_pages})...")
             optimized = optimize_stroke_order(strokes)
             self._preview_with_ruled_lines(optimized, ruled_lines, page_path, page_number=i)
+            if progress_callback:
+                progress_callback(page_base + page_span, f"ページ {i}/{n_pages} 完了")
             result.append(page_path)
 
         if progress_callback:
