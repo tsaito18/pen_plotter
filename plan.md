@@ -291,7 +291,8 @@ pen_plotter/
 ### Phase 7: エンドツーエンド統合（部分完了）
 **目標**: テキスト入力 → 手書き生成 → 組版 → G-code → 印刷の一気通貫
 
-- [x] `src/ui/web_app.py` — Gradio Web UI（テキスト入力、プレビュー、印刷ボタン）
+- [x] `src/ui/web_app.py` — PlotterPipeline（パイプラインロジック・CharCoverageReport・AlignmentCache）
+- [x] `src/ui/gradio_app.py` — Gradio Web UI（タブUI・設定パネル・プログレス・ヘルプ・例文）
 - [x] 3段階フォールバック（ML推論→KanjiVG→矩形）
 - [x] V2パイプライン（CharEncoder+文字条件付き推論）統合
 - [x] GPU(XPU)デバイス対応（pretrain.py/finetune.pyに--device引数実装済み、CUDA/XPU/CPU自動検出）
@@ -317,6 +318,8 @@ pen_plotter/
 - [x] 手の震えシミュレーション（3-5Hz低周波揺れ）
 - [x] スキャン画像からのストローク復元を試行 → 品質不足で断念（iPadデータのみ使用）
 - [x] ストロークアライメント（Hungarian + MHD + マージ/スプリット検出、訓練データのストローク順序自動補正）
+- [x] Web UI改善（Gradio タブUI分離・設定パネル・プログレスバー・文字カバレッジレポート・ヘルプタブ・例文ボタン）
+- [x] KanjiVGアンカーによるアライメントキャッシュ（複数サンプル文字のストローク合成品質向上）
 - [ ] パイプライン統合テスト（実データでのエンドツーエンド）
 - [ ] 数式レイアウトのWeb UI統合
 - [ ] 実機テスト（G-code出力→ペンプロッタ印刷）

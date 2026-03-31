@@ -61,7 +61,12 @@ def main() -> None:
         mode.append("矩形フォールバック")
     print(f"描画モード: {', '.join(mode)}")
 
-    app.launch(server_name="0.0.0.0", server_port=args.port, share=args.share)
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=args.port,
+        share=args.share,
+        css=".gradio-container { max-width: 1200px !important; }",
+    )
 
 
 if __name__ == "__main__":
