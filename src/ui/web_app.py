@@ -506,14 +506,14 @@ class PlotterPipeline:
         for stroke in strokes:
             center = stroke.mean(axis=0)
             centered = stroke - center
-            angle = np.random.normal(0, ns * 0.15)
+            angle = np.random.normal(0, ns * 0.05)
             cos_a, sin_a = np.cos(angle), np.sin(angle)
             rotated = centered @ np.array([[cos_a, -sin_a], [sin_a, cos_a]])
-            sx = 1.0 + np.random.normal(0, ns * 0.08)
-            sy = 1.0 + np.random.normal(0, ns * 0.08)
+            sx = 1.0 + np.random.normal(0, ns * 0.03)
+            sy = 1.0 + np.random.normal(0, ns * 0.03)
             scaled = rotated * np.array([sx, sy])
-            dx = np.random.normal(0, ns * 0.3)
-            dy = np.random.normal(0, ns * 0.3)
+            dx = np.random.normal(0, ns * 0.1)
+            dy = np.random.normal(0, ns * 0.1)
             result.append(scaled + center + np.array([dx, dy]))
         return result
 
