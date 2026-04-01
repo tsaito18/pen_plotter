@@ -581,6 +581,13 @@ class PlotterPipeline:
         optimized = optimize_stroke_order(strokes)
         return self._generator.generate(optimized)
 
+    _REPORT_PAPER_BG: Path | None = None
+
+    @classmethod
+    def set_report_paper_bg(cls, path: Path | str | None) -> None:
+        """背景に使うレポート用紙画像を設定。"""
+        cls._REPORT_PAPER_BG = Path(path) if path else None
+
     def _preview_with_ruled_lines(
         self,
         strokes: list[Stroke],
@@ -588,27 +595,41 @@ class PlotterPipeline:
         save_path: str | Path,
         page_number: int | None = None,
     ) -> None:
-        """罫線（薄グレー）+ 文字ストローク（青）を高解像度で描画。"""
+        """罫線 + 文字ストロークを高解像度で描画。"""
         import matplotlib.pyplot as plt
         import matplotlib.patches as patches
 
         cfg = self._plotter_config
         fig, ax = plt.subplots(1, 1, figsize=(10, 14))
 
-        paper_rect = patches.Rectangle(
-            (cfg.paper_origin_x, cfg.paper_origin_y),
-            cfg.paper_width,
-            cfg.paper_height,
-            linewidth=1,
-            edgecolor="gray",
-            facecolor="lightyellow",
-            linestyle="--",
-        )
-        ax.add_patch(paper_rect)
+        # 背景: スキャン画像 or 単色
+        bg_path = self._REPORT_PAPER_BG
+        if bg_path and bg_path.exists():
+            from PIL import Image
 
+            bg_img = Image.open(bg_path)
+            ax.imshow(
+                bg_img,
+                extent=[0, cfg.paper_width, 0, cfg.paper_height],
+                aspect="auto",
+                zorder=0,
+            )
+        else:
+            paper_rect = patches.Rectangle(
+                (cfg.paper_origin_x, cfg.paper_origin_y),
+                cfg.paper_width,
+                cfg.paper_height,
+                linewidth=1,
+                edgecolor="gray",
+                facecolor="lightyellow",
+                linestyle="--",
+            )
+            ax.add_patch(paper_rect)
+
+        # 罫線（デバッグ用: 赤で目立つように）
         for line in ruled_lines:
             if len(line) >= 2:
-                ax.plot(line[:, 0], line[:, 1], color="#CCCCCC", linewidth=0.3)
+                ax.plot(line[:, 0], line[:, 1], color="#ff000044", linewidth=0.5)
 
         for stroke in strokes:
             if len(stroke) >= 2:
