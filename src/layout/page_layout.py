@@ -56,12 +56,13 @@ class PageLayout:
         return positions
 
     def ruled_line_strokes(self) -> list[np.ndarray]:
+        """罫線ストロークを生成。罫線は用紙のほぼ全幅に渡る。"""
         lines = self.line_positions()
         if not lines:
             return []
-        area = self.content_area()
-        x_left = area.x
-        x_right = area.x + area.width
+        pw = self._config.paper_size[0]
+        x_left = 2.0   # 用紙の左端から2mm
+        x_right = pw - 2.0  # 右端から2mm
         return [
             np.array([[x_left, y], [x_right, y]])
             for y in lines

@@ -626,6 +626,19 @@ class PlotterPipeline:
             )
             ax.add_patch(paper_rect)
 
+        # 紙の外枠（デバッグ用）
+        paper_border = patches.Rectangle(
+            (0, 0),
+            cfg.paper_width,
+            cfg.paper_height,
+            linewidth=1.5,
+            edgecolor="#ff000088",
+            facecolor="none",
+            linestyle="-",
+            zorder=1,
+        )
+        ax.add_patch(paper_border)
+
         # 罫線（デバッグ用: 赤で目立つように）
         for line in ruled_lines:
             if len(line) >= 2:
