@@ -118,8 +118,10 @@ def create_app(pipeline: PlotterPipeline) -> gr.Blocks:
                         preview_gallery = gr.Gallery(
                             label="プレビュー",
                             columns=1,
-                            height="auto",
+                            height=700,
                             show_label=False,
+                            object_fit="contain",
+                            preview=True,
                         )
                         with gr.Accordion("文字カバレッジ", open=False):
                             coverage_md = gr.Markdown("")
