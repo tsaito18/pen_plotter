@@ -61,8 +61,8 @@ class PageLayout:
         if not lines:
             return []
         pw = self._config.paper_size[0]
-        x_left = 2.0   # 用紙の左端から2mm
-        x_right = pw - 2.0  # 右端から2mm
+        x_left = 0.0
+        x_right = pw
         return [
             np.array([[x_left, y], [x_right, y]])
             for y in lines
