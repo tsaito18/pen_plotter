@@ -206,7 +206,9 @@ class Typesetter:
                     x = area.x
 
             is_page_first_line = (line_idx == 0)
-            if global_line_idx in para_start_indices and not is_page_first_line and not is_heading:
+            # 段落先頭インデント（見出し行・ページ先頭・見出し直後の最初の段落を除く）
+            prev_is_heading = (global_line_idx - 1) in heading_lines or (global_line_idx - 2) in heading_lines
+            if global_line_idx in para_start_indices and not is_page_first_line and not is_heading and not prev_is_heading:
                 x += self.font_size
 
             # 行単位のベースライン揺らぎ + 密度スケール
