@@ -12,12 +12,12 @@ Stroke = NDArray[np.float64]
 class AugmentConfig:
     """リアルさパラメータ。値は標準偏差（mm単位）。"""
 
-    baseline_drift: float = 0.3
-    size_variation: float = 0.05
-    slant_variation: float = 0.04
-    jitter_amplitude: float = 0.08
-    spacing_variation: float = 0.1
-    line_density_variation: float = 0.1
+    baseline_drift: float = 0.15
+    size_variation: float = 0.02
+    slant_variation: float = 0.02
+    jitter_amplitude: float = 0.03
+    spacing_variation: float = 0.05
+    line_density_variation: float = 0.05
     enabled: bool = True
 
 
@@ -73,7 +73,7 @@ class HandwritingAugmenter:
         """公開RNGアクセス: [low, high) の一様乱数を返す。"""
         return float(self._rng.uniform(low, high))
 
-    def elastic_distort(self, stroke: Stroke, amplitude: float = 0.005) -> Stroke:
+    def elastic_distort(self, stroke: Stroke, amplitude: float = 0.002) -> Stroke:
         """ストロークに滑らかな弾性変形を適用。amplitudeはbbox比。"""
         if len(stroke) < 3 or not self._config.enabled:
             return stroke
@@ -95,7 +95,7 @@ class HandwritingAugmenter:
         self,
         stroke: Stroke,
         freq_range: tuple[float, float] = (3.0, 5.0),
-        amplitude: float = 0.02,
+        amplitude: float = 0.01,
     ) -> Stroke:
         """3-5Hz低周波振動を重畳。amplitudeはmm単位。"""
         if len(stroke) < 2 or not self._config.enabled:

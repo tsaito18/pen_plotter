@@ -20,11 +20,11 @@ def sample_stroke() -> np.ndarray:
 class TestAugmentConfig:
     def test_augment_config_defaults(self):
         cfg = AugmentConfig()
-        assert cfg.baseline_drift == 0.3
-        assert cfg.size_variation == 0.05
-        assert cfg.slant_variation == 0.04
-        assert cfg.jitter_amplitude == 0.08
-        assert cfg.spacing_variation == 0.1
+        assert cfg.baseline_drift == 0.15
+        assert cfg.size_variation == 0.02
+        assert cfg.slant_variation == 0.02
+        assert cfg.jitter_amplitude == 0.03
+        assert cfg.spacing_variation == 0.05
         assert cfg.enabled is True
 
 
@@ -133,7 +133,7 @@ class TestAugmentPage:
 class TestAugmentConfigLineDensity:
     def test_augment_config_line_density_variation_default(self):
         cfg = AugmentConfig()
-        assert cfg.line_density_variation == 0.1
+        assert cfg.line_density_variation == 0.05
 
 
 class TestLineDensityScale:
