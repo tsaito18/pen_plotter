@@ -338,13 +338,13 @@ class TestCharSizeScale:
 
     def test_hiragana_scale(self):
         from src.layout.typesetter import _char_size_scale
-        assert _char_size_scale("あ") == 0.93
-        assert _char_size_scale("ん") == 0.93
+        assert _char_size_scale("あ") == 0.85
+        assert _char_size_scale("ん") == 0.85
 
     def test_katakana_scale(self):
         from src.layout.typesetter import _char_size_scale
-        assert _char_size_scale("ア") == 0.93
-        assert _char_size_scale("ン") == 0.93
+        assert _char_size_scale("ア") == 0.85
+        assert _char_size_scale("ン") == 0.85
 
     def test_small_kana_scale(self):
         from src.layout.typesetter import _char_size_scale
@@ -366,7 +366,7 @@ class TestCharSizeScale:
         placements = pages[0]
         assert placements[0].font_size > placements[1].font_size
         assert placements[0].font_size == pytest.approx(7.0)
-        assert placements[1].font_size == pytest.approx(7.0 * 0.93)
+        assert placements[1].font_size == pytest.approx(7.0 * 0.85)
 
     def test_typeset_small_kana_smallest(self):
         """小書き文字は最小のfont_sizeで配置される。"""
@@ -632,7 +632,7 @@ class TestHeadings:
         pages = ts.typeset("あいうえお")
         assert len(pages[0]) == 5
         for p in pages[0]:
-            assert p.font_size == pytest.approx(7.0 * 0.93)  # ひらがなスケール
+            assert p.font_size == pytest.approx(7.0 * 0.85)  # ひらがなスケール
 
     def test_heading_strips_hash_and_space(self):
         """# と後続スペースが除去され、テキスト部分のみ配置される。"""

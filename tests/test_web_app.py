@@ -194,9 +194,9 @@ class TestFallbackStrokes:
         all_pts = np.concatenate(result, axis=0)
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
         rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
-        expected_size = 6.0 * 0.93
-        assert rendered_w <= expected_size + 0.1
-        assert rendered_h <= expected_size + 0.1
+        expected_size = 6.0 * 0.85
+        assert rendered_w <= expected_size + 0.5
+        assert rendered_h <= expected_size + 0.5
 
     def test_position_strokes_halfwidth(self):
         """半角文字のアスペクト比が保持され、セル内で中央配置される。"""

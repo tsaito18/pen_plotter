@@ -25,9 +25,9 @@ def _char_size_scale(ch: str) -> float:
     if ch in _SMALL_PUNCT:
         return 0.35
     if 0x3040 <= cp <= 0x309F:
-        return 0.93
+        return 0.85
     if 0x30A0 <= cp <= 0x30FF:
-        return 0.93
+        return 0.85
     if is_halfwidth(ch):
         return 0.55
     return 1.0
