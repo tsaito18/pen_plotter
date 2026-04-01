@@ -260,22 +260,17 @@ class PlotterPipeline:
         return strokes
 
     def _generate_page_number_strokes(self, page_number: int) -> list[Stroke]:
-        """ページ番号「P. N」を手書きストロークで生成。左下に配置。"""
-        from src.ui.preview_renderer import _PAGE_NUM_X, _PAGE_NUM_Y
-
-        text = f"P.  {page_number}"
-        x = _PAGE_NUM_X
-        y = _PAGE_NUM_Y
+        """ページ番号を手書きストロークで生成。用紙の「P.」印字の右横に配置。"""
+        text = str(page_number)
+        x = 20.0   # 「P.」印字の右横
+        y = 5.5    # 下端からの距離
         font_size = 3.5
         all_strokes: list[Stroke] = []
         for ch in text:
-            if ch == " ":
-                x += font_size * 0.3
-                continue
             placement = CharPlacement(char=ch, x=x, y=y, font_size=font_size)
             char_strokes = self._stroke_renderer.generate_char_strokes(placement)
             all_strokes.extend(char_strokes)
-            x += font_size * 0.6 if ord(ch) < 128 else font_size
+            x += font_size * 0.5
         return all_strokes
 
     def strokes_to_gcode(self, strokes: list[Stroke]) -> list[str]:

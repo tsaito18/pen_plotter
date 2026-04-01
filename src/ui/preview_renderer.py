@@ -14,10 +14,6 @@ Stroke = npt.NDArray[np.float64]
 
 logger = logging.getLogger(__name__)
 
-# ページ番号「P. N」の位置（用紙座標mm）
-_PAGE_NUM_X = 22.0
-_PAGE_NUM_Y = 8.5  # 下端からの距離
-
 
 class PreviewRenderer:
     def __init__(
