@@ -262,8 +262,8 @@ class PlotterPipeline:
     def _generate_page_number_strokes(self, page_number: int) -> list[Stroke]:
         """ページ番号を手書きストロークで生成。用紙の「P.」印字の右横に配置。"""
         text = str(page_number)
-        x = 20.0   # 「P.」印字の右横
-        y = 5.5    # 下端からの距離
+        x = 30.0   # 「P.」印字の右、下線の上
+        y = 4.0    # 下端からの距離
         font_size = 3.5
         all_strokes: list[Stroke] = []
         for ch in text:
