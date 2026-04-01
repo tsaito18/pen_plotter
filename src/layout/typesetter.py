@@ -222,7 +222,7 @@ class Typesetter:
                         line_width = right_x - body_x.get(current_body_level, area.x)
                     else:
                         line_width = area.width
-                    cpl = int(line_width / self.font_size)
+                    cpl = int(line_width / (self.font_size * 0.9))
                     broken = break_paragraph(stripped, cpl)
                     result_lines = self._rebuild_lines_with_math(part, broken)
                     if heading_level > 0:
@@ -294,11 +294,19 @@ class Typesetter:
                         continue
 
                     cur_halfwidth = is_halfwidth(ch)
+                    size_scale = _char_size_scale(ch)
                     if is_heading:
                         char_font_size = line_font_size
+                        char_advance = line_font_size
                     else:
-                        scale = _char_size_scale(ch)
-                        char_font_size = self.font_size * scale
+                        char_font_size = self.font_size * size_scale
+                        # 配置間隔: 全角は font_size × 0.9（詰め）、半角はさらに小さく
+                        if cur_halfwidth:
+                            char_advance = self.font_size * 0.5
+                        elif ch in _SMALL_KANA or ch in _SMALL_PUNCT:
+                            char_advance = char_font_size
+                        else:
+                            char_advance = self.font_size * 0.9
 
                     if self._augmenter is not None:
                         aug_x, _, aug_size = self._augmenter.augment_char_placement(
@@ -308,13 +316,12 @@ class Typesetter:
                         if prev_halfwidth and cur_halfwidth:
                             spacing_factor *= 0.5
                         aug_x = x + (aug_x - x) * spacing_factor
-                        char_width = aug_size
-                        char_width *= density_scale
+                        char_width = char_advance * density_scale
                         output.append(CharPlacement(
                             char=ch, x=aug_x, y=line_y, font_size=aug_size, page=page_idx,
                         ))
                     else:
-                        char_width = char_font_size
+                        char_width = char_advance
                         output.append(CharPlacement(
                             char=ch, x=x, y=y, font_size=char_font_size, page=page_idx,
                         ))
