@@ -49,8 +49,8 @@ class PlotterPipeline:
             paper_size=(210.0, 297.0),
             margin_top=48.0,
             margin_bottom=34.0,
-            margin_left=8.0,
-            margin_right=8.0,
+            margin_left=5.0,
+            margin_right=5.0,
             line_spacing=7.16,
         )
         self._plotter_config = plotter_config or PlotterConfig(
