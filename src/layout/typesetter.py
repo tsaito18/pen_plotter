@@ -71,6 +71,17 @@ class CharPlacement:
     role: str | None = None
 
 
+@dataclass
+class ParsedDocument:
+    """第1パス（段落解析）の結果。"""
+
+    lines: list[str]
+    heading_lines: dict[int, int]  # global_line_idx → heading_level
+    line_body_level: dict[int, int]  # global_line_idx → body indent level
+    para_start_indices: set[int]
+    block_math_lines: dict[int, str]  # global_line_idx → math source
+
+
 class Typesetter:
     def __init__(
         self,
@@ -88,35 +99,86 @@ class Typesetter:
         return self._augmenter
 
     def typeset(self, text: str) -> list[list[CharPlacement]]:
-        area = self._layout.content_area()
-        line_positions = self._layout.line_positions()
-
         if not text:
             return [[]]
 
-        page_config = self._config
-        default_chars_per_line = int(area.width / self.font_size)
+        area = self._layout.content_area()
+        line_positions = self._layout.line_positions()
+        doc = self._parse_paragraphs(text, area)
 
-        # 段落ごとに改行し、段落先頭行のインデックスを記録
-        # block_math_lines: ブロック数式として中央配置する行のインデックス→数式ソース
+        heading_x: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
+        body_x: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
+        heading_font_scales = {1: 1.15, 2: 1.08, 3: 1.0}
+
+        pages: list[list[CharPlacement]] = []
+        current_page: list[CharPlacement] = []
+        page_idx = 0
+        line_idx = 0
+
+        for global_line_idx, line_text in enumerate(doc.lines):
+            if line_idx >= len(line_positions):
+                pages.append(current_page)
+                current_page = []
+                page_idx += 1
+                line_idx = 0
+
+            y = line_positions[line_idx]
+
+            if global_line_idx in doc.block_math_lines:
+                self._place_block_math(
+                    doc.block_math_lines[global_line_idx], y, area, page_idx, current_page
+                )
+                line_idx += 1
+                continue
+
+            is_heading = global_line_idx in doc.heading_lines
+            h_level = doc.heading_lines.get(global_line_idx, 0)
+            body_level = doc.line_body_level.get(global_line_idx, 0)
+            is_para_start = global_line_idx in doc.para_start_indices
+            is_page_first = line_idx == 0
+            prev_is_heading = (
+                (global_line_idx - 1) in doc.heading_lines
+                or (global_line_idx - 2) in doc.heading_lines
+            )
+
+            placements = self._place_line(
+                line_text=line_text,
+                y=y,
+                page_idx=page_idx,
+                area=area,
+                is_heading=is_heading,
+                heading_level=h_level,
+                body_level=body_level,
+                is_para_start=is_para_start,
+                is_page_first=is_page_first,
+                prev_is_heading=prev_is_heading,
+                heading_x=heading_x,
+                body_x=body_x,
+                heading_font_scales=heading_font_scales,
+            )
+            current_page.extend(placements)
+            line_idx += 1
+
+        pages.append(current_page)
+        return pages
+
+    def _parse_paragraphs(self, text: str, area: object) -> ParsedDocument:
+        """第1パス: テキストを段落解析し、行リストと各行のメタ情報を返す。"""
+        page_config = self._config
+        pw = page_config.paper_size[0]
+        heading_x: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
+        body_x: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
+        right_x: float = pw - 10.0
+
         paragraphs = text.split("\n")
         lines: list[str] = []
         para_start_indices: set[int] = set()
         block_math_lines: dict[int, str] = {}
-
-        heading_lines: dict[int, int] = {}  # global_line_idx → heading_level
-        line_body_level: dict[int, int] = {}  # global_line_idx → body indent level
-        heading_font_scales = {1: 1.15, 2: 1.08, 3: 1.0}
-
-        # 見出しレベルに応じたインデント（mm）
-        pw = page_config.paper_size[0]
-        heading_x: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
-        body_x: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
-        right_x: float = pw - 10.0  # 右端 = 右から10mm
-        current_body_level: int = 0  # 現在の本文インデントレベル
+        heading_lines: dict[int, int] = {}
+        line_body_level: dict[int, int] = {}
+        current_body_level: int = 0
 
         for para in paragraphs:
-            # 見出し判定
             heading_level = 0
             display_para = para
             if para.startswith('###'):
@@ -130,7 +192,6 @@ class Typesetter:
                 display_para = para[1:].strip()
 
             if heading_level > 0:
-                # 見出し前に空行（ページ先頭でない場合）
                 if len(lines) > 0 and lines != ['']:
                     lines.append("")
                 heading_lines[len(lines)] = heading_level
@@ -142,17 +203,14 @@ class Typesetter:
                 lines.append("")
                 continue
 
-            # $$...$$ でブロック数式を分割
             parts = _BLOCK_MATH_RE.split(display_para)
             for part_idx, part in enumerate(parts):
                 if part_idx % 2 == 1:
-                    # ブロック数式
                     if part.strip():
                         block_math_lines[len(lines)] = part.strip()
                         line_body_level[len(lines)] = current_body_level
-                        lines.append("")  # プレースホルダ
+                        lines.append("")
                 else:
-                    # 通常テキスト
                     if not part:
                         continue
                     stripped = _INLINE_MATH_RE.sub(
@@ -167,114 +225,104 @@ class Typesetter:
                     cpl = int(line_width / self.font_size)
                     broken = break_paragraph(stripped, cpl)
                     result_lines = self._rebuild_lines_with_math(part, broken)
-                    # 見出しの場合、全行を見出し行として登録
                     if heading_level > 0:
                         for i in range(len(result_lines)):
                             heading_lines[len(lines) + i] = heading_level
-                    # 各行のbody levelを記録
                     for i in range(len(result_lines)):
                         line_body_level[len(lines) + i] = current_body_level
                     lines.extend(result_lines)
 
-        pages: list[list[CharPlacement]] = []
-        current_page: list[CharPlacement] = []
-        page_idx = 0
-        line_idx = 0
+        return ParsedDocument(
+            lines=lines,
+            heading_lines=heading_lines,
+            line_body_level=line_body_level,
+            para_start_indices=para_start_indices,
+            block_math_lines=block_math_lines,
+        )
 
-        for global_line_idx, line_text in enumerate(lines):
-            if line_idx >= len(line_positions):
-                pages.append(current_page)
-                current_page = []
-                page_idx += 1
-                line_idx = 0
+    def _place_line(
+        self,
+        line_text: str,
+        y: float,
+        page_idx: int,
+        area: object,
+        is_heading: bool,
+        heading_level: int,
+        body_level: int,
+        is_para_start: bool,
+        is_page_first: bool,
+        prev_is_heading: bool,
+        heading_x: dict[int, float],
+        body_x: dict[int, float],
+        heading_font_scales: dict[int, float],
+    ) -> list[CharPlacement]:
+        """第2パス: 1行分の文字配置を計算する。"""
+        output: list[CharPlacement] = []
 
-            y = line_positions[line_idx]
-
-            # ブロック数式行: 中央配置
-            if global_line_idx in block_math_lines:
-                self._place_block_math(
-                    block_math_lines[global_line_idx], y, area, page_idx, current_page
-                )
-                line_idx += 1
-                continue
-
-            # 見出し行のフォントサイズスケール
-            is_heading = global_line_idx in heading_lines
-            if is_heading:
-                h_level = heading_lines[global_line_idx]
-                line_font_size = self.font_size * heading_font_scales[h_level]
-                x = heading_x.get(h_level, area.x)
+        if is_heading:
+            line_font_size = self.font_size * heading_font_scales[heading_level]
+            x = heading_x.get(heading_level, area.x)
+        else:
+            line_font_size = self.font_size
+            if body_level > 0:
+                x = body_x.get(body_level, area.x)
             else:
-                line_font_size = self.font_size
-                bl = line_body_level.get(global_line_idx, 0)
-                if bl > 0:
-                    x = body_x.get(bl, area.x)
-                else:
-                    x = area.x
+                x = area.x
 
-            is_page_first_line = (line_idx == 0)
-            # 段落先頭インデント（見出し行・ページ先頭・見出し直後の最初の段落を除く）
-            prev_is_heading = (global_line_idx - 1) in heading_lines or (global_line_idx - 2) in heading_lines
-            if global_line_idx in para_start_indices and not is_page_first_line and not is_heading and not prev_is_heading:
-                x += self.font_size
+        if is_para_start and not is_page_first and not is_heading and not prev_is_heading:
+            x += self.font_size
 
-            # 行単位のベースライン揺らぎ + 密度スケール
-            if self._augmenter is not None:
-                _, line_y, _ = self._augmenter.augment_char_placement(
-                    x, y, self.font_size
-                )
-                density_scale = self._augmenter.get_line_density_scale()
+        if self._augmenter is not None:
+            _, line_y, _ = self._augmenter.augment_char_placement(
+                x, y, self.font_size
+            )
+            density_scale = self._augmenter.get_line_density_scale()
+        else:
+            line_y = y
+            density_scale = 1.0
+
+        segments = _split_segments(line_text)
+
+        prev_halfwidth = False
+        for seg_type, seg_content in segments:
+            if seg_type == "math":
+                x = self._place_math(seg_content, x, y, page_idx, output)
+                prev_halfwidth = False
             else:
-                line_y = y
-                density_scale = 1.0
+                for ch in seg_content:
+                    if ch == "\n":
+                        continue
 
-            segments = _split_segments(line_text)
+                    cur_halfwidth = is_halfwidth(ch)
+                    if is_heading:
+                        char_font_size = line_font_size
+                    else:
+                        scale = _char_size_scale(ch)
+                        char_font_size = self.font_size * scale
 
-            prev_halfwidth = False
-            for seg_type, seg_content in segments:
-                if seg_type == "math":
-                    x = self._place_math(
-                        seg_content, x, y, page_idx, current_page
-                    )
-                    prev_halfwidth = False
-                else:
-                    for ch in seg_content:
-                        if ch == "\n":
-                            continue
+                    if self._augmenter is not None:
+                        aug_x, _, aug_size = self._augmenter.augment_char_placement(
+                            x, y, char_font_size
+                        )
+                        spacing_factor = density_scale
+                        if prev_halfwidth and cur_halfwidth:
+                            spacing_factor *= 0.5
+                        aug_x = x + (aug_x - x) * spacing_factor
+                        char_width = aug_size
+                        char_width *= density_scale
+                        output.append(CharPlacement(
+                            char=ch, x=aug_x, y=line_y, font_size=aug_size, page=page_idx,
+                        ))
+                    else:
+                        char_width = char_font_size
+                        output.append(CharPlacement(
+                            char=ch, x=x, y=y, font_size=char_font_size, page=page_idx,
+                        ))
 
-                        cur_halfwidth = is_halfwidth(ch)
-                        if is_heading:
-                            char_font_size = line_font_size
-                        else:
-                            scale = _char_size_scale(ch)
-                            char_font_size = self.font_size * scale
+                    prev_halfwidth = cur_halfwidth
+                    x += char_width
 
-                        if self._augmenter is not None:
-                            aug_x, _, aug_size = self._augmenter.augment_char_placement(
-                                x, y, char_font_size
-                            )
-                            spacing_factor = density_scale
-                            if prev_halfwidth and cur_halfwidth:
-                                spacing_factor *= 0.5
-                            aug_x = x + (aug_x - x) * spacing_factor
-                            char_width = aug_size
-                            char_width *= density_scale
-                            current_page.append(CharPlacement(
-                                char=ch, x=aug_x, y=line_y, font_size=aug_size, page=page_idx,
-                            ))
-                        else:
-                            char_width = char_font_size
-                            current_page.append(CharPlacement(
-                                char=ch, x=x, y=y, font_size=char_font_size, page=page_idx,
-                            ))
-
-                        prev_halfwidth = cur_halfwidth
-                        x += char_width
-
-            line_idx += 1
-
-        pages.append(current_page)
-        return pages
+        return output
 
     def _place_block_math(
         self,

@@ -32,6 +32,14 @@ class TestStrokeCollectorApp:
         assert "canvas" in html.lower()
         assert "stroke" in html.lower()
 
+    def test_build_html_reads_from_template_file(self):
+        """build_html() はテンプレートファイルから読み込む"""
+        from pathlib import Path
+        template_path = Path(__file__).resolve().parent.parent / "src" / "collector" / "templates" / "collector.html"
+        assert template_path.exists(), f"Template file not found: {template_path}"
+        content = template_path.read_text(encoding="utf-8")
+        assert "<!DOCTYPE html>" in content
+
     def test_parse_stroke_data(self, app):
         data = {
             "character": "あ",

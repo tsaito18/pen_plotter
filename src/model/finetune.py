@@ -33,6 +33,34 @@ OFFSET_CLAMP = 0.6
 SMOOTHING_KERNEL_SIZE = 11
 
 
+def _scan_char_pairs(user_dir: Path, ref_dir: Path) -> list[tuple[str, Path, Path]]:
+    """Scan user_dir and ref_dir, return matched (char, user_json, ref_json) triples."""
+    user_dir = Path(user_dir)
+    ref_dir = Path(ref_dir)
+
+    ref_chars: dict[str, Path] = {}
+    if ref_dir.is_dir():
+        for char_dir in ref_dir.iterdir():
+            if char_dir.is_dir():
+                ref_files = list(char_dir.glob("*.json"))
+                if ref_files:
+                    ref_chars[char_dir.name] = ref_files[0]
+
+    pairs: list[tuple[str, Path, Path]] = []
+    if user_dir.is_dir():
+        for char_dir in sorted(user_dir.iterdir()):
+            if char_dir.is_dir() and char_dir.name in ref_chars:
+                for f in sorted(char_dir.glob("*.json")):
+                    pairs.append((char_dir.name, f, ref_chars[char_dir.name]))
+    return pairs
+
+
+def _state_dict_cpu(module: torch.nn.Module) -> dict:
+    """Move all state_dict tensors to CPU for checkpoint saving."""
+    cpu = torch.device("cpu")
+    return {k: v.to(cpu) for k, v in module.state_dict().items()}
+
+
 def smooth_offsets(offsets: torch.Tensor, kernel_size: int = SMOOTHING_KERNEL_SIZE) -> torch.Tensor:
     """Apply 1D moving average to smooth per-point offsets.
 
@@ -67,23 +95,7 @@ class FinetuneDataset(Dataset):
     """
 
     def __init__(self, user_dir: Path, ref_dir: Path) -> None:
-        self.char_samples: list[tuple[str, Path, Path]] = []
-        user_dir = Path(user_dir)
-        ref_dir = Path(ref_dir)
-
-        ref_chars: dict[str, Path] = {}
-        if ref_dir.is_dir():
-            for char_dir in ref_dir.iterdir():
-                if char_dir.is_dir():
-                    ref_files = list(char_dir.glob("*.json"))
-                    if ref_files:
-                        ref_chars[char_dir.name] = ref_files[0]
-
-        if user_dir.is_dir():
-            for char_dir in sorted(user_dir.iterdir()):
-                if char_dir.is_dir() and char_dir.name in ref_chars:
-                    for f in sorted(char_dir.glob("*.json")):
-                        self.char_samples.append((char_dir.name, f, ref_chars[char_dir.name]))
+        self.char_samples = _scan_char_pairs(user_dir, ref_dir)
 
         self.samples: list[tuple[int, int, int]] = []
         for char_idx, (ch, user_path, _) in enumerate(self.char_samples):
@@ -160,7 +172,74 @@ def collate_finetune(batch: list[dict]) -> dict:
     }
 
 
-class Finetuner:
+class BaseFinetuner:
+    """Template base for all fine-tuning/training classes.
+
+    Subclasses implement the hooks; the training loop structure is shared.
+    """
+
+    config: FinetuneConfig | UserTrainConfig
+    dataloader: DataLoader
+    optimizer: torch.optim.Optimizer
+
+    def __init__(self, config: FinetuneConfig | UserTrainConfig, output_dir: Path, device: str | None = None) -> None:
+        self.config = config
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.device = _detect_device(device)
+
+    def _log_start(self) -> None:
+        print(f"Device: {self.device}")
+
+    def _set_train_mode(self) -> None:
+        raise NotImplementedError
+
+    def _compute_batch_loss(self, batch: dict) -> torch.Tensor:
+        raise NotImplementedError
+
+    def _get_clip_params(self) -> list | torch.nn.Parameter:
+        raise NotImplementedError
+
+    def _post_epoch(self, epoch: int, avg_loss: float) -> None:
+        pass
+
+    def _build_checkpoint(self) -> dict:
+        raise NotImplementedError
+
+    def _checkpoint_path(self) -> Path:
+        return self.output_dir / "finetuned.pt"
+
+    def train(self) -> dict:
+        self._log_start()
+        history: dict[str, list[float]] = {"losses": []}
+        self._set_train_mode()
+
+        for epoch in range(self.config.epochs):
+            epoch_loss = 0.0
+            n_batches = 0
+
+            for batch in self.dataloader:
+                loss = self._compute_batch_loss(batch)
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self._get_clip_params(), self.config.grad_clip_norm
+                )
+                self.optimizer.step()
+
+                epoch_loss += loss.item()
+                n_batches += 1
+
+            avg_loss = epoch_loss / max(n_batches, 1)
+            history["losses"].append(avg_loss)
+            self._post_epoch(epoch, avg_loss)
+
+        torch.save(self._build_checkpoint(), self._checkpoint_path())
+        return history
+
+
+class Finetuner(BaseFinetuner):
     """事前学習済みチェックポイントからStyleEncoderのみをFine-tuningする。"""
 
     def __init__(
@@ -173,10 +252,7 @@ class Finetuner:
         device: str | None = None,
         num_workers: int = 0,
     ) -> None:
-        self.config = config
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.device = _detect_device(device)
+        super().__init__(config, output_dir, device)
 
         checkpoint = torch.load(pretrain_checkpoint, weights_only=False, map_location="cpu")
         self.ckpt_config = checkpoint["config"]
@@ -220,97 +296,68 @@ class Finetuner:
 
         self.optimizer = torch.optim.Adam(self.style_encoder.parameters(), lr=config.learning_rate)
 
-    def train(self) -> dict:
-        print(f"Device: {self.device}")
-        history: dict[str, list[float]] = {"losses": []}
-
+    def _set_train_mode(self) -> None:
         self.generator.train()
         self.char_encoder.train()
         self.style_encoder.train()
 
-        for _epoch in range(self.config.epochs):
-            epoch_loss = 0.0
-            n_batches = 0
+    def _get_clip_params(self):
+        return self.style_encoder.parameters()
 
-            for batch in self.dataloader:
-                stroke_deltas = batch["stroke_deltas"].to(self.device)
-                eos = batch["eos"].to(self.device)
-                stroke_indices = batch["stroke_indices"].to(self.device)
+    def _compute_batch_loss(self, batch: dict) -> torch.Tensor:
+        stroke_deltas = batch["stroke_deltas"].to(self.device)
+        eos = batch["eos"].to(self.device)
+        stroke_indices = batch["stroke_indices"].to(self.device)
 
-                if self.norm_stats is not None:
-                    stroke_deltas_norm = normalize_deltas_2d(stroke_deltas, self.norm_stats)
-                else:
-                    stroke_deltas_norm = stroke_deltas
+        if self.norm_stats is not None:
+            stroke_deltas_norm = normalize_deltas_2d(stroke_deltas, self.norm_stats)
+        else:
+            stroke_deltas_norm = stroke_deltas
 
-                style_strokes = batch["style_strokes"].to(self.device)
-                if self.norm_stats is not None:
-                    style_strokes = normalize_deltas(style_strokes, self.norm_stats)
+        style_strokes = batch["style_strokes"].to(self.device)
+        if self.norm_stats is not None:
+            style_strokes = normalize_deltas(style_strokes, self.norm_stats)
 
-                ref_strokes = batch["ref_strokes"].to(self.device)
-                if self.ref_norm_stats is not None:
-                    ref_strokes = normalize_reference(ref_strokes, self.ref_norm_stats)
+        ref_strokes = batch["ref_strokes"].to(self.device)
+        if self.ref_norm_stats is not None:
+            ref_strokes = normalize_reference(ref_strokes, self.ref_norm_stats)
 
-                style_lengths = batch["style_lengths"]
-                ref_lengths = batch["ref_lengths"]
+        style_lengths = batch["style_lengths"]
+        ref_lengths = batch["ref_lengths"]
 
-                style = self.style_encoder(style_strokes, lengths=style_lengths)
+        style = self.style_encoder(style_strokes, lengths=style_lengths)
 
-                with torch.no_grad():
-                    char_emb = self.char_encoder(ref_strokes, lengths=ref_lengths)
+        with torch.no_grad():
+            char_emb = self.char_encoder(ref_strokes, lengths=ref_lengths)
 
-                x = stroke_deltas_norm[:, :-1]
-                target_xy = stroke_deltas_norm[:, 1:]
-                target_eos = eos[:, 1:]
+        x = stroke_deltas_norm[:, :-1]
+        target_xy = stroke_deltas_norm[:, 1:]
+        target_eos = eos[:, 1:]
 
-                output = self.generator(
-                    x,
-                    style,
-                    char_embedding=char_emb,
-                    stroke_index=stroke_indices,
-                )
-
-                min_len = min(output["pi"].shape[1], target_xy.shape[1])
-                trimmed_output = {k: v[:, :min_len] for k, v in output.items()}
-                trimmed_xy = target_xy[:, :min_len]
-                trimmed_eos = target_eos[:, :min_len]
-
-                stroke_loss, eos_loss = mdn_loss(trimmed_output, trimmed_xy, trimmed_eos)
-                loss = stroke_loss + 0.5 * eos_loss
-
-                self.optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    self.style_encoder.parameters(),
-                    self.config.grad_clip_norm,
-                )
-                self.optimizer.step()
-
-                epoch_loss += loss.item()
-                n_batches += 1
-
-            avg_loss = epoch_loss / max(n_batches, 1)
-            history["losses"].append(avg_loss)
-
-        cpu = torch.device("cpu")
-        torch.save(
-            {
-                "generator_state_dict": {
-                    k: v.to(cpu) for k, v in self.generator.state_dict().items()
-                },
-                "style_encoder_state_dict": {
-                    k: v.to(cpu) for k, v in self.style_encoder.state_dict().items()
-                },
-                "char_encoder_state_dict": {
-                    k: v.to(cpu) for k, v in self.char_encoder.state_dict().items()
-                },
-                "config": self.ckpt_config,
-                "norm_stats": self.norm_stats,
-                "ref_norm_stats": self.ref_norm_stats,
-            },
-            self.output_dir / "finetuned.pt",
+        output = self.generator(
+            x,
+            style,
+            char_embedding=char_emb,
+            stroke_index=stroke_indices,
         )
 
-        return history
+        min_len = min(output["pi"].shape[1], target_xy.shape[1])
+        trimmed_output = {k: v[:, :min_len] for k, v in output.items()}
+        trimmed_xy = target_xy[:, :min_len]
+        trimmed_eos = target_eos[:, :min_len]
+
+        stroke_loss, eos_loss = mdn_loss(trimmed_output, trimmed_xy, trimmed_eos)
+        return stroke_loss + 0.5 * eos_loss
+
+    def _build_checkpoint(self) -> dict:
+        return {
+            "generator_state_dict": _state_dict_cpu(self.generator),
+            "style_encoder_state_dict": _state_dict_cpu(self.style_encoder),
+            "char_encoder_state_dict": _state_dict_cpu(self.char_encoder),
+            "config": self.ckpt_config,
+            "norm_stats": self.norm_stats,
+            "ref_norm_stats": self.ref_norm_stats,
+        }
 
 
 class FinetuneDeformationDataset(Dataset):
@@ -326,23 +373,7 @@ class FinetuneDeformationDataset(Dataset):
     ) -> None:
         self.num_points = num_points
         self.augment = augment
-        self.char_samples: list[tuple[str, Path, Path]] = []
-        user_dir = Path(user_dir)
-        ref_dir = Path(ref_dir)
-
-        ref_chars: dict[str, Path] = {}
-        if ref_dir.is_dir():
-            for char_dir in ref_dir.iterdir():
-                if char_dir.is_dir():
-                    ref_files = list(char_dir.glob("*.json"))
-                    if ref_files:
-                        ref_chars[char_dir.name] = ref_files[0]
-
-        if user_dir.is_dir():
-            for char_dir in sorted(user_dir.iterdir()):
-                if char_dir.is_dir() and char_dir.name in ref_chars:
-                    for f in sorted(char_dir.glob("*.json")):
-                        self.char_samples.append((char_dir.name, f, ref_chars[char_dir.name]))
+        self.char_samples = _scan_char_pairs(user_dir, ref_dir)
 
         if use_aligner:
             from src.model.stroke_aligner import StrokeAligner
@@ -515,7 +546,7 @@ def collate_deformation_finetune(batch: list[dict]) -> dict:
     }
 
 
-class DeformationFinetuner:
+class DeformationFinetuner(BaseFinetuner):
     """Fine-tune StyleEncoder only, freeze StrokeDeformer."""
 
     def __init__(
@@ -531,10 +562,7 @@ class DeformationFinetuner:
     ) -> None:
         from src.model.stroke_deformer import AffineStrokeDeformer, StrokeDeformer
 
-        self.config = config
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.device = _detect_device(device)
+        super().__init__(config, output_dir, device)
 
         checkpoint = torch.load(pretrain_checkpoint, weights_only=False, map_location="cpu")
         self.ckpt_config = checkpoint["config"]
@@ -581,71 +609,48 @@ class DeformationFinetuner:
 
         self.optimizer = torch.optim.Adam(self.style_encoder.parameters(), lr=config.learning_rate)
 
-    def train(self) -> dict:
-        from src.model.stroke_deformer import affine_deformation_loss, deformation_loss
-
+    def _log_start(self) -> None:
         print(f"[V3] Device: {self.device}")
-        history: dict[str, list[float]] = {"losses": []}
 
+    def _set_train_mode(self) -> None:
         self.deformer.eval()
         self.style_encoder.train()
 
-        for _epoch in range(self.config.epochs):
-            epoch_loss = 0.0
-            n_batches = 0
+    def _get_clip_params(self):
+        return self.style_encoder.parameters()
 
-            for batch in self.dataloader:
-                ref_points = batch["reference_points"].to(self.device)
-                target_points = batch["target_points"].to(self.device)
-                stroke_indices = batch["stroke_indices"].to(self.device)
+    def _compute_batch_loss(self, batch: dict) -> torch.Tensor:
+        from src.model.stroke_deformer import affine_deformation_loss, deformation_loss
 
-                style_strokes = batch["style_strokes"].to(self.device)
-                if self.norm_stats is not None:
-                    style_strokes = normalize_deltas(style_strokes, self.norm_stats)
-                style_lengths = batch["style_lengths"]
+        ref_points = batch["reference_points"].to(self.device)
+        target_points = batch["target_points"].to(self.device)
+        stroke_indices = batch["stroke_indices"].to(self.device)
 
-                style = self.style_encoder(style_strokes, lengths=style_lengths)
+        style_strokes = batch["style_strokes"].to(self.device)
+        if self.norm_stats is not None:
+            style_strokes = normalize_deltas(style_strokes, self.norm_stats)
+        style_lengths = batch["style_lengths"]
 
-                if self.deformer_type == "affine":
-                    transformed, _params = self.deformer(ref_points, style, stroke_indices)
-                    loss = affine_deformation_loss(transformed, target_points)
-                else:
-                    predicted = self.deformer(ref_points, style, stroke_indices)
-                    predicted = smooth_offsets(predicted)
-                    predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
-                    target_offsets = target_points - ref_points
-                    loss = deformation_loss(predicted, target_offsets)
+        style = self.style_encoder(style_strokes, lengths=style_lengths)
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    self.style_encoder.parameters(), self.config.grad_clip_norm
-                )
-                self.optimizer.step()
+        if self.deformer_type == "affine":
+            transformed, _params = self.deformer(ref_points, style, stroke_indices)
+            return affine_deformation_loss(transformed, target_points)
+        else:
+            predicted = self.deformer(ref_points, style, stroke_indices)
+            predicted = smooth_offsets(predicted)
+            predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
+            target_offsets = target_points - ref_points
+            return deformation_loss(predicted, target_offsets)
 
-                epoch_loss += loss.item()
-                n_batches += 1
-
-            avg_loss = epoch_loss / max(n_batches, 1)
-            history["losses"].append(avg_loss)
-
-        cpu = torch.device("cpu")
-        torch.save(
-            {
-                "deformer_state_dict": {
-                    k: v.to(cpu) for k, v in self.deformer.state_dict().items()
-                },
-                "style_encoder_state_dict": {
-                    k: v.to(cpu) for k, v in self.style_encoder.state_dict().items()
-                },
-                "config": self.ckpt_config,
-                "norm_stats": self.norm_stats,
-                "version": 3,
-            },
-            self.output_dir / "finetuned.pt",
-        )
-
-        return history
+    def _build_checkpoint(self) -> dict:
+        return {
+            "deformer_state_dict": _state_dict_cpu(self.deformer),
+            "style_encoder_state_dict": _state_dict_cpu(self.style_encoder),
+            "config": self.ckpt_config,
+            "norm_stats": self.norm_stats,
+            "version": 3,
+        }
 
 
 @dataclass
@@ -661,7 +666,7 @@ class UserTrainConfig:
     weight_decay: float = 0.01
 
 
-class UserDeformationTrainer:
+class UserDeformationTrainer(BaseFinetuner):
     """Train StrokeDeformer + StyleEncoder directly on user data (no CASIA)."""
 
     def __init__(
@@ -676,10 +681,7 @@ class UserDeformationTrainer:
     ) -> None:
         from src.model.stroke_deformer import StrokeDeformer
 
-        self.config = config
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.device = _detect_device(device)
+        super().__init__(config, output_dir, device)
 
         self.dataset = FinetuneDeformationDataset(
             user_data_dir,
@@ -719,76 +721,56 @@ class UserDeformationTrainer:
             T_max=config.epochs,
         )
 
-    def train(self) -> dict:
-        from src.model.stroke_deformer import deformation_loss, smoothness_loss
-
+    def _log_start(self) -> None:
         print(f"[V3-user] Device: {self.device}")
         print(f"[V3-user] Dataset: {len(self.dataset)} stroke pairs")
-        history: dict[str, list[float]] = {"losses": []}
 
+    def _set_train_mode(self) -> None:
         self.deformer.train()
         self.style_encoder.train()
 
-        for epoch in range(self.config.epochs):
-            epoch_loss = 0.0
-            n_batches = 0
+    def _get_clip_params(self):
+        return [p for group in self.optimizer.param_groups for p in group["params"]]
 
-            for batch in self.dataloader:
-                ref_points = batch["reference_points"].to(self.device)
-                target_points = batch["target_points"].to(self.device)
-                stroke_indices = batch["stroke_indices"].to(self.device)
-                target_offsets = target_points - ref_points
+    def _compute_batch_loss(self, batch: dict) -> torch.Tensor:
+        from src.model.stroke_deformer import deformation_loss, smoothness_loss
 
-                style_strokes = batch["style_strokes"].to(self.device)
-                if self.norm_stats is not None:
-                    style_strokes = normalize_deltas(style_strokes, self.norm_stats)
-                style_lengths = batch["style_lengths"]
+        ref_points = batch["reference_points"].to(self.device)
+        target_points = batch["target_points"].to(self.device)
+        stroke_indices = batch["stroke_indices"].to(self.device)
+        target_offsets = target_points - ref_points
 
-                style = self.style_encoder(style_strokes, lengths=style_lengths)
-                predicted = self.deformer(ref_points, style, stroke_indices)
-                predicted = smooth_offsets(predicted)
-                predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
+        style_strokes = batch["style_strokes"].to(self.device)
+        if self.norm_stats is not None:
+            style_strokes = normalize_deltas(style_strokes, self.norm_stats)
+        style_lengths = batch["style_lengths"]
 
-                loss = deformation_loss(predicted, target_offsets) + 0.1 * smoothness_loss(
-                    predicted
-                )
+        style = self.style_encoder(style_strokes, lengths=style_lengths)
+        predicted = self.deformer(ref_points, style, stroke_indices)
+        predicted = smooth_offsets(predicted)
+        predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                all_params = [p for group in self.optimizer.param_groups for p in group["params"]]
-                torch.nn.utils.clip_grad_norm_(all_params, self.config.grad_clip_norm)
-                self.optimizer.step()
+        return deformation_loss(predicted, target_offsets) + 0.1 * smoothness_loss(predicted)
 
-                epoch_loss += loss.item()
-                n_batches += 1
+    def _post_epoch(self, epoch: int, avg_loss: float) -> None:
+        self.scheduler.step()
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            print(f"  [V3-user] Epoch {epoch + 1}/{self.config.epochs} — loss: {avg_loss:.4f}")
 
-            avg_loss = epoch_loss / max(n_batches, 1)
-            history["losses"].append(avg_loss)
-            self.scheduler.step()
-
-            if (epoch + 1) % 10 == 0 or epoch == 0:
-                print(f"  [V3-user] Epoch {epoch + 1}/{self.config.epochs} — loss: {avg_loss:.4f}")
-
-        cpu = torch.device("cpu")
-        torch.save(
-            {
-                "deformer_state_dict": {
-                    k: v.to(cpu) for k, v in self.deformer.state_dict().items()
-                },
-                "style_encoder_state_dict": {
-                    k: v.to(cpu) for k, v in self.style_encoder.state_dict().items()
-                },
-                "config": {
-                    "style_dim": self.config.style_dim,
-                    "hidden_dim": self.config.hidden_dim,
-                    "num_points": self.config.num_points,
-                    "dropout": self.config.dropout,
-                    "deformer_type": "offset",
-                },
-                "norm_stats": self.norm_stats,
-                "version": 3,
+    def _build_checkpoint(self) -> dict:
+        return {
+            "deformer_state_dict": _state_dict_cpu(self.deformer),
+            "style_encoder_state_dict": _state_dict_cpu(self.style_encoder),
+            "config": {
+                "style_dim": self.config.style_dim,
+                "hidden_dim": self.config.hidden_dim,
+                "num_points": self.config.num_points,
+                "dropout": self.config.dropout,
+                "deformer_type": "offset",
             },
-            self.output_dir / "pretrain_checkpoint.pt",
-        )
+            "norm_stats": self.norm_stats,
+            "version": 3,
+        }
 
-        return history
+    def _checkpoint_path(self) -> Path:
+        return self.output_dir / "pretrain_checkpoint.pt"
