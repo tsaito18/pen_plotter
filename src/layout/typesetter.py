@@ -25,11 +25,11 @@ def _char_size_scale(ch: str) -> float:
     if ch in _SMALL_PUNCT:
         return 0.35
     if 0x3040 <= cp <= 0x309F:
-        return 0.88
+        return 0.93
     if 0x30A0 <= cp <= 0x30FF:
-        return 0.88
+        return 0.93
     if is_halfwidth(ch):
-        return 0.6
+        return 0.55
     return 1.0
 
 
@@ -104,7 +104,7 @@ class Typesetter:
         block_math_lines: dict[int, str] = {}
 
         heading_lines: dict[int, int] = {}  # global_line_idx → heading_level
-        heading_font_scales = {1: 1.3, 2: 1.15, 3: 1.0}
+        heading_font_scales = {1: 1.15, 2: 1.08, 3: 1.0}
 
         for para in paragraphs:
             # 見出し判定

@@ -53,7 +53,7 @@ class TestTypesetter:
         placements = pages[0]
         # 半角文字は_char_size_scaleにより0.6倍幅
         width = placements[1].x - placements[0].x
-        assert width == pytest.approx(ts.font_size * 0.6)
+        assert width == pytest.approx(ts.font_size * 0.55)
 
     def test_halfwidth_width_ratio(self):
         """半角文字幅は漢字の0.6倍。"""
@@ -64,7 +64,7 @@ class TestTypesetter:
         pages2 = ts.typeset("漢字")
         p2 = pages2[0]
         full_w = p2[1].x - p2[0].x  # '漢'の幅（スケール1.0）
-        assert half_w == pytest.approx(full_w * 0.6)
+        assert half_w == pytest.approx(full_w * 0.55)
 
     def test_font_size_default(self):
         ts = Typesetter(PageConfig())
@@ -300,7 +300,7 @@ class TestHalfwidthSpacingReduction:
             font = ts_half.font_size
             for i in range(1, len(p_half) - 1):
                 actual_w = p_half[i + 1].x - p_half[i].x
-                expected_w = font * 0.6  # _char_size_scale による半角幅
+                expected_w = font * 0.55  # _char_size_scale による半角幅
                 half_deviations.append(abs(actual_w - expected_w))
 
             # 漢字: スケール1.0
@@ -343,13 +343,13 @@ class TestCharSizeScale:
 
     def test_hiragana_scale(self):
         from src.layout.typesetter import _char_size_scale
-        assert _char_size_scale("あ") == 0.88
-        assert _char_size_scale("ん") == 0.88
+        assert _char_size_scale("あ") == 0.93
+        assert _char_size_scale("ん") == 0.93
 
     def test_katakana_scale(self):
         from src.layout.typesetter import _char_size_scale
-        assert _char_size_scale("ア") == 0.88
-        assert _char_size_scale("ン") == 0.88
+        assert _char_size_scale("ア") == 0.93
+        assert _char_size_scale("ン") == 0.93
 
     def test_small_kana_scale(self):
         from src.layout.typesetter import _char_size_scale
@@ -360,8 +360,8 @@ class TestCharSizeScale:
 
     def test_halfwidth_scale(self):
         from src.layout.typesetter import _char_size_scale
-        assert _char_size_scale("a") == 0.6
-        assert _char_size_scale("1") == 0.6
+        assert _char_size_scale("a") == 0.55
+        assert _char_size_scale("1") == 0.55
 
     def test_typeset_hiragana_smaller_than_kanji(self):
         """組版時、ひらがなは漢字より小さいfont_sizeで配置される。"""
@@ -371,7 +371,7 @@ class TestCharSizeScale:
         placements = pages[0]
         assert placements[0].font_size > placements[1].font_size
         assert placements[0].font_size == pytest.approx(7.0)
-        assert placements[1].font_size == pytest.approx(7.0 * 0.88)
+        assert placements[1].font_size == pytest.approx(7.0 * 0.93)
 
     def test_typeset_small_kana_smallest(self):
         """小書き文字は最小のfont_sizeで配置される。"""
@@ -571,7 +571,7 @@ class TestHeadings:
     """セクション見出し（# で大きく表示）のテスト。"""
 
     def test_h1_larger_font_size(self):
-        """# 見出し が通常テキストより大きい font_size（1.3倍）で配置される。"""
+        """# 見出し が通常テキストより大きい font_size（1.15倍）で配置される。"""
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("# 見出し")
         placements = pages[0]
@@ -579,7 +579,7 @@ class TestHeadings:
         assert "見" in chars
         assert "#" not in chars
         for p in placements:
-            assert p.font_size == pytest.approx(7.0 * 1.3)
+            assert p.font_size == pytest.approx(7.0 * 1.15)
 
     def test_h2_medium_font_size(self):
         """## 小見出し が font_size * 1.15 で配置される。"""
@@ -590,7 +590,7 @@ class TestHeadings:
         assert "小" in chars
         assert "#" not in chars
         for p in placements:
-            assert p.font_size == pytest.approx(7.0 * 1.15)
+            assert p.font_size == pytest.approx(7.0 * 1.08)
 
     def test_h3_normal_font_size(self):
         """### 見出し3 は通常サイズ（1.0倍）で配置される。"""
@@ -637,7 +637,7 @@ class TestHeadings:
         pages = ts.typeset("あいうえお")
         assert len(pages[0]) == 5
         for p in pages[0]:
-            assert p.font_size == pytest.approx(7.0 * 0.88)  # ひらがなスケール
+            assert p.font_size == pytest.approx(7.0 * 0.93)  # ひらがなスケール
 
     def test_heading_strips_hash_and_space(self):
         """# と後続スペースが除去され、テキスト部分のみ配置される。"""
