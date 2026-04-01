@@ -430,9 +430,9 @@ class StrokeRenderer:
         target_h = fs * char_scale
 
         if is_halfwidth(placement.char):
-            cell_width = fs * 0.6
+            cell_width = fs * 0.55
         else:
-            cell_width = fs * char_scale
+            cell_width = fs * min(char_scale, 0.95)
 
         scale_w = cell_width / ranges[0] if ranges[0] > 1e-6 else float("inf")
         scale_h = target_h / ranges[1] if ranges[1] > 1e-6 else float("inf")
@@ -443,7 +443,7 @@ class StrokeRenderer:
         rendered_h = ranges[1] * scale
 
         if is_halfwidth(placement.char):
-            x_offset = placement.x + (fs * 0.6 - rendered_w) / 2
+            x_offset = placement.x + (fs * 0.55 - rendered_w) / 2
         else:
             x_offset = placement.x + (cell_width - rendered_w) / 2
 

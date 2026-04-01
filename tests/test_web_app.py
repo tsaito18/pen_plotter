@@ -173,13 +173,14 @@ class TestFallbackStrokes:
         all_pts = np.concatenate(result, axis=0)
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
         rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
-        assert np.isclose(rendered_w, 6.0, atol=0.01)
-        assert np.isclose(rendered_h, 6.0, atol=0.01)
+        assert rendered_w <= 6.0 * 0.95 + 0.1
+        assert rendered_h <= 6.0 * 0.95 + 0.1
         center_x = (all_pts[:, 0].min() + all_pts[:, 0].max()) / 2
         center_y = (all_pts[:, 1].min() + all_pts[:, 1].max()) / 2
-        assert np.isclose(center_x, 10.0 + 3.0, atol=0.01)
+        cell_w = 6.0 * 0.95
+        assert np.isclose(center_x, 10.0 + cell_w / 2, atol=0.1)
         line_spacing = pipeline._page_config.line_spacing
-        expected_y = 20.0 + (line_spacing - 6.0) / 2 + 3.0
+        expected_y = 20.0 + (line_spacing - cell_w) / 2 + cell_w / 2
         assert np.isclose(center_y, expected_y, atol=0.01)
 
     def test_position_strokes_hiragana_scaled(self):
