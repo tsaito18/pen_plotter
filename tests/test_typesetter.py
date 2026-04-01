@@ -656,4 +656,5 @@ class TestHeadings:
         placements = pages[0]
         heading_chars = [p for p in placements if p.char == "見"]
         assert len(heading_chars) == 1
-        assert heading_chars[0].x == pytest.approx(area.x)
+        # h1見出しは15mmから開始
+        assert heading_chars[0].x == pytest.approx(15.0)

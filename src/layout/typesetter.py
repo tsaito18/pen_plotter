@@ -94,7 +94,8 @@ class Typesetter:
         if not text:
             return [[]]
 
-        chars_per_line = int(area.width / self.font_size)
+        page_config = self._config
+        default_chars_per_line = int(area.width / self.font_size)
 
         # 段落ごとに改行し、段落先頭行のインデックスを記録
         # block_math_lines: ブロック数式として中央配置する行のインデックス→数式ソース
@@ -105,6 +106,13 @@ class Typesetter:
 
         heading_lines: dict[int, int] = {}  # global_line_idx → heading_level
         heading_font_scales = {1: 1.15, 2: 1.08, 3: 1.0}
+
+        # 見出しレベルに応じたインデント（mm）
+        pw = page_config.paper_size[0]
+        heading_x: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
+        body_x: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
+        right_x: float = pw - 10.0  # 右端 = 右から10mm
+        current_body_level: int = 0  # 現在の本文インデントレベル
 
         for para in paragraphs:
             # 見出し判定
@@ -125,6 +133,7 @@ class Typesetter:
                 if len(lines) > 0 and lines != ['']:
                     lines.append("")
                 heading_lines[len(lines)] = heading_level
+                current_body_level = heading_level
 
             para_start_indices.add(len(lines))
             if not display_para:
@@ -146,7 +155,14 @@ class Typesetter:
                     stripped = _INLINE_MATH_RE.sub(
                         lambda m: m.group(1).replace(' ', '\x00'), part
                     )
-                    broken = break_paragraph(stripped, chars_per_line)
+                    if heading_level > 0:
+                        line_width = right_x - heading_x.get(heading_level, area.x)
+                    elif current_body_level > 0:
+                        line_width = right_x - body_x.get(current_body_level, area.x)
+                    else:
+                        line_width = area.width
+                    cpl = int(line_width / self.font_size)
+                    broken = break_paragraph(stripped, cpl)
                     result_lines = self._rebuild_lines_with_math(part, broken)
                     # 見出しの場合、全行を見出し行として登録
                     if heading_level > 0:
@@ -181,10 +197,14 @@ class Typesetter:
             if is_heading:
                 h_level = heading_lines[global_line_idx]
                 line_font_size = self.font_size * heading_font_scales[h_level]
+                x = heading_x.get(h_level, area.x)
             else:
                 line_font_size = self.font_size
+                if current_body_level > 0:
+                    x = body_x.get(current_body_level, area.x)
+                else:
+                    x = area.x
 
-            x = area.x
             is_page_first_line = (line_idx == 0)
             if global_line_idx in para_start_indices and not is_page_first_line and not is_heading:
                 x += self.font_size
