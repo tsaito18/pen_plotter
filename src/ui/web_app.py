@@ -47,11 +47,11 @@ class PlotterPipeline:
     ) -> None:
         self._page_config = page_config or PageConfig(
             paper_size=(210.0, 297.0),
-            margin_top=20.0,
-            margin_bottom=28.0,
+            margin_top=48.0,
+            margin_bottom=34.0,
             margin_left=8.0,
             margin_right=8.0,
-            line_spacing=7.5,
+            line_spacing=7.16,
         )
         self._plotter_config = plotter_config or PlotterConfig(
             work_area_width=220.0,
@@ -62,7 +62,7 @@ class PlotterPipeline:
             paper_height=self._page_config.paper_size[1],
         )
         self._typesetter = Typesetter(
-            self._page_config, font_size=4.9, augmenter=HandwritingAugmenter()
+            self._page_config, font_size=4.7, augmenter=HandwritingAugmenter()
         )
         self._generator = GCodeGenerator(self._plotter_config)
         self._temperature = temperature
