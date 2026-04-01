@@ -130,16 +130,16 @@ def create_app(pipeline: PlotterPipeline) -> gr.Blocks:
                     with gr.Column():
                         gr.Markdown("### レイアウト")
                         font_size = gr.Slider(
-                            4.0, 10.0, value=6.0, step=0.5, label="フォントサイズ (mm)"
+                            3.0, 10.0, value=4.7, step=0.1, label="フォントサイズ (mm)"
                         )
                         line_spacing = gr.Slider(
-                            5.0, 15.0, value=8.0, step=0.5, label="行間隔 (mm)"
+                            5.0, 15.0, value=7.16, step=0.01, label="行間隔 (mm)"
                         )
                         gr.Markdown("### 余白 (mm)")
-                        margin_top = gr.Slider(5, 50, value=30, step=1, label="上")
-                        margin_bottom = gr.Slider(5, 50, value=15, step=1, label="下")
-                        margin_left = gr.Slider(5, 50, value=25, step=1, label="左")
-                        margin_right = gr.Slider(5, 50, value=15, step=1, label="右")
+                        margin_top = gr.Slider(5, 60, value=48, step=1, label="上")
+                        margin_bottom = gr.Slider(5, 50, value=34, step=1, label="下")
+                        margin_left = gr.Slider(1, 50, value=5, step=1, label="左")
+                        margin_right = gr.Slider(1, 50, value=5, step=1, label="右")
 
                     with gr.Column():
                         gr.Markdown("### プロッタ")
@@ -217,8 +217,8 @@ def create_app(pipeline: PlotterPipeline) -> gr.Blocks:
             travel_spd: float,
             pen_dl: float,
             temp: float,
-            progress: gr.Progress = gr.Progress(),
-        ) -> tuple:
+            progress=gr.Progress(),
+        ):
             for f in prev or []:
                 Path(f).unlink(missing_ok=True)
 
@@ -297,8 +297,8 @@ def create_app(pipeline: PlotterPipeline) -> gr.Blocks:
             travel_spd: float,
             pen_dl: float,
             temp: float,
-            progress: gr.Progress = gr.Progress(),
-        ) -> tuple:
+            progress=gr.Progress(),
+        ):
             if not text or not text.strip():
                 return None, gr.update(value="**テキストを入力してください。**", visible=True)
 
