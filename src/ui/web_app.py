@@ -34,12 +34,6 @@ class CharCoverageReport:
     skipped: list[str] = field(default_factory=list)
 
 
-@dataclass
-class AlignedStrokeCache:
-    aligned_samples: list[dict[int, Stroke]]
-    available_ref_indices: list[int]
-
-
 class PlotterPipeline:
     def __init__(
         self,
@@ -101,110 +95,7 @@ class PlotterPipeline:
                 self._kanjivg_parser = KanjiVGParser()
                 self._kanjivg_dir = d
 
-        try:
-            from src.model.stroke_aligner import StrokeAligner
-
-            self._stroke_aligner: StrokeAligner | None = StrokeAligner(
-                quality_threshold=50.0,
-            )
-        except ImportError:
-            self._stroke_aligner = None
-
-        self._alignment_cache = self._build_alignment_cache()
-
-    def _build_alignment_cache(self) -> dict[str, AlignedStrokeCache]:
-        """初期化時にKanjiVGアンカーでアライメントキャッシュを構築。"""
-        cache: dict[str, AlignedStrokeCache] = {}
-        if self._stroke_aligner is None or self._kanjivg_dir is None:
-            return cache
-
-        for char, samples in self._user_stroke_db.items():
-            if len(samples) < 2:
-                continue
-
-            ref = self._load_reference_strokes(char)
-            if ref is None:
-                continue
-
-            aligned_samples: list[dict[int, Stroke]] = []
-            for sample in samples:
-                aligned = self._align_sample_to_ref(sample, ref)
-                if aligned is not None:
-                    aligned_samples.append(aligned)
-
-            if len(aligned_samples) < 2:
-                continue
-
-            # union: いずれかのサンプルにあるストロークは全て使う
-            all_indices: set[int] = set()
-            for a in aligned_samples:
-                all_indices |= set(a.keys())
-            available = sorted(all_indices)
-
-            if not available:
-                continue
-
-            cache[char] = AlignedStrokeCache(
-                aligned_samples=aligned_samples,
-                available_ref_indices=available,
-            )
-
-        logger.info("Built alignment cache for %d chars", len(cache))
-        return cache
-
-    def _align_sample_to_ref(
-        self,
-        sample: list[Stroke],
-        ref: list[Stroke],
-    ) -> dict[int, Stroke] | None:
-        """1サンプルをKanjiVG参照ストロークに揃えて {ref_idx: normalized_stroke} を返す。"""
-        if self._stroke_aligner is None:
-            return None
-
-        ref_all = np.concatenate(ref, axis=0)
-        ref_mins = ref_all.min(axis=0)
-        ref_maxs = ref_all.max(axis=0)
-        ref_center = (ref_mins + ref_maxs) / 2
-        ref_span = (ref_maxs - ref_mins).max()
-        if ref_span < 1e-6:
-            return None
-
-        sample_all = np.concatenate(sample, axis=0)
-        s_mins = sample_all.min(axis=0)
-        s_maxs = sample_all.max(axis=0)
-        s_center = (s_mins + s_maxs) / 2
-        s_span = (s_maxs - s_mins).max()
-        if s_span < 1e-6:
-            return None
-
-        scale = ref_span / s_span
-        scaled_sample = [(s - s_center) * scale + ref_center for s in sample]
-
-        result = self._stroke_aligner.align(scaled_sample, ref)
-
-        mapping: dict[int, Stroke] = {}
-        used_user_indices: set[int] = set()
-        for i, (u_idx, r_idx) in enumerate(zip(result.user_indices, result.ref_indices)):
-            if u_idx in used_user_indices:
-                continue  # 同じユーザーストロークの二重マッピングを防止
-            used_user_indices.add(u_idx)
-            stroke = scaled_sample[u_idx]
-            if hasattr(result, "reversed_flags") and result.reversed_flags[i]:
-                stroke = stroke[::-1].copy()
-            normalized = (stroke - ref_center) / ref_span + 0.5
-            normalized[:, 1] = 1.0 - normalized[:, 1]
-            mapping[r_idx] = normalized
-
-        return mapping if mapping else None
-
-    def _synthesize_from_cache(self, cache: AlignedStrokeCache) -> list[Stroke]:
-        """キャッシュからストロークをランダム選択して合成。"""
-        result: list[Stroke] = []
-        for ref_idx in cache.available_ref_indices:
-            candidates = [s[ref_idx] for s in cache.aligned_samples if ref_idx in s]
-            chosen = candidates[np.random.randint(len(candidates))]
-            result.append(chosen.copy())
-        return result
+        # StrokeAligner は訓練時のみ使用（推論時のストローク合成は廃止）
 
     @staticmethod
     def _load_user_stroke_db(
@@ -435,57 +326,15 @@ class PlotterPipeline:
     _NOISE_SCALE = 0.3
 
     def _direct_stroke(self, char: str) -> list[Stroke] | None:
-        """ユーザー直接ストロークを3層フォールバックで合成して正規化(0-1)で返す。"""
+        """ユーザー直接ストロークをランダム選択して正規化(0-1)で返す。"""
         samples = self._user_stroke_db.get(char)
         if not samples:
             return None
 
-        # Layer 1: KanjiVGアンカー（キャッシュあり）
-        cache = self._alignment_cache.get(char)
-        if cache is not None:
-            normalized = self._synthesize_from_cache(cache)
-            return self._apply_stroke_variation(normalized)
-
-        if len(samples) == 1:
-            # Layer 3: 単一サンプル → そのまま正規化
-            normalized = self._normalize_strokes_to_unit(samples[0])
-        else:
-            # Layer 2: 共通bbox正規化で合成
-            normalized = self._synthesize_common_bbox(samples)
-
+        # サンプル単位でランダム選択（ストロークごとの合成はアーティファクトが多い）
+        chosen = samples[np.random.randint(len(samples))]
+        normalized = self._normalize_strokes_to_unit(chosen)
         return self._apply_stroke_variation(normalized)
-
-    def _synthesize_common_bbox(self, samples: list[list[Stroke]]) -> list[Stroke]:
-        """共通bbox正規化で複数サンプルからストロークを合成。"""
-        centers: list[npt.NDArray[np.float64]] = []
-        spans: list[float] = []
-        for sample in samples:
-            all_pts = np.concatenate(sample, axis=0)
-            mins = all_pts.min(axis=0)
-            maxs = all_pts.max(axis=0)
-            centers.append((mins + maxs) / 2)
-            spans.append(float((maxs - mins).max()))
-
-        common_center = np.mean(centers, axis=0)
-        common_span = float(np.mean(spans))
-        if common_span < 1e-6:
-            return self._normalize_strokes_to_unit(samples[0])
-
-        normalized_samples: list[list[Stroke]] = []
-        for sample in samples:
-            normalized = []
-            for s in sample:
-                n = (s - common_center) / common_span + 0.5
-                n[:, 1] = 1.0 - n[:, 1]
-                normalized.append(n)
-            normalized_samples.append(normalized)
-
-        min_stroke_count = min(len(s) for s in normalized_samples)
-        result: list[Stroke] = []
-        for i in range(min_stroke_count):
-            candidates = [s[i] for s in normalized_samples if i < len(s)]
-            result.append(candidates[np.random.randint(len(candidates))])
-        return result
 
     @staticmethod
     def _normalize_strokes_to_unit(strokes: list[Stroke]) -> list[Stroke]:
