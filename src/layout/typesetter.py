@@ -105,6 +105,7 @@ class Typesetter:
         block_math_lines: dict[int, str] = {}
 
         heading_lines: dict[int, int] = {}  # global_line_idx → heading_level
+        line_body_level: dict[int, int] = {}  # global_line_idx → body indent level
         heading_font_scales = {1: 1.15, 2: 1.08, 3: 1.0}
 
         # 見出しレベルに応じたインデント（mm）
@@ -137,6 +138,7 @@ class Typesetter:
 
             para_start_indices.add(len(lines))
             if not display_para:
+                line_body_level[len(lines)] = current_body_level
                 lines.append("")
                 continue
 
@@ -147,6 +149,7 @@ class Typesetter:
                     # ブロック数式
                     if part.strip():
                         block_math_lines[len(lines)] = part.strip()
+                        line_body_level[len(lines)] = current_body_level
                         lines.append("")  # プレースホルダ
                 else:
                     # 通常テキスト
@@ -168,6 +171,9 @@ class Typesetter:
                     if heading_level > 0:
                         for i in range(len(result_lines)):
                             heading_lines[len(lines) + i] = heading_level
+                    # 各行のbody levelを記録
+                    for i in range(len(result_lines)):
+                        line_body_level[len(lines) + i] = current_body_level
                     lines.extend(result_lines)
 
         pages: list[list[CharPlacement]] = []
@@ -200,8 +206,9 @@ class Typesetter:
                 x = heading_x.get(h_level, area.x)
             else:
                 line_font_size = self.font_size
-                if current_body_level > 0:
-                    x = body_x.get(current_body_level, area.x)
+                bl = line_body_level.get(global_line_idx, 0)
+                if bl > 0:
+                    x = body_x.get(bl, area.x)
                 else:
                     x = area.x
 
