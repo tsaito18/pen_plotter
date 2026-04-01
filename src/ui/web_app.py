@@ -68,9 +68,11 @@ class PlotterPipeline:
             page_config=self._page_config,
         )
 
+        default_bg = Path("data/report_paper.jpg")
         self._preview_renderer = PreviewRenderer(
             plotter_config=self._plotter_config,
             page_config=self._page_config,
+            report_bg_path=default_bg if default_bg.exists() else None,
         )
 
     # --- StrokeRenderer への委譲プロパティ ---
@@ -325,23 +327,24 @@ class PlotterPipeline:
             )
             if progress_callback:
                 progress_callback(
-                    page_base + page_span * 0.8,
-                    f"\u6700\u9069\u5316+\u63cf\u753b\u4e2d ({i}/{n_pages})...",
+                    page_base + page_span * 0.85,
+                    f"ストローク最適化中 ({i}/{n_pages})...",
                 )
             optimized = optimize_stroke_order(strokes)
+            if progress_callback:
+                progress_callback(
+                    page_base + page_span * 0.9,
+                    f"プレビュー描画中 ({i}/{n_pages})...",
+                )
             page_num_strokes = self._generate_page_number_strokes(i)
             self._preview_with_ruled_lines(
                 optimized, ruled_lines, page_path,
                 page_number=i, page_number_strokes=page_num_strokes,
             )
-            if progress_callback:
-                progress_callback(
-                    page_base + page_span, f"\u30da\u30fc\u30b8 {i}/{n_pages} \u5b8c\u4e86"
-                )
             result.append(page_path)
 
         if progress_callback:
-            progress_callback(1.0, "\u5b8c\u4e86")
+            progress_callback(1.0, "完了")
         return result
 
     def generate_gcode_file(
