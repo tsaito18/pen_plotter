@@ -294,7 +294,7 @@ class PlotterPipeline:
             progress_callback(0.0, "\u7d44\u7248\u4e2d...")
 
         pages = self.text_to_placements(text)
-        ruled_lines: list[Stroke] = []  # 罫線は背景画像に含まれるため描画しない
+        ruled_lines = self._typesetter._layout.ruled_line_strokes()
 
         if not pages or not pages[0]:
             self._preview_with_ruled_lines([], ruled_lines, save_path)

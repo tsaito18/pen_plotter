@@ -82,6 +82,11 @@ class PreviewRenderer:
         )
         ax.add_patch(paper_border)
 
+        # 罫線（デバッグ: 赤で表示）
+        for line in ruled_lines:
+            if len(line) >= 2:
+                ax.plot(line[:, 0], line[:, 1], color="#ff000044", linewidth=0.5)
+
         # 文字ストローク（黒）
         for stroke in strokes:
             if len(stroke) >= 2:
