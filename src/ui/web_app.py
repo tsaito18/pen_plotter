@@ -639,6 +639,10 @@ class PlotterPipeline:
         )
         ax.add_patch(paper_border)
 
+        # デバッグ用縦線
+        for x_mm in [15, 25, 35, 45, 55, cfg.paper_width - 10]:
+            ax.plot([x_mm, x_mm], [0, cfg.paper_height], color="#00cc0044", linewidth=0.5, zorder=1)
+
         # 罫線（デバッグ用: 赤で目立つように）
         for line in ruled_lines:
             if len(line) >= 2:
