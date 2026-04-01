@@ -1004,65 +1004,22 @@ class TestGradioGallery:
 
 
 class TestPageNumber:
-    """ページ番号描画のテスト。"""
+    """ページ番号の手書きストローク生成テスト。"""
 
-    def test_page_number_draws_text(self, tmp_path):
-        """page_number指定時にax.textが呼ばれること。"""
-        from unittest.mock import patch
-
+    def test_page_number_strokes_generated(self):
+        """ページ番号ストロークが生成されること。"""
         pipeline = PlotterPipeline()
-        save_path = tmp_path / "page_num.png"
-        strokes = [np.array([[10.0, 10.0], [20.0, 20.0]])]
-        ruled_lines = []
+        strokes = pipeline._generate_page_number_strokes(1)
+        assert len(strokes) > 0
 
-        with patch("matplotlib.axes.Axes.text") as mock_text:
-            pipeline._preview_with_ruled_lines(strokes, ruled_lines, save_path, page_number=1)
-            mock_text.assert_called_once()
-            call_args = mock_text.call_args
-            assert "P. 1" in str(call_args)
-
-    def test_page_number_none_no_text(self, tmp_path):
-        """page_number=Noneではax.textが呼ばれないこと。"""
-        from unittest.mock import patch
-
+    def test_page_number_strokes_at_bottom_left(self):
+        """ページ番号ストロークが左下付近にあること。"""
         pipeline = PlotterPipeline()
-        save_path = tmp_path / "no_page_num.png"
-        strokes = [np.array([[10.0, 10.0], [20.0, 20.0]])]
-        ruled_lines = []
-
-        with patch("matplotlib.axes.Axes.text") as mock_text:
-            pipeline._preview_with_ruled_lines(strokes, ruled_lines, save_path, page_number=None)
-            mock_text.assert_not_called()
-
-    def test_page_number_position(self, tmp_path):
-        """ページ番号がページ下部中央に配置されること。"""
-        from unittest.mock import patch
-
-        pipeline = PlotterPipeline()
-        save_path = tmp_path / "pos.png"
-
-        with patch("matplotlib.axes.Axes.text") as mock_text:
-            pipeline._preview_with_ruled_lines([], [], save_path, page_number=3)
-            call_args, call_kwargs = mock_text.call_args
-            x, y, text = call_args[0], call_args[1], call_args[2]
-            paper_w = pipeline._plotter_config.paper_width
-            paper_h = pipeline._plotter_config.paper_height
-            margin_bottom = pipeline._page_config.margin_bottom
-            assert abs(x - paper_w / 2) < 0.1
-            assert abs(y - (paper_h - margin_bottom / 2)) < 0.1
-            assert text == "P. 3"
-
-    def test_page_number_format(self, tmp_path):
-        """ページ番号が "P. N" 形式であること。"""
-        from unittest.mock import patch
-
-        pipeline = PlotterPipeline()
-        save_path = tmp_path / "fmt.png"
-
-        with patch("matplotlib.axes.Axes.text") as mock_text:
-            pipeline._preview_with_ruled_lines([], [], save_path, page_number=12)
-            call_args = mock_text.call_args
-            assert call_args[0][2] == "P. 12"
+        strokes = pipeline._generate_page_number_strokes(3)
+        all_pts = np.concatenate(strokes, axis=0)
+        assert all_pts[:, 0].min() > 10  # 左端より右
+        assert all_pts[:, 0].max() < 60  # 中央より左
+        assert all_pts[:, 1].max() < 20  # 下部
 
 
 # Stroke synthesis tests removed — synthesis was abandoned due to

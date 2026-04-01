@@ -37,15 +37,15 @@ class TestPreviewWithRuledLines:
         renderer.preview_with_ruled_lines(strokes, [], save_path)
         assert save_path.exists()
 
-    def test_page_number(self, tmp_path):
-        from unittest.mock import patch
-
+    def test_page_number_strokes(self, tmp_path):
+        """page_number_strokes が渡された場合に画像が生成される。"""
         renderer = PreviewRenderer(
             plotter_config=PlotterConfig(),
             page_config=PageConfig(),
         )
         save_path = tmp_path / "pn.png"
-        with patch("matplotlib.axes.Axes.text") as mock_text:
-            renderer.preview_with_ruled_lines([], [], save_path, page_number=5)
-            mock_text.assert_called_once()
-            assert "P. 5" in str(mock_text.call_args)
+        pn_strokes = [np.array([[20.0, 5.0], [25.0, 5.0]])]
+        renderer.preview_with_ruled_lines(
+            [], [], save_path, page_number=5, page_number_strokes=pn_strokes
+        )
+        assert save_path.exists()

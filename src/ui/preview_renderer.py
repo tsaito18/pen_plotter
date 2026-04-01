@@ -14,6 +14,10 @@ Stroke = npt.NDArray[np.float64]
 
 logger = logging.getLogger(__name__)
 
+# ページ番号「P. N」の位置（用紙座標mm）
+_PAGE_NUM_X = 22.0
+_PAGE_NUM_Y = 8.5  # 下端からの距離
+
 
 class PreviewRenderer:
     def __init__(
@@ -33,6 +37,7 @@ class PreviewRenderer:
         ruled_lines: list[Stroke],
         save_path: str | Path,
         page_number: int | None = None,
+        page_number_strokes: list[Stroke] | None = None,
     ) -> None:
         import matplotlib.patches as patches
         import matplotlib.pyplot as plt
@@ -40,6 +45,7 @@ class PreviewRenderer:
         cfg = self._plotter_config
         fig, ax = plt.subplots(1, 1, figsize=(10, 14))
 
+        # 背景: スキャン画像 or 白
         bg_path = self._report_bg_path
         if bg_path and bg_path.exists():
             from PIL import Image
@@ -57,47 +63,35 @@ class PreviewRenderer:
                 cfg.paper_width,
                 cfg.paper_height,
                 linewidth=1,
-                edgecolor="gray",
-                facecolor="lightyellow",
-                linestyle="--",
+                edgecolor="black",
+                facecolor="white",
+                linestyle="-",
             )
             ax.add_patch(paper_rect)
 
+        # 紙の境界線（黒）
         paper_border = patches.Rectangle(
             (0, 0),
             cfg.paper_width,
             cfg.paper_height,
-            linewidth=1.5,
-            edgecolor="#ff000088",
+            linewidth=1.0,
+            edgecolor="black",
             facecolor="none",
             linestyle="-",
             zorder=1,
         )
         ax.add_patch(paper_border)
 
-        for x_mm in [15, 25, 35, 45, 55, cfg.paper_width - 10]:
-            ax.plot([x_mm, x_mm], [0, cfg.paper_height], color="#00cc0044", linewidth=0.5, zorder=1)
-
-        for line in ruled_lines:
-            if len(line) >= 2:
-                ax.plot(line[:, 0], line[:, 1], color="#ff000044", linewidth=0.5)
-
+        # 文字ストローク（黒）
         for stroke in strokes:
             if len(stroke) >= 2:
-                _draw_stroke_with_width(ax, stroke)
+                _draw_stroke_with_width(ax, stroke, color="#1a1a1a")
 
-        if page_number is not None:
-            page_x = cfg.paper_width / 2
-            page_y = cfg.paper_height - self._page_config.margin_bottom / 2
-            ax.text(
-                page_x,
-                page_y,
-                f"P. {page_number}",
-                ha="center",
-                va="center",
-                fontsize=8,
-                color="#666666",
-            )
+        # ページ番号（手書きストローク）
+        if page_number_strokes:
+            for stroke in page_number_strokes:
+                if len(stroke) >= 2:
+                    _draw_stroke_with_width(ax, stroke, color="#1a1a1a")
 
         ax.set_xlim(-2, cfg.paper_width + 2)
         ax.set_ylim(-2, cfg.paper_height + 2)

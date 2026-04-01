@@ -189,11 +189,14 @@ class PlotterPipeline:
         ruled_lines: list[Stroke],
         save_path: str | Path,
         page_number: int | None = None,
+        page_number_strokes: list[Stroke] | None = None,
     ) -> None:
         if self._REPORT_PAPER_BG:
             self._preview_renderer._report_bg_path = self._REPORT_PAPER_BG
         self._preview_renderer.preview_with_ruled_lines(
-            strokes, ruled_lines, save_path, page_number=page_number
+            strokes, ruled_lines, save_path,
+            page_number=page_number,
+            page_number_strokes=page_number_strokes,
         )
 
     # --- パイプライン本体 ---
@@ -254,6 +257,25 @@ class PlotterPipeline:
 
         return strokes
 
+    def _generate_page_number_strokes(self, page_number: int) -> list[Stroke]:
+        """ページ番号「P. N」を手書きストロークで生成。左下に配置。"""
+        from src.ui.preview_renderer import _PAGE_NUM_X, _PAGE_NUM_Y
+
+        text = f"P.  {page_number}"
+        x = _PAGE_NUM_X
+        y = _PAGE_NUM_Y
+        font_size = 3.5
+        all_strokes: list[Stroke] = []
+        for ch in text:
+            if ch == " ":
+                x += font_size * 0.3
+                continue
+            placement = CharPlacement(char=ch, x=x, y=y, font_size=font_size)
+            char_strokes = self._stroke_renderer.generate_char_strokes(placement)
+            all_strokes.extend(char_strokes)
+            x += font_size * 0.6 if ord(ch) < 128 else font_size
+        return all_strokes
+
     def strokes_to_gcode(self, strokes: list[Stroke]) -> list[str]:
         optimized = optimize_stroke_order(strokes)
         return self._generator.generate(optimized)
@@ -270,7 +292,7 @@ class PlotterPipeline:
             progress_callback(0.0, "\u7d44\u7248\u4e2d...")
 
         pages = self.text_to_placements(text)
-        ruled_lines = self._typesetter._layout.ruled_line_strokes()
+        ruled_lines: list[Stroke] = []  # 罫線は背景画像に含まれるため描画しない
 
         if not pages or not pages[0]:
             self._preview_with_ruled_lines([], ruled_lines, save_path)
@@ -307,7 +329,11 @@ class PlotterPipeline:
                     f"\u6700\u9069\u5316+\u63cf\u753b\u4e2d ({i}/{n_pages})...",
                 )
             optimized = optimize_stroke_order(strokes)
-            self._preview_with_ruled_lines(optimized, ruled_lines, page_path, page_number=i)
+            page_num_strokes = self._generate_page_number_strokes(i)
+            self._preview_with_ruled_lines(
+                optimized, ruled_lines, page_path,
+                page_number=i, page_number_strokes=page_num_strokes,
+            )
             if progress_callback:
                 progress_callback(
                     page_base + page_span, f"\u30da\u30fc\u30b8 {i}/{n_pages} \u5b8c\u4e86"
