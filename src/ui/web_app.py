@@ -47,10 +47,10 @@ class PlotterPipeline:
     ) -> None:
         self._page_config = page_config or PageConfig(
             paper_size=(210.0, 297.0),
-            margin_top=29.0,
-            margin_bottom=34.0,
-            margin_left=28.0,
-            margin_right=10.0,
+            margin_top=20.0,
+            margin_bottom=28.0,
+            margin_left=8.0,
+            margin_right=8.0,
             line_spacing=7.5,
         )
         self._plotter_config = plotter_config or PlotterConfig(
