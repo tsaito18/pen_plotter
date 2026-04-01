@@ -132,7 +132,7 @@ def create_app(pipeline: PlotterPipeline) -> gr.Blocks:
                     with gr.Column():
                         gr.Markdown("### レイアウト")
                         font_size = gr.Slider(
-                            3.0, 10.0, value=4.7, step=0.1, label="フォントサイズ (mm)"
+                            3.0, 10.0, value=4.5, step=0.1, label="フォントサイズ (mm)"
                         )
                         line_spacing = gr.Slider(
                             5.0, 15.0, value=7.16, step=0.01, label="行間隔 (mm)"

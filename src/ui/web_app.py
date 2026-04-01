@@ -51,7 +51,7 @@ class PlotterPipeline:
             paper_height=self._page_config.paper_size[1],
         )
         self._typesetter = Typesetter(
-            self._page_config, font_size=4.7, augmenter=HandwritingAugmenter()
+            self._page_config, font_size=4.5, augmenter=HandwritingAugmenter()
         )
         self._generator = GCodeGenerator(self._plotter_config)
 
