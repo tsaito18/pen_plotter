@@ -29,7 +29,7 @@ def _char_size_scale(ch: str) -> float:
     if 0x30A0 <= cp <= 0x30FF:
         return 0.85
     if is_halfwidth(ch):
-        return 0.55
+        return 0.7
     return 1.0
 
 
@@ -222,7 +222,7 @@ class Typesetter:
                         line_width = right_x - body_x.get(current_body_level, area.x)
                     else:
                         line_width = area.width
-                    cpl = int(line_width / (self.font_size * 0.9))
+                    cpl = int(line_width / (self.font_size * 0.95))
                     broken = break_paragraph(stripped, cpl)
                     result_lines = self._rebuild_lines_with_math(part, broken)
                     if heading_level > 0:
@@ -300,13 +300,12 @@ class Typesetter:
                         char_advance = line_font_size
                     else:
                         char_font_size = self.font_size * size_scale
-                        # 配置間隔: 全角は font_size × 0.9（詰め）、半角はさらに小さく
                         if cur_halfwidth:
-                            char_advance = self.font_size * 0.5
+                            char_advance = self.font_size * 0.55
                         elif ch in _SMALL_KANA or ch in _SMALL_PUNCT:
                             char_advance = char_font_size
                         else:
-                            char_advance = self.font_size * 0.9
+                            char_advance = self.font_size * 0.95
 
                     if self._augmenter is not None:
                         aug_x, _, aug_size = self._augmenter.augment_char_placement(

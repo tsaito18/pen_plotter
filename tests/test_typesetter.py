@@ -53,7 +53,7 @@ class TestTypesetter:
         placements = pages[0]
         # 半角文字は_char_size_scaleにより0.6倍幅
         width = placements[1].x - placements[0].x
-        assert width == pytest.approx(ts.font_size * 0.5)
+        assert width == pytest.approx(ts.font_size * 0.55)
 
     def test_halfwidth_width_ratio(self):
         """半角文字幅は全角文字幅より小さい。"""
@@ -355,8 +355,8 @@ class TestCharSizeScale:
 
     def test_halfwidth_scale(self):
         from src.layout.typesetter import _char_size_scale
-        assert _char_size_scale("a") == 0.55
-        assert _char_size_scale("1") == 0.55
+        assert _char_size_scale("a") == 0.7
+        assert _char_size_scale("1") == 0.7
 
     def test_typeset_hiragana_smaller_than_kanji(self):
         """組版時、ひらがなは漢字より小さいfont_sizeで配置される。"""
