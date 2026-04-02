@@ -3,37 +3,33 @@ from dataclasses import dataclass
 
 @dataclass
 class PlotterConfig:
-    """CoreXY ペンプロッタの機械パラメータ"""
+    """xDraw A4 ペンプロッタの機械パラメータ"""
 
-    # 作業エリア (mm) — フレーム500×450mm, レールY:400mm/X:350mm に基づく
-    # Y方向トラベル355mm, X方向トラベル305mm
-    work_area_width: float = 300.0   # Y方向 (A4長辺297mm + マージン)
-    work_area_height: float = 220.0  # X方向 (A4短辺210mm + マージン)
+    # ワーキングエリア (mm) — A4サイズ
+    work_area_width: float = 210.0
+    work_area_height: float = 297.0
 
-    # A4用紙配置（用紙左下の座標）
-    paper_origin_x: float = 1.5
-    paper_origin_y: float = 5.0
-    paper_width: float = 297.0
-    paper_height: float = 210.0
-
-    # モーター設定: GT2 20T + 1.8° stepper
-    steps_per_mm: float = 80.0
+    # A4用紙配置（紙座標系: 左下=(0,0), 右上=(210,297)）
+    paper_origin_x: float = 0.0
+    paper_origin_y: float = 0.0
+    paper_width: float = 210.0
+    paper_height: float = 297.0
 
     # 速度 (mm/min)
-    travel_speed: float = 3000.0
+    travel_speed: float = 5000.0
     draw_speed: float = 1000.0
-    max_speed: float = 5000.0
-    acceleration: float = 500.0  # mm/s^2
 
-    # ペン制御
-    pen_down_command: str = "M3 S255"
-    pen_up_command: str = "M5"
-    pen_delay: float = 0.15  # ペン昇降後の待機時間 (秒)
+    # ペン制御 (Z軸)
+    pen_down_command: str = "G1G90 Z5 F5000"
+    pen_up_command: str = "G1G90 Z0.5 F5000"
+    pen_delay: float = 0.0  # Z軸制御は速度指定で完了するため遅延不要
 
     # G-code設定
-    decimal_places: int = 3
+    decimal_places: int = 2
 
     def pen_delay_gcode(self) -> str:
-        """ペン昇降後の待機G-code (G4 Pミリ秒)"""
+        """ペン昇降後の待機G-code。xDrawはZ軸速度制御のため通常不要。"""
+        if self.pen_delay <= 0:
+            return ""
         ms = int(self.pen_delay * 1000)
         return f"G4 P{ms}"
