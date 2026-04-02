@@ -277,6 +277,30 @@ class PlotterPipeline:
         optimized = optimize_stroke_order(strokes)
         return self._generator.generate(optimized)
 
+    def generate_gcode(
+        self,
+        text: str,
+        save_path: str | Path,
+    ) -> Path:
+        """テキストからG-codeを生成して保存。ストロークは書き順（文字順）を保持。"""
+        save_path = Path(save_path)
+        pages = self.text_to_placements(text)
+        if not pages or not pages[0]:
+            self._generator.save(self._generator.generate([]), save_path)
+            return save_path
+
+        all_strokes: list[Stroke] = []
+        for i, page_placements in enumerate(pages, start=1):
+            strokes = self.placements_to_strokes(page_placements)
+            page_num_strokes = self._generate_page_number_strokes(i)
+            all_strokes.extend(strokes)
+            all_strokes.extend(page_num_strokes)
+
+        # ストローク順序を保持（optimize_stroke_orderを使わない）
+        gcode = self._generator.generate(all_strokes, vary_speed=True)
+        self._generator.save(gcode, save_path)
+        return save_path
+
     def generate_preview(
         self,
         text: str,
