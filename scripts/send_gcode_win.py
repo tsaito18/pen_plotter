@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
 import serial
 from serial.tools.list_ports import comports
