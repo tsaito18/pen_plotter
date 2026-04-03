@@ -20,7 +20,7 @@ class PlotterConfig:
     draw_speed: float = 1000.0
 
     # ペン制御 (Z軸)
-    pen_down_command: str = "G1G90 Z5 F5000"
+    pen_down_command: str = "G1G90 Z3.5 F5000"
     pen_up_command: str = "G1G90 Z0.5 F5000"
     pen_delay: float = 0.0  # Z軸制御は速度指定で完了するため遅延不要
 
