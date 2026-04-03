@@ -79,7 +79,9 @@ def main() -> None:
 
         remote_path = args.gcode_file
         local_path = remote_path.split("/")[-1]
-        cmd = f"scp taiga@{args.from_server}:{remote_path} {local_path}"
+        key_path = Path.home() / ".ssh" / "id_tsaito18"
+        key_opt = f"-i {key_path}" if key_path.exists() else ""
+        cmd = f"scp {key_opt} taiga@{args.from_server}:{remote_path} {local_path}"
         print(f"Downloading: {cmd}")
         subprocess.run(cmd, shell=True, check=True)
         args.gcode_file = local_path
