@@ -92,6 +92,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Enable stroke alignment (Hungarian + MHD) for stroke order/count mismatch",
     )
+    parser.add_argument(
+        "--deformer-type",
+        type=str,
+        default="offset",
+        choices=["offset", "transformer"],
+        help="Deformer type (v3-user only): offset=MLP, transformer=Transformer",
+    )
     return parser.parse_args(argv)
 
 
@@ -144,6 +151,7 @@ def main(argv: list[str] | None = None) -> dict:
             hidden_dim=args.hidden_dim,
             dropout=args.dropout,
             weight_decay=args.weight_decay,
+            deformer_type=args.deformer_type,
         )
         pretrainer = UserDeformationTrainer(
             config=user_config,

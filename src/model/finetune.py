@@ -61,6 +61,34 @@ def _state_dict_cpu(module: torch.nn.Module) -> dict:
     return {k: v.to(cpu) for k, v in module.state_dict().items()}
 
 
+def augment_style_strokes(style_tensor: torch.Tensor, rng: np.random.Generator) -> torch.Tensor:
+    """Create augmented view of style strokes for contrastive pairs.
+
+    Applies point jitter and small rotation to delta sequences.
+    Input: (seq_len, 3) delta strokes [dx, dy, pen_state].
+    Output: (seq_len, 3) augmented delta strokes.
+    """
+    result = style_tensor.clone()
+    seq_len = result.shape[0]
+    if seq_len == 0:
+        return result
+
+    bbox = result[:, :2].abs().max().item() + 1e-6
+    jitter = torch.from_numpy(
+        rng.normal(0, 0.02 * bbox, size=(seq_len, 2)).astype(np.float32)
+    )
+    result[:, :2] += jitter
+
+    angle = rng.normal(0, np.radians(5))
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+    dx = result[:, 0].clone()
+    dy = result[:, 1].clone()
+    result[:, 0] = dx * cos_a - dy * sin_a
+    result[:, 1] = dx * sin_a + dy * cos_a
+
+    return result
+
+
 def smooth_offsets(offsets: torch.Tensor, kernel_size: int = SMOOTHING_KERNEL_SIZE) -> torch.Tensor:
     """Apply 1D moving average to smooth per-point offsets.
 
@@ -200,6 +228,9 @@ class BaseFinetuner:
     def _get_clip_params(self) -> list | torch.nn.Parameter:
         raise NotImplementedError
 
+    def _pre_epoch(self, epoch: int) -> None:
+        pass
+
     def _post_epoch(self, epoch: int, avg_loss: float) -> None:
         pass
 
@@ -215,6 +246,7 @@ class BaseFinetuner:
         self._set_train_mode()
 
         for epoch in range(self.config.epochs):
+            self._pre_epoch(epoch)
             epoch_loss = 0.0
             n_batches = 0
 
@@ -529,20 +561,45 @@ class FinetuneDeformationDataset(Dataset):
 
 
 def collate_deformation_finetune(batch: list[dict]) -> dict:
-    """Collate for FinetuneDeformationDataset."""
+    """Collate for FinetuneDeformationDataset.
+
+    Each sample produces 2 augmented style views for contrastive learning.
+    The batch is doubled: original items + augmented copies share the same labels.
+    """
+    rng = np.random.default_rng()
+
     reference_points = torch.stack([item["reference_points"] for item in batch])
     target_points = torch.stack([item["target_points"] for item in batch])
     stroke_indices = torch.tensor([item["stroke_index"] for item in batch])
-    style_strokes = [item["style_strokes"] for item in batch]
-    style_lengths = torch.tensor([s.shape[0] for s in style_strokes])
-    padded_style = pad_sequence(style_strokes, batch_first=True, padding_value=0.0)
+
+    # Duplicate: original + augmented view (both get same character label)
+    style_view1 = [item["style_strokes"] for item in batch]
+    style_view2 = [augment_style_strokes(s.clone(), rng) for s in style_view1]
+    all_styles = style_view1 + style_view2
+    style_lengths = torch.tensor([s.shape[0] for s in all_styles])
+    padded_style = pad_sequence(all_styles, batch_first=True, padding_value=0.0)
+
+    # Duplicate reference/target/stroke_indices for augmented view
+    reference_points = reference_points.repeat(2, 1, 1)
+    target_points = target_points.repeat(2, 1, 1)
+    stroke_indices = stroke_indices.repeat(2)
+
+    chars = [item["character"] for item in batch]
+    doubled_chars = chars + chars
+    unique_chars = sorted(set(chars))
+    char_to_idx = {c: i for i, c in enumerate(unique_chars)}
+    character_labels = torch.tensor(
+        [char_to_idx[c] for c in doubled_chars], dtype=torch.long
+    )
+
     return {
         "reference_points": reference_points,
         "target_points": target_points,
         "stroke_indices": stroke_indices,
         "style_strokes": padded_style,
         "style_lengths": style_lengths,
-        "characters": [item["character"] for item in batch],
+        "characters": doubled_chars,
+        "character_labels": character_labels,
     }
 
 
@@ -664,6 +721,14 @@ class UserTrainConfig:
     num_points: int = 32
     dropout: float = 0.2
     weight_decay: float = 0.01
+    deformer_type: str = "offset"
+    contrastive_weight: float = 0.1
+    contrastive_warmup_frac: float = 0.1
+    contrastive_temperature: float = 0.07
+    d_model: int = 64
+    nhead: int = 4
+    num_self_attn_layers: int = 2
+    ff_dim: int = 128
 
 
 class UserDeformationTrainer(BaseFinetuner):
@@ -702,12 +767,30 @@ class UserDeformationTrainer(BaseFinetuner):
         style_tensors = [self.dataset[i]["style_strokes"] for i in range(len(self.dataset))]
         self.norm_stats = compute_normalization_stats(style_tensors) if style_tensors else None
 
-        self.style_encoder = StyleEncoder(style_dim=config.style_dim).to(self.device)
-        self.deformer = StrokeDeformer(
-            style_dim=config.style_dim,
-            hidden_dim=config.hidden_dim,
-            dropout=config.dropout,
-        ).to(self.device)
+        self.style_encoder = StyleEncoder(style_dim=config.style_dim)
+        self.style_encoder.enable_projection_head()
+        self.style_encoder.to(self.device)
+
+        self.deformer_type = config.deformer_type
+        if config.deformer_type == "transformer":
+            from src.model.stroke_deformer import TransformerDeformer
+
+            self.deformer = TransformerDeformer(
+                style_dim=config.style_dim,
+                d_model=config.d_model,
+                nhead=config.nhead,
+                num_self_attn_layers=config.num_self_attn_layers,
+                ff_dim=config.ff_dim,
+                dropout=config.dropout,
+            ).to(self.device)
+        else:
+            self.deformer = StrokeDeformer(
+                style_dim=config.style_dim,
+                hidden_dim=config.hidden_dim,
+                dropout=config.dropout,
+            ).to(self.device)
+
+        self._current_epoch = 0
 
         self.optimizer = torch.optim.AdamW(
             [
@@ -734,6 +817,7 @@ class UserDeformationTrainer(BaseFinetuner):
 
     def _compute_batch_loss(self, batch: dict) -> torch.Tensor:
         from src.model.stroke_deformer import deformation_loss, smoothness_loss
+        from src.model.style_encoder import supervised_contrastive_loss
 
         ref_points = batch["reference_points"].to(self.device)
         target_points = batch["target_points"].to(self.device)
@@ -745,12 +829,42 @@ class UserDeformationTrainer(BaseFinetuner):
             style_strokes = normalize_deltas(style_strokes, self.norm_stats)
         style_lengths = batch["style_lengths"]
 
-        style = self.style_encoder(style_strokes, lengths=style_lengths)
+        style, z_proj = self.style_encoder(
+            style_strokes, lengths=style_lengths, return_projection=True
+        )
         predicted = self.deformer(ref_points, style, stroke_indices)
-        predicted = smooth_offsets(predicted)
+        if self.deformer_type != "transformer":
+            predicted = smooth_offsets(predicted)
         predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
 
-        return deformation_loss(predicted, target_offsets) + 0.1 * smoothness_loss(predicted)
+        loss_deform = deformation_loss(predicted, target_offsets)
+        loss_smooth = (
+            smoothness_loss(predicted)
+            if self.deformer_type != "transformer"
+            else torch.tensor(0.0, device=self.device)
+        )
+
+        beta = self._get_contrastive_beta()
+        if beta > 0 and z_proj is not None and "character_labels" in batch:
+            labels = batch["character_labels"].to(self.device)
+            loss_con = supervised_contrastive_loss(
+                z_proj, labels, self.config.contrastive_temperature
+            )
+        else:
+            loss_con = torch.tensor(0.0, device=self.device)
+
+        return loss_deform + 0.1 * loss_smooth + beta * loss_con
+
+    def _get_contrastive_beta(self) -> float:
+        warmup_epochs = int(self.config.epochs * self.config.contrastive_warmup_frac)
+        if self._current_epoch < warmup_epochs:
+            return self.config.contrastive_weight * (
+                self._current_epoch / max(warmup_epochs, 1)
+            )
+        return self.config.contrastive_weight
+
+    def _pre_epoch(self, epoch: int) -> None:
+        self._current_epoch = epoch
 
     def _post_epoch(self, epoch: int, avg_loss: float) -> None:
         self.scheduler.step()
@@ -760,13 +874,21 @@ class UserDeformationTrainer(BaseFinetuner):
     def _build_checkpoint(self) -> dict:
         return {
             "deformer_state_dict": _state_dict_cpu(self.deformer),
-            "style_encoder_state_dict": _state_dict_cpu(self.style_encoder),
+            "style_encoder_state_dict": {
+                k: v
+                for k, v in _state_dict_cpu(self.style_encoder).items()
+                if not k.startswith("projection_head.")
+            },
             "config": {
                 "style_dim": self.config.style_dim,
                 "hidden_dim": self.config.hidden_dim,
                 "num_points": self.config.num_points,
                 "dropout": self.config.dropout,
-                "deformer_type": "offset",
+                "deformer_type": self.config.deformer_type,
+                "d_model": self.config.d_model,
+                "nhead": self.config.nhead,
+                "num_self_attn_layers": self.config.num_self_attn_layers,
+                "ff_dim": self.config.ff_dim,
             },
             "norm_stats": self.norm_stats,
             "version": 3,

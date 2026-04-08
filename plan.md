@@ -425,12 +425,23 @@ KanjiVGアンカー方式（StrokeAlignerで座標系を統一）も試したが
 - 621+テスト全パス
 
 ### 残りTODO
+- [ ] **少量サンプル対応（Phase 9）** — 15-30文字で高品質生成を目指す
+  - [ ] A. Contrastive StyleEncoder（SupCon loss + ProjectionHead）
+  - [ ] B. Transformer Deformer（Self-Attention 2層 + Cross-Attention 1層、smooth_offsets不要化）
+  - [ ] C. 訓練パイプライン統合（contrastive warmup + transformer dispatch）
+  - [ ] D. 推論パイプライン更新（deformer_type="transformer"対応）
+  - [ ] E. DeformationFinetuner互換性
+  - [ ] F. 少量データ（15-30文字）での品質検証 + ABテスト（offset vs transformer）
+- [ ] **手書きらしさ改善（将来検討）**
+  - [ ] Clamp値の段階的緩和（訓練初期±0.6→後期±1.2）or 学習可能clamp
+  - [ ] 2段階変形（Affine per-stroke → per-point offset）で大域+局所変形を分離
+  - [ ] KanjiVGテンプレートに代わる手書きプロトタイプ学習（構造保証との両立が課題）
 - [ ] ユーザーサンプル追加収集（全文字3サンプル化）
 - [ ] 実機テスト（G-code出力→ペンプロッタで印刷）
 - [ ] 回路図記号テンプレート（Phase 8）
 
 ### 次のアクション
-1. **ユーザーサンプル追加収集** — 全381文字の3サンプル化
+1. **少量サンプル対応（Phase 9）** — Contrastive StyleEncoder + Transformer Deformer 実装
 2. **実機テスト** — G-code出力→ペンプロッタで印刷
 3. **文字バランスの継続調整** — 参考レポートとの比較で微調整
 

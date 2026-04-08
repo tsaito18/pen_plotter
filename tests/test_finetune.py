@@ -18,6 +18,8 @@ from src.model.finetune import (
     Finetuner,
     UserDeformationTrainer,
     UserTrainConfig,
+    augment_style_strokes,
+    collate_deformation_finetune,
     collate_finetune,
 )
 from src.model.stroke_model import StrokeGenerator
@@ -661,3 +663,138 @@ class TestUserDeformationTrainer:
         inference = StrokeInference(ckpt_path)
         assert inference.version == 3
         assert inference.deformer is not None
+
+
+class TestAugmentStyleStrokes:
+    def test_output_shape(self):
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        style = torch.randn(50, 3)
+        result = augment_style_strokes(style, rng)
+        assert result.shape == style.shape
+
+    def test_pen_state_mostly_preserved(self):
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        style = torch.randn(50, 3)
+        result = augment_style_strokes(style, rng)
+        # Pen state (column 2) should be unchanged — augmentation only touches dx, dy
+        assert torch.equal(result[:, 2], style[:, 2])
+
+    def test_different_from_input(self):
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        style = torch.randn(50, 3)
+        result = augment_style_strokes(style, rng)
+        assert not torch.equal(result[:, :2], style[:, :2])
+
+    def test_empty_input(self):
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        style = torch.zeros(0, 3)
+        result = augment_style_strokes(style, rng)
+        assert result.shape == (0, 3)
+
+
+class TestCollateDeformationFinetuneCharacterLabels:
+    def test_character_labels_present(self, tmp_path):
+        chars = ["あ", "い"]
+        user_dir = _make_data_dir(tmp_path / "user", chars, n_samples=2)
+        ref_dir = _make_ref_dir(tmp_path / "ref", chars)
+        ds = FinetuneDeformationDataset(user_dir, ref_dir, use_aligner=False)
+        if len(ds) < 2:
+            pytest.skip("Need at least 2 samples")
+        batch = [ds[i] for i in range(min(len(ds), 4))]
+        collated = collate_deformation_finetune(batch)
+        assert "character_labels" in collated
+        assert collated["character_labels"].dtype == torch.long
+        # Batch is doubled (original + augmented views for contrastive learning)
+        assert collated["character_labels"].shape[0] == len(batch) * 2
+
+
+class TestUserDeformationTrainerTransformer:
+    @pytest.fixture
+    def setup(self, tmp_path):
+        chars = ["あ", "い", "う"]
+        user_dir = _make_data_dir(tmp_path / "user", chars)
+        ref_dir = _make_ref_dir(tmp_path / "ref", chars)
+        output_dir = tmp_path / "output"
+        return {
+            "user_dir": user_dir,
+            "ref_dir": ref_dir,
+            "output_dir": output_dir,
+        }
+
+    def test_creation_with_transformer(self, setup):
+        from src.model.stroke_deformer import TransformerDeformer
+
+        cfg = UserTrainConfig(deformer_type="transformer", epochs=2, batch_size=2)
+        trainer = UserDeformationTrainer(
+            config=cfg,
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        assert isinstance(trainer.deformer, TransformerDeformer)
+
+    @pytest.mark.slow
+    def test_checkpoint_has_transformer_type(self, setup):
+        cfg = UserTrainConfig(deformer_type="transformer", epochs=2, batch_size=2)
+        trainer = UserDeformationTrainer(
+            config=cfg,
+            user_data_dir=setup["user_dir"],
+            ref_dir=setup["ref_dir"],
+            output_dir=setup["output_dir"],
+        )
+        trainer.train()
+        ckpt_path = setup["output_dir"] / "pretrain_checkpoint.pt"
+        assert ckpt_path.exists()
+        ckpt = torch.load(ckpt_path, weights_only=False)
+        assert ckpt["config"]["deformer_type"] == "transformer"
+        assert "d_model" in ckpt["config"]
+        assert "nhead" in ckpt["config"]
+
+
+class TestContrastiveBeta:
+    def test_warmup_zero_at_start(self):
+        cfg = UserTrainConfig(
+            epochs=100,
+            contrastive_weight=0.5,
+            contrastive_warmup_frac=0.2,
+        )
+        # Minimal setup: only need config and _current_epoch
+        trainer = UserDeformationTrainer.__new__(UserDeformationTrainer)
+        trainer.config = cfg
+        trainer._current_epoch = 0
+        beta = trainer._get_contrastive_beta()
+        assert beta == pytest.approx(0.0)
+
+    def test_warmup_full_after_warmup(self):
+        cfg = UserTrainConfig(
+            epochs=100,
+            contrastive_weight=0.5,
+            contrastive_warmup_frac=0.2,
+        )
+        trainer = UserDeformationTrainer.__new__(UserDeformationTrainer)
+        trainer.config = cfg
+        # warmup_epochs = 100 * 0.2 = 20; at epoch 20 warmup is done
+        trainer._current_epoch = 20
+        beta = trainer._get_contrastive_beta()
+        assert beta == pytest.approx(0.5)
+
+    def test_warmup_midpoint(self):
+        cfg = UserTrainConfig(
+            epochs=100,
+            contrastive_weight=0.5,
+            contrastive_warmup_frac=0.2,
+        )
+        trainer = UserDeformationTrainer.__new__(UserDeformationTrainer)
+        trainer.config = cfg
+        # warmup_epochs = 20; at epoch 10 -> beta = 0.5 * 10/20 = 0.25
+        trainer._current_epoch = 10
+        beta = trainer._get_contrastive_beta()
+        assert beta == pytest.approx(0.25)

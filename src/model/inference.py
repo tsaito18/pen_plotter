@@ -43,6 +43,17 @@ class StrokeInference:
                     hidden_dim=hidden_dim,
                     dropout=dropout,
                 )
+            elif self.deformer_type == "transformer":
+                from src.model.stroke_deformer import TransformerDeformer
+
+                self.deformer = TransformerDeformer(
+                    style_dim=style_dim,
+                    d_model=config.get("d_model", 64),
+                    nhead=config.get("nhead", 4),
+                    num_self_attn_layers=config.get("num_self_attn_layers", 2),
+                    ff_dim=config.get("ff_dim", 128),
+                    dropout=dropout,
+                )
             else:
                 self.deformer = StrokeDeformer(
                     style_dim=style_dim,
@@ -299,7 +310,8 @@ class StrokeInference:
             deformed_batch = transformed.detach().numpy()
         else:
             offsets = self.deformer(ref_batch, style_batch, idx_batch)
-            offsets = smooth_offsets(offsets)
+            if self.deformer_type != "transformer":
+                offsets = smooth_offsets(offsets)
             offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
             deformed_batch = (ref_batch + offsets).detach().numpy()
 

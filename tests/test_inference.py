@@ -540,3 +540,75 @@ class TestStrokeInferenceV3Offset:
         )
         assert len(strokes) == 1
         assert strokes[0].shape == (16, 2)
+
+
+class TestStrokeInferenceV3Transformer:
+    """V3 transformer deformer tests."""
+
+    @pytest.fixture
+    def v3_transformer_checkpoint_path(self, tmp_path):
+        from src.model.stroke_deformer import TransformerDeformer
+
+        style_dim = 64
+        deformer = TransformerDeformer(
+            style_dim=style_dim, d_model=32, nhead=2,
+            num_self_attn_layers=1, ff_dim=64,
+        )
+        style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=style_dim)
+        checkpoint = {
+            "deformer_state_dict": deformer.state_dict(),
+            "style_encoder_state_dict": style_enc.state_dict(),
+            "config": {
+                "style_dim": style_dim,
+                "num_points": 16,
+                "deformer_type": "transformer",
+                "d_model": 32,
+                "nhead": 2,
+                "num_self_attn_layers": 1,
+                "ff_dim": 64,
+            },
+            "norm_stats": {"mean_x": 0.0, "mean_y": 0.0, "std_x": 1.0, "std_y": 1.0},
+        }
+        ckpt_path = tmp_path / "v3_transformer_model.pt"
+        torch.save(checkpoint, ckpt_path)
+        return ckpt_path
+
+    @pytest.fixture
+    def v3_transformer_engine(self, v3_transformer_checkpoint_path):
+        return StrokeInference(
+            checkpoint_path=v3_transformer_checkpoint_path,
+            style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 64},
+        )
+
+    def test_v3_transformer_detection(self, v3_transformer_engine):
+        assert v3_transformer_engine.version == 3
+        assert v3_transformer_engine.deformer_type == "transformer"
+
+    def test_v3_transformer_generation(self, v3_transformer_engine):
+        style_sample = torch.randn(1, 20, 3)
+        reference = [
+            np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64),
+            np.array([[0.2, 0.8], [0.8, 0.2]], dtype=np.float64),
+        ]
+        strokes = v3_transformer_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+        )
+        assert len(strokes) == 2
+        for s in strokes:
+            assert isinstance(s, np.ndarray)
+            assert s.shape == (16, 2)
+            assert s.dtype == np.float32
+
+    def test_v3_transformer_output_finite(self, v3_transformer_engine):
+        style_sample = torch.randn(1, 15, 3)
+        reference = [
+            np.array([[0.0, 0.0], [5.0, 5.0]], dtype=np.float64),
+        ]
+        strokes = v3_transformer_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+            noise_scale=0.01,
+        )
+        for s in strokes:
+            assert np.all(np.isfinite(s))

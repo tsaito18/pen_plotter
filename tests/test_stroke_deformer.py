@@ -3,12 +3,14 @@
 import pytest
 
 torch = pytest.importorskip("torch")
+nn = torch.nn
 
 import math
 
 from src.model.stroke_deformer import (
     AffineStrokeDeformer,
     StrokeDeformer,
+    TransformerDeformer,
     affine_deformation_loss,
     compute_local_curvature,
     deformation_loss,
@@ -239,3 +241,126 @@ class TestAffineDeformationLoss:
         target = torch.randn(4, 32, 2)
         loss = affine_deformation_loss(transformed, target)
         assert loss.item() > 0
+
+
+class TestTransformerDeformer:
+    @pytest.fixture()
+    def small_model(self) -> "TransformerDeformer":
+        return TransformerDeformer(
+            style_dim=64, d_model=32, nhead=2, num_self_attn_layers=1, ff_dim=64
+        )
+
+    def test_output_shape(self, small_model: "TransformerDeformer") -> None:
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        stroke_index = torch.tensor([0, 1, 2, 3])
+        with torch.no_grad():
+            out = small_model(ref, style, stroke_index)
+        assert out.shape == (4, 32, 2)
+
+    def test_with_stroke_index(self, small_model: "TransformerDeformer") -> None:
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        stroke_index = torch.tensor([0, 1, 2, 3])
+        with torch.no_grad():
+            out = small_model(ref, style, stroke_index)
+        assert out.shape == (4, 32, 2)
+
+    def test_without_stroke_index(self, small_model: "TransformerDeformer") -> None:
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        with torch.no_grad():
+            out = small_model(ref, style, stroke_index=None)
+        assert out.shape == (4, 32, 2)
+
+    def test_stroke_index_clamped(self, small_model: "TransformerDeformer") -> None:
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        stroke_index = torch.tensor([0, 100, -1, 15])
+        with torch.no_grad():
+            out = small_model(ref, style, stroke_index)
+        assert out.shape == (4, 32, 2)
+
+    def test_zero_init_output(self, small_model: "TransformerDeformer") -> None:
+        """At initialization, offsets should be near-zero."""
+        ref = torch.randn(4, 32, 2)
+        style = torch.zeros(4, 64)
+        stroke_index = torch.tensor([0, 1, 2, 3])
+        with torch.no_grad():
+            out = small_model(ref, style, stroke_index)
+        assert out.abs().max() < 0.1
+
+    def test_gradient_flows(self, small_model: "TransformerDeformer") -> None:
+        # output_proj is zero-init, so randomize it to allow gradient flow
+        nn.init.xavier_uniform_(small_model.output_proj.weight)
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        stroke_index = torch.tensor([0, 1, 2, 3])
+        out = small_model(ref, style, stroke_index)
+        out.sum().backward()
+        for name in ("self_attn_layers", "cross_attn", "output_proj"):
+            module = getattr(small_model, name)
+            params = list(module.parameters())
+            assert len(params) > 0, f"{name} has no parameters"
+            has_grad = any(p.grad is not None and p.grad.abs().sum() > 0 for p in params)
+            assert has_grad, f"No gradient flowed to {name}"
+
+    def test_inter_point_communication(self, small_model: "TransformerDeformer") -> None:
+        """Perturbing one point should affect offsets at other points (unlike MLP)."""
+        # output_proj is zero-init, so randomize to allow non-zero outputs
+        nn.init.xavier_uniform_(small_model.output_proj.weight)
+        ref = torch.randn(1, 32, 2)
+        style = torch.randn(1, 64)
+        stroke_index = torch.tensor([0])
+
+        with torch.no_grad():
+            offsets1 = small_model(ref, style, stroke_index).clone()
+
+            ref2 = ref.clone()
+            ref2[0, 15, :] += 5.0
+            offsets2 = small_model(ref2, style, stroke_index)
+
+        assert not torch.allclose(offsets1[0, 0], offsets2[0, 0]), (
+            "Offsets at point 0 should change when point 15 is perturbed"
+        )
+
+    def test_api_compatible_with_stroke_deformer(self) -> None:
+        """Both StrokeDeformer and TransformerDeformer accept same args and return same shape."""
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        stroke_index = torch.tensor([0, 1, 2, 3])
+
+        mlp_model = StrokeDeformer(style_dim=64, hidden_dim=128)
+        tf_model = TransformerDeformer(
+            style_dim=64, d_model=32, nhead=2, num_self_attn_layers=1, ff_dim=64
+        )
+
+        with torch.no_grad():
+            out_mlp = mlp_model(ref, style, stroke_index)
+            out_tf = tf_model(ref, style, stroke_index)
+
+        assert out_mlp.shape == (4, 32, 2)
+        assert out_tf.shape == (4, 32, 2)
+
+
+class TestTransformerDeformerDefaults:
+    def test_default_params(self) -> None:
+        model = TransformerDeformer()
+        ref = torch.randn(2, 32, 2)
+        style = torch.randn(2, 128)
+        with torch.no_grad():
+            out = model(ref, style)
+        assert out.shape == (2, 32, 2)
+
+    def test_different_n_points(self) -> None:
+        model = TransformerDeformer(
+            style_dim=64, d_model=32, nhead=2, num_self_attn_layers=1, ff_dim=64
+        )
+        style = torch.randn(2, 64)
+
+        with torch.no_grad():
+            out16 = model(torch.randn(2, 16, 2), style)
+            out48 = model(torch.randn(2, 48, 2), style)
+
+        assert out16.shape == (2, 16, 2)
+        assert out48.shape == (2, 48, 2)

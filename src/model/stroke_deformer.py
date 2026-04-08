@@ -223,6 +223,125 @@ class AffineStrokeDeformer(nn.Module):
         return transformed, params
 
 
+class TransformerDeformer(nn.Module):
+    """Transformer-based stroke deformer with self-attention + cross-attention to style.
+
+    Self-attention enables inter-point communication (replacing post-hoc smooth_offsets).
+    Cross-attention allows each point to modulate style influence differently.
+    """
+
+    MAX_STROKE_INDEX = 16
+
+    def __init__(
+        self,
+        style_dim: int = 128,
+        d_model: int = 64,
+        nhead: int = 4,
+        num_self_attn_layers: int = 2,
+        ff_dim: int = 128,
+        stroke_embed_dim: int = 16,
+        max_points: int = 64,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.style_dim = style_dim
+        self.d_model = d_model
+        self.stroke_embed_dim = stroke_embed_dim
+
+        self.stroke_embedding = nn.Embedding(self.MAX_STROKE_INDEX, stroke_embed_dim)
+
+        # Input: ref_xy(2) + t(1) + curvature(1) + stroke_embed(stroke_embed_dim)
+        input_dim = 2 + 1 + 1 + stroke_embed_dim
+        self.input_proj = nn.Linear(input_dim, d_model)
+
+        # Learned positional encoding
+        self.pos_embed = nn.Embedding(max_points, d_model)
+
+        # Self-attention encoder layers
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=ff_dim,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.self_attn_layers = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_self_attn_layers
+        )
+
+        # Cross-attention to style (multi-token: project style to num_style_tokens KV tokens)
+        self.num_style_tokens = 4
+        self.style_proj = nn.Linear(style_dim, d_model * self.num_style_tokens)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True
+        )
+        self.cross_norm = nn.LayerNorm(d_model)
+
+        # Output projection - zero-initialized for identity deformation at start
+        self.output_proj = nn.Linear(d_model, 2)
+        self.output_proj.weight.data.zero_()
+        self.output_proj.bias.data.zero_()
+
+    def forward(
+        self,
+        reference_points: torch.Tensor,
+        style: torch.Tensor,
+        stroke_index: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Predict per-point offsets using Transformer architecture.
+
+        Args:
+            reference_points: (batch, N, 2) reference xy coordinates.
+            style: (batch, style_dim) style vector from StyleEncoder.
+            stroke_index: (batch,) integer stroke index.
+
+        Returns:
+            offsets: (batch, N, 2) predicted offset per point.
+        """
+        batch_size, n_points, _ = reference_points.shape
+
+        t = torch.linspace(0, 1, n_points, device=reference_points.device)
+        t = t.unsqueeze(0).unsqueeze(-1).expand(batch_size, n_points, 1)
+
+        curvature = compute_local_curvature(reference_points)
+
+        if stroke_index is not None:
+            idx = stroke_index.clamp(0, self.MAX_STROKE_INDEX - 1)
+            stroke_emb = self.stroke_embedding(idx)
+            stroke_emb = stroke_emb.unsqueeze(1).expand(
+                batch_size, n_points, self.stroke_embed_dim
+            )
+        else:
+            stroke_emb = torch.zeros(
+                batch_size,
+                n_points,
+                self.stroke_embed_dim,
+                device=reference_points.device,
+            )
+
+        # Concatenate input features: ref_xy + t + curvature + stroke_embed
+        features = torch.cat([reference_points, t, curvature, stroke_emb], dim=-1)
+
+        # Input projection + positional encoding
+        x = self.input_proj(features)
+        positions = torch.arange(n_points, device=reference_points.device)
+        positions = positions.clamp(max=self.pos_embed.num_embeddings - 1)
+        x = x + self.pos_embed(positions).unsqueeze(0)
+
+        # Self-attention: inter-point communication
+        x = self.self_attn_layers(x)
+
+        # Cross-attention to style (multi-token KV for richer attention)
+        style_tokens = self.style_proj(style).view(
+            batch_size, self.num_style_tokens, self.d_model
+        )
+        attn_out, _ = self.cross_attn(query=x, key=style_tokens, value=style_tokens)
+        x = self.cross_norm(x + attn_out)
+
+        # Output projection (zero-initialized -> starts as identity)
+        return self.output_proj(x)
+
+
 def affine_deformation_loss(
     transformed: torch.Tensor,
     target_points: torch.Tensor,
