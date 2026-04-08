@@ -390,7 +390,7 @@ class TestStrokeInferenceV3:
         for s in strokes:
             assert isinstance(s, np.ndarray)
             assert s.ndim == 2
-            assert s.shape == (16, 2)
+            assert s.shape[1] == 2 and s.shape[0] >= 16
 
     def test_v3_no_reference_returns_fallback(self, v3_engine):
         style_sample = torch.randn(1, 10, 3)
@@ -445,7 +445,7 @@ class TestStrokeInferenceV3:
         assert len(strokes) == 2
         for s in strokes:
             assert isinstance(s, np.ndarray)
-            assert s.shape == (16, 2)
+            assert s.shape[1] == 2 and s.shape[0] >= 16
 
     def test_v3_all_short_strokes_returns_fallback(self, v3_engine):
         """If all strokes are too short, return fallback."""
@@ -509,7 +509,7 @@ class TestStrokeInferenceV3Offset:
         for s in strokes:
             assert isinstance(s, np.ndarray)
             assert s.ndim == 2
-            assert s.shape == (16, 2)
+            assert s.shape[1] == 2 and s.shape[0] >= 16
             assert s.dtype == np.float32
 
     def test_v3_offset_batch_output_finite(self, v3_offset_engine):
@@ -539,7 +539,7 @@ class TestStrokeInferenceV3Offset:
             reference_strokes=reference,
         )
         assert len(strokes) == 1
-        assert strokes[0].shape == (16, 2)
+        assert strokes[0].shape[1] == 2 and strokes[0].shape[0] >= 16
 
 
 class TestStrokeInferenceV3Transformer:
@@ -597,7 +597,7 @@ class TestStrokeInferenceV3Transformer:
         assert len(strokes) == 2
         for s in strokes:
             assert isinstance(s, np.ndarray)
-            assert s.shape == (16, 2)
+            assert s.shape[1] == 2 and s.shape[0] >= 16
             assert s.dtype == np.float32
 
     def test_v3_transformer_output_finite(self, v3_transformer_engine):

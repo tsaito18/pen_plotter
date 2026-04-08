@@ -269,6 +269,24 @@ class StrokeInference:
 
         return all_strokes
 
+    @staticmethod
+    def _smooth_stroke(
+        points: NDArray[np.float32], num_output: int = 64, kernel: int = 5
+    ) -> NDArray[np.float32]:
+        """Upsample via arc-length interpolation then smooth with moving average."""
+        if len(points) < 3:
+            return points
+        from src.model.data_utils import resample_stroke
+
+        upsampled = resample_stroke(points, num_output)
+        pad = kernel // 2
+        padded = np.pad(upsampled, ((pad, pad), (0, 0)), mode="edge")
+        smoothed = np.convolve(np.ones(kernel) / kernel, padded[:, 0], mode="valid")
+        smooth_y = np.convolve(np.ones(kernel) / kernel, padded[:, 1], mode="valid")
+        return np.stack([smoothed[: len(upsampled)], smooth_y[: len(upsampled)]], axis=1).astype(
+            np.float32
+        )
+
     def _generate_v3(
         self,
         style_sample: torch.Tensor,
@@ -332,7 +350,9 @@ class StrokeInference:
             dy = np.random.normal(0, noise_scale * 0.1)
             result = scaled + center + np.array([dx, dy])
 
-            all_strokes.append(result.astype(np.float32))
+            # Upsample + smooth for clean curves
+            result = self._smooth_stroke(result.astype(np.float32))
+            all_strokes.append(result)
 
         return all_strokes
 
