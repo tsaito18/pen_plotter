@@ -452,6 +452,12 @@ class FinetuneDeformationDataset(Dataset):
             np.array([[pt["x"], pt["y"]] for pt in s], dtype=np.float32) for _, s in ref_valid
         ]
 
+        # Flip user Y-axis to match KanjiVG (Y-up) convention
+        all_u = np.concatenate(user_arrays)
+        uy_min, uy_max = all_u[:, 1].min(), all_u[:, 1].max()
+        for arr in user_arrays:
+            arr[:, 1] = uy_min + uy_max - arr[:, 1]
+
         all_u = np.concatenate(user_arrays)
         all_r = np.concatenate(ref_arrays)
         u_min, u_range = all_u.min(axis=0), (all_u.max(axis=0) - all_u.min(axis=0)).max()
@@ -496,11 +502,16 @@ class FinetuneDeformationDataset(Dataset):
         if self.sample_reversed[idx]:
             user_stroke_pts = user_stroke_pts[::-1].copy()
 
-        # Normalize user strokes to same [0, target_size] range as KanjiVG reference
+        # Flip user Y-axis: iPad strokes are Y-down, KanjiVG reference is Y-up
         all_user_pts = np.concatenate(
             [np.array([[pt["x"], pt["y"]] for pt in s]) for s in user_data["strokes"]],
             axis=0,
         )
+        y_min, y_max = all_user_pts[:, 1].min(), all_user_pts[:, 1].max()
+        user_stroke_pts[:, 1] = y_min + y_max - user_stroke_pts[:, 1]
+        all_user_pts[:, 1] = y_min + y_max - all_user_pts[:, 1]
+
+        # Normalize user strokes to same [0, target_size] range as KanjiVG reference
         u_min = all_user_pts.min(axis=0)
         u_max = all_user_pts.max(axis=0)
         u_range = (u_max - u_min).max()
@@ -513,10 +524,11 @@ class FinetuneDeformationDataset(Dataset):
             scale = r_range / u_range
             user_stroke_pts = (user_stroke_pts - u_min) * scale + all_ref_pts.min(axis=0)
 
-        # Normalize all user strokes to KanjiVG scale
+        # Normalize all user strokes to KanjiVG scale (Y already flipped via all_user_pts)
         normalized_user_strokes = []
         for s in user_data["strokes"]:
             pts = np.array([[pt["x"], pt["y"]] for pt in s], dtype=np.float32)
+            pts[:, 1] = y_min + y_max - pts[:, 1]  # Y-flip to match KanjiVG
             if u_range > 0:
                 pts = (pts - u_min) * scale + all_ref_pts.min(axis=0)
             normalized_user_strokes.append(pts)
