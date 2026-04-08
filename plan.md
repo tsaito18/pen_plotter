@@ -367,6 +367,12 @@ StrokeDeformer(参照点 + 正規化位置t + 局所曲率 + style_vector + stro
 5. **KanjiVGフォールバック**
 6. **矩形フォールバック**
 
+### 座標系（重要：過去にバグの原因）
+- KanjiVG JSON (`data/strokes/`): **Y-UP**（`prepare_kanjivg.py` で `y = target_size - y` 反転済み）
+- ユーザーストローク (`data/user_strokes/`): **Y-DOWN**（iPad Canvas座標そのまま保存）
+- 訓練時は `FinetuneDeformationDataset` でユーザーストロークのY軸を反転しKanjiVGと統一
+- 推論出力・G-code: Y-UP（0,0=左下）。matplotlibプレビューで `invert_yaxis()` は不要
+
 ### 訓練戦略
 - **ユーザーデータ直接訓練**: CASIA事前訓練は中国語/日本語ストロークの不一致によりノイズが大きく断念
 - ユーザーの手書きサンプル（381文字セット）でStrokeDeformerを直接訓練
