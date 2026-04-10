@@ -271,23 +271,23 @@ class StrokeInference:
 
     @staticmethod
     def _smooth_stroke(
-        points: NDArray[np.float32], num_output: int = 64
+        points: NDArray[np.float32], num_output: int = 80
     ) -> NDArray[np.float32]:
-        """Upsample via cubic spline on arc-length parameterization."""
-        if len(points) < 3:
+        """Upsample via smoothing spline — prioritizes curve smoothness over exact fit."""
+        if len(points) < 4:
             return points
-        from scipy.interpolate import CubicSpline
+        from scipy.interpolate import splprep, splev
 
-        diffs = np.diff(points, axis=0)
-        seg_lengths = np.sqrt((diffs**2).sum(axis=1))
-        cum_lengths = np.concatenate([[0.0], np.cumsum(seg_lengths)])
-        total_length = cum_lengths[-1]
-        if total_length < 1e-12:
+        # Smoothing factor: higher = smoother (trades accuracy for smoothness)
+        n = len(points)
+        smoothing = n * 0.3
+        try:
+            tck, _ = splprep([points[:, 0], points[:, 1]], s=smoothing, k=3)
+            t_new = np.linspace(0.0, 1.0, num_output)
+            x_new, y_new = splev(t_new, tck)
+            return np.stack([x_new, y_new], axis=1).astype(np.float32)
+        except (ValueError, TypeError):
             return points
-
-        cs = CubicSpline(cum_lengths, points, bc_type="clamped")
-        t_new = np.linspace(0.0, total_length, num_output)
-        return cs(t_new).astype(np.float32)
 
     def _generate_v3(
         self,
@@ -330,8 +330,7 @@ class StrokeInference:
             deformed_batch = transformed.detach().numpy()
         else:
             offsets = self.deformer(ref_batch, style_batch, idx_batch)
-            if self.deformer_type != "transformer":
-                offsets = smooth_offsets(offsets)
+            offsets = smooth_offsets(offsets)
             offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
             deformed_batch = (ref_batch + offsets).detach().numpy()
 

@@ -29,7 +29,7 @@ from src.model.pretrain import _detect_device
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
 
-OFFSET_CLAMP = 0.6
+OFFSET_CLAMP = 1.5
 SMOOTHING_KERNEL_SIZE = 11
 
 
