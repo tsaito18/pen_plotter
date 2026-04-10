@@ -271,23 +271,71 @@ class StrokeInference:
 
     @staticmethod
     def _smooth_stroke(
-        points: NDArray[np.float32], num_output: int = 80
+        points: NDArray[np.float32],
+        pts_per_unit: float = 8.0,
+        corner_thresh: float = 0.6,
     ) -> NDArray[np.float32]:
-        """Upsample via smoothing spline — prioritizes curve smoothness over exact fit."""
+        """Adaptive smoothing: preserve corners, smooth segments between them.
+
+        Splits stroke at sharp corners, applies smoothing spline to each
+        segment independently, then concatenates. Corners stay sharp while
+        curves become smooth.
+        """
         if len(points) < 4:
             return points
+
+        # Detect corners via angle change between consecutive edges
+        corners = [0]
+        for i in range(1, len(points) - 1):
+            v1 = points[i] - points[i - 1]
+            v2 = points[i + 1] - points[i]
+            len1 = np.linalg.norm(v1)
+            len2 = np.linalg.norm(v2)
+            if len1 < 1e-8 or len2 < 1e-8:
+                continue
+            cos_angle = np.clip(np.dot(v1, v2) / (len1 * len2), -1.0, 1.0)
+            if cos_angle < corner_thresh:
+                corners.append(i)
+        corners.append(len(points) - 1)
+
         from scipy.interpolate import splprep, splev
 
-        # Smoothing factor: higher = smoother (trades accuracy for smoothness)
-        n = len(points)
-        smoothing = n * 0.3
-        try:
-            tck, _ = splprep([points[:, 0], points[:, 1]], s=smoothing, k=3)
-            t_new = np.linspace(0.0, 1.0, num_output)
-            x_new, y_new = splev(t_new, tck)
-            return np.stack([x_new, y_new], axis=1).astype(np.float32)
-        except (ValueError, TypeError):
+        result_parts: list[NDArray[np.float32]] = []
+        for seg_i in range(len(corners) - 1):
+            start, end = corners[seg_i], corners[seg_i + 1]
+            seg = points[start : end + 1]
+
+            # Allocate output points proportional to segment arc length
+            seg_diffs = np.diff(seg, axis=0)
+            seg_len = np.sqrt((seg_diffs**2).sum(axis=1)).sum()
+            n_out = max(int(seg_len * pts_per_unit), 3)
+
+            if len(seg) < 4:
+                # Too short for spline — linearly interpolate
+                t_orig = np.linspace(0, 1, len(seg))
+                t_new = np.linspace(0, 1, n_out)
+                x_new = np.interp(t_new, t_orig, seg[:, 0])
+                y_new = np.interp(t_new, t_orig, seg[:, 1])
+                part = np.stack([x_new, y_new], axis=1)
+            else:
+                smoothing = len(seg) * 0.15
+                try:
+                    tck, _ = splprep([seg[:, 0], seg[:, 1]], s=smoothing, k=3)
+                    t_new = np.linspace(0.0, 1.0, n_out)
+                    x_new, y_new = splev(t_new, tck)
+                    part = np.stack([x_new, y_new], axis=1)
+                except (ValueError, TypeError):
+                    part = seg
+
+            # Avoid duplicating corner points between segments
+            if result_parts:
+                result_parts.append(part[1:])
+            else:
+                result_parts.append(part)
+
+        if not result_parts:
             return points
+        return np.concatenate(result_parts, axis=0).astype(np.float32)
 
     def _generate_v3(
         self,
