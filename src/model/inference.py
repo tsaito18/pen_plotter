@@ -271,21 +271,23 @@ class StrokeInference:
 
     @staticmethod
     def _smooth_stroke(
-        points: NDArray[np.float32], num_output: int = 64, kernel: int = 5
+        points: NDArray[np.float32], num_output: int = 64
     ) -> NDArray[np.float32]:
-        """Upsample via arc-length interpolation then smooth with moving average."""
+        """Upsample via cubic spline on arc-length parameterization."""
         if len(points) < 3:
             return points
-        from src.model.data_utils import resample_stroke
+        from scipy.interpolate import CubicSpline
 
-        upsampled = resample_stroke(points, num_output)
-        pad = kernel // 2
-        padded = np.pad(upsampled, ((pad, pad), (0, 0)), mode="edge")
-        smoothed = np.convolve(np.ones(kernel) / kernel, padded[:, 0], mode="valid")
-        smooth_y = np.convolve(np.ones(kernel) / kernel, padded[:, 1], mode="valid")
-        return np.stack([smoothed[: len(upsampled)], smooth_y[: len(upsampled)]], axis=1).astype(
-            np.float32
-        )
+        diffs = np.diff(points, axis=0)
+        seg_lengths = np.sqrt((diffs**2).sum(axis=1))
+        cum_lengths = np.concatenate([[0.0], np.cumsum(seg_lengths)])
+        total_length = cum_lengths[-1]
+        if total_length < 1e-12:
+            return points
+
+        cs = CubicSpline(cum_lengths, points, bc_type="clamped")
+        t_new = np.linspace(0.0, total_length, num_output)
+        return cs(t_new).astype(np.float32)
 
     def _generate_v3(
         self,
