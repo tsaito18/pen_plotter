@@ -630,8 +630,8 @@ class TestUserDeformationTrainer:
         """Training and inference use the same OFFSET_CLAMP and smooth_offsets function."""
         from src.model.finetune import OFFSET_CLAMP, SMOOTHING_KERNEL_SIZE, smooth_offsets
 
-        assert OFFSET_CLAMP == 1.5
-        assert SMOOTHING_KERNEL_SIZE == 11
+        assert OFFSET_CLAMP == 1.0
+        assert SMOOTHING_KERNEL_SIZE == 15
 
         # Verify inference imports the same constants
         offsets = torch.randn(1, 32, 2)

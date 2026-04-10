@@ -273,7 +273,7 @@ class StrokeInference:
     def _smooth_stroke(
         points: NDArray[np.float32],
         pts_per_unit: float = 8.0,
-        corner_thresh: float = 0.6,
+        corner_thresh: float = 0.85,
     ) -> NDArray[np.float32]:
         """Adaptive smoothing: preserve corners, smooth segments between them.
 
@@ -318,7 +318,7 @@ class StrokeInference:
                 y_new = np.interp(t_new, t_orig, seg[:, 1])
                 part = np.stack([x_new, y_new], axis=1)
             else:
-                smoothing = len(seg) * 0.15
+                smoothing = len(seg) * 0.05
                 try:
                     tck, _ = splprep([seg[:, 0], seg[:, 1]], s=smoothing, k=3)
                     t_new = np.linspace(0.0, 1.0, n_out)

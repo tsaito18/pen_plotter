@@ -29,8 +29,8 @@ from src.model.pretrain import _detect_device
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
 
-OFFSET_CLAMP = 1.5
-SMOOTHING_KERNEL_SIZE = 11
+OFFSET_CLAMP = 1.0
+SMOOTHING_KERNEL_SIZE = 15
 
 
 def _scan_char_pairs(user_dir: Path, ref_dir: Path) -> list[tuple[str, Path, Path]]:
