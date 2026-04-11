@@ -275,13 +275,13 @@ class StrokeInference:
         pts_per_unit: float = 8.0,
         corner_thresh: float = 0.85,
     ) -> NDArray[np.float32]:
-        """Adaptive smoothing: preserve corners, smooth segments between them.
+        """Adaptive upsampling: interpolate (not smooth) between detected corners.
 
-        Splits stroke at sharp corners, applies smoothing spline to each
-        segment independently, then concatenates. Corners stay sharp while
-        curves become smooth.
+        Splits stroke at sharp corners, applies exact cubic spline interpolation
+        to each segment. Curves get more points for smoothness, but corners
+        stay perfectly sharp — no data points are moved.
         """
-        if len(points) < 4:
+        if len(points) < 3:
             return points
 
         # Detect corners via angle change between consecutive edges
@@ -298,36 +298,36 @@ class StrokeInference:
                 corners.append(i)
         corners.append(len(points) - 1)
 
-        from scipy.interpolate import splprep, splev
+        from scipy.interpolate import CubicSpline
 
         result_parts: list[NDArray[np.float32]] = []
         for seg_i in range(len(corners) - 1):
             start, end = corners[seg_i], corners[seg_i + 1]
             seg = points[start : end + 1]
 
-            # Allocate output points proportional to segment arc length
+            # Allocate output points proportional to arc length
             seg_diffs = np.diff(seg, axis=0)
             seg_len = np.sqrt((seg_diffs**2).sum(axis=1)).sum()
-            n_out = max(int(seg_len * pts_per_unit), 3)
+            n_out = max(int(seg_len * pts_per_unit), 2)
 
-            if len(seg) < 4:
-                # Too short for spline — linearly interpolate
+            if len(seg) < 3:
                 t_orig = np.linspace(0, 1, len(seg))
                 t_new = np.linspace(0, 1, n_out)
                 x_new = np.interp(t_new, t_orig, seg[:, 0])
                 y_new = np.interp(t_new, t_orig, seg[:, 1])
                 part = np.stack([x_new, y_new], axis=1)
             else:
-                smoothing = len(seg) * 0.05
-                try:
-                    tck, _ = splprep([seg[:, 0], seg[:, 1]], s=smoothing, k=3)
-                    t_new = np.linspace(0.0, 1.0, n_out)
-                    x_new, y_new = splev(t_new, tck)
-                    part = np.stack([x_new, y_new], axis=1)
-                except (ValueError, TypeError):
+                # Arc-length parameterized exact cubic spline (s=0)
+                cum = np.concatenate([[0.0], np.cumsum(
+                    np.sqrt((seg_diffs**2).sum(axis=1))
+                )])
+                if cum[-1] < 1e-12:
                     part = seg
+                else:
+                    cs = CubicSpline(cum, seg, bc_type="clamped")
+                    t_new = np.linspace(0.0, cum[-1], n_out)
+                    part = cs(t_new)
 
-            # Avoid duplicating corner points between segments
             if result_parts:
                 result_parts.append(part[1:])
             else:
