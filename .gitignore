@@ -12,6 +12,10 @@ data/strokes/
 data/user_strokes/
 data/models/
 data/report_examples/
+data/experiments/
+data/subsets/
+data/inkscape_ext/
+data/samples/
 
 # G-code
 *.gcode
