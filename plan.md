@@ -430,14 +430,22 @@ KanjiVGアンカー方式（StrokeAlignerで座標系を統一）も試したが
 - リファクタリング済み（HTML分離、責務分割、重複削除）
 - 621+テスト全パス
 
+### 本番モデル（2026-04-14時点）
+- **deformer_type=transformer** を採用（381文字/925サンプル訓練）
+- MLPより文字構造の整合性が高い（点間協調変形）
+- OFFSET_CLAMP=0.5, SMOOTHING_KERNEL_SIZE=15
+- 推論時のスムージング: 角検出（cos<0.85）+ セグメント内CubicSpline補間
+
+### 完了TODO
+- [x] **少量サンプル対応（Phase 9）** — 完了
+  - [x] A. Contrastive StyleEncoder（SupCon loss + ProjectionHead）
+  - [x] B. Transformer Deformer（Self-Attention + Cross-Attention multi-token KV）
+  - [x] C. 訓練パイプライン統合（contrastive warmup + transformer dispatch）
+  - [x] D. 推論パイプライン更新（deformer_type="transformer"対応）
+  - [x] E. DeformationFinetuner互換性
+  - [x] F. 少量データ（30文字）+ 381文字でのABテスト → Transformer採用
+
 ### 残りTODO
-- [ ] **少量サンプル対応（Phase 9）** — 15-30文字で高品質生成を目指す
-  - [ ] A. Contrastive StyleEncoder（SupCon loss + ProjectionHead）
-  - [ ] B. Transformer Deformer（Self-Attention 2層 + Cross-Attention 1層、smooth_offsets不要化）
-  - [ ] C. 訓練パイプライン統合（contrastive warmup + transformer dispatch）
-  - [ ] D. 推論パイプライン更新（deformer_type="transformer"対応）
-  - [ ] E. DeformationFinetuner互換性
-  - [ ] F. 少量データ（15-30文字）での品質検証 + ABテスト（offset vs transformer）
 - [ ] **手書きらしさ改善（将来検討）**
   - [ ] Clamp値の段階的緩和（訓練初期±0.6→後期±1.2）or 学習可能clamp
   - [ ] 2段階変形（Affine per-stroke → per-point offset）で大域+局所変形を分離
