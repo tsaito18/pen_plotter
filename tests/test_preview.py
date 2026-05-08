@@ -127,5 +127,44 @@ class TestRenderStrokes:
         finally:
             plt.close(fig)
 
+    def test_render_strokes_disables_axes(self) -> None:
+        # Web UI と同じ「紙だけが見える」レイアウトにするため、軸/目盛り/
+        # フレームは非表示でなければならない。ax.axis("off") の効果検証。
+        fig, ax = plt.subplots()
+        try:
+            render_strokes(ax, [Stroke(points=[(0.0, 0.0), (10.0, 10.0)])])
+            # axis("off") は ax.axison を False にする。
+            assert ax.axison is False
+        finally:
+            plt.close(fig)
+
+    def test_render_strokes_sets_paper_extent(self) -> None:
+        # A4 紙の座標系 (0-210, 0-297mm) に正確に合わせること。
+        # ストローク座標と背景画像 extent の整合性に効くため厳密に検査。
+        fig, ax = plt.subplots()
+        try:
+            render_strokes(ax, [Stroke(points=[(0.0, 0.0), (10.0, 10.0)])])
+            assert ax.get_xlim() == (0.0, 210.0)
+            assert ax.get_ylim() == (0.0, 297.0)
+        finally:
+            plt.close(fig)
+
+    def test_render_strokes_works_when_background_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # CI/開発環境で data/report_paper.jpg が無いケースでも、例外を
+        # 出さず白紙背景でフォールバックすること。
+        from src.plotter_gui import preview as preview_mod
+
+        missing = tmp_path / "no_such_image.jpg"
+        monkeypatch.setattr(preview_mod, "_REPORT_PAPER_PATH", missing)
+        assert not missing.exists()
+
+        fig, ax = plt.subplots()
+        try:
+            render_strokes(ax, [Stroke(points=[(0.0, 0.0), (10.0, 10.0)])])
+        finally:
+            plt.close(fig)
+
 
 import pytest  # noqa: E402  (conftest 経由ではなく明示 import)

@@ -30,6 +30,17 @@ _Z_RE = re.compile(r"[Zz](-?\d+(?:\.\d+)?)")
 # 先頭 G1/G0 として認識できるようにする (これは Z 軸行で別途除外)。
 _GCMD_RE = re.compile(r"^\s*G(?P<num>\d+)")
 
+# プロジェクトルート基準でレポート用紙画像のパスを解決する。
+# preview.py は src/plotter_gui/ 配下にあるため parents[2] = リポジトリルート。
+# `python -m src.plotter_gui` / scripts/run_plotter_gui.py のいずれの起動経路でも
+# 同じパスに解決され、CWD に依存しない (CWD 依存だと systemd や cron 経由で壊れる)。
+_REPORT_PAPER_PATH = Path(__file__).resolve().parents[2] / "data" / "report_paper.jpg"
+
+# A4 用紙寸法 (mm)。Web UI 側 PlotterConfig の既定値と一致させ、
+# 背景画像 extent と xlim/ylim の単位を揃える。
+_PAPER_WIDTH_MM = 210
+_PAPER_HEIGHT_MM = 297
+
 
 @dataclass(frozen=True)
 class Stroke:
@@ -132,35 +143,46 @@ def parse_gcode(source: str | Path) -> list[Stroke]:
 def render_strokes(ax: "Axes", strokes: list[Stroke]) -> None:
     """matplotlib Axes へストロークを描画する。
 
-    A4 サイズ枠 (0,0)-(210,297) を境界に表示し、ストロークは黒線で描く。
-    Y-UP 座標系 (matplotlib デフォルト) でそのまま描画するため
-    ``invert_yaxis()`` は呼ばない。
+    Web UI (src/ui/preview_renderer.py) のプレビューと見た目を揃えるため:
+      - data/report_paper.jpg を背景として A4 紙座標系 (0-210, 0-297mm) に貼る
+        (画像が無い環境では白紙でフォールバックして例外を出さない)
+      - 軸 / 目盛り / フレームは非表示
+      - アスペクト比 equal で A4 縦の比率を保つ
+      - Y-UP 座標系 (matplotlib デフォルト) のため ``invert_yaxis()`` は呼ばない
 
     Args:
         ax: matplotlib の Axes オブジェクト。
-        strokes: 描画対象ストローク列 (空リストの場合は枠だけ表示)。
+        strokes: 描画対象ストローク列 (空リストの場合は背景のみ表示)。
     """
     ax.clear()
-    # A4 紙の外形を薄いグレーで枠表示。座標感覚をユーザに与えるため、
-    # ストロークが空でも常に描画する。
-    ax.plot(
-        [0, 210, 210, 0, 0],
-        [0, 0, 297, 297, 0],
-        color="#cccccc",
-        linewidth=0.8,
-    )
 
+    # 背景画像 (zorder=0)。画像が無い環境では何もせず白背景にフォールバック。
+    # PIL は matplotlib の間接依存として既に入っているため遅延 import で済ませる。
+    if _REPORT_PAPER_PATH.exists():
+        from PIL import Image
+
+        bg = Image.open(_REPORT_PAPER_PATH)
+        ax.imshow(
+            bg,
+            extent=[0, _PAPER_WIDTH_MM, 0, _PAPER_HEIGHT_MM],
+            aspect="auto",
+            zorder=0,
+        )
+
+    # ストロークは黒線で描画。線幅 0.5 は Web UI と揃えて視覚的整合を保つ。
     for stroke in strokes:
         if len(stroke.points) < 2:
             continue
         xs = [p[0] for p in stroke.points]
         ys = [p[1] for p in stroke.points]
-        ax.plot(xs, ys, color="black", linewidth=0.6)
+        ax.plot(xs, ys, color="black", linewidth=0.5, zorder=1)
 
-    ax.set_xlim(-5, 215)
-    ax.set_ylim(-5, 302)
-    ax.set_aspect("equal", adjustable="box")
-    # 紙面感を出すため tick はそのまま、grid は描かない。
+    # 描画範囲は紙ぴったりに合わせる (Web UI 互換, 背景 extent と一致)。
+    ax.set_xlim(0, _PAPER_WIDTH_MM)
+    ax.set_ylim(0, _PAPER_HEIGHT_MM)
+    ax.set_aspect("equal")
+    # 軸 / 目盛り / フレームをすべて非表示にして「紙だけ」が見える状態にする。
+    ax.axis("off")
 
 
 def _read_source(source: str | Path) -> str:
