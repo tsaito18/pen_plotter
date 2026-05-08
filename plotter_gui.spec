@@ -23,6 +23,12 @@ a = Analysis(
         # Tkinter + matplotlib のバックエンドを明示。Tk は標準ライブラリだが
         # FigureCanvasTkAgg の遅延 import を PyInstaller が拾えないことがある。
         'matplotlib.backends.backend_tkagg',
+        # tkinter サブモジュールは PyInstaller の自動検出で漏れることがある。
+        # 起動時 ModuleNotFoundError を回避するため明示。
+        'tkinter',
+        'tkinter.ttk',
+        'tkinter.filedialog',
+        'tkinter.messagebox',
     ],
     hookspath=[],
     hooksconfig={},
@@ -57,7 +63,10 @@ exe = EXE(
     upx=True,           # UPX があれば圧縮、無ければ警告のみで続行
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,      # コンソールウィンドウを開かない (--windowed 相当)
+    # デバッグ用に True にしてコンソールでエラーを表示している。
+    # 配布版では False に戻して --windowed (subsystem=windows) ビルドにする。
+    # TODO: after debug, revert console to False.
+    console=True,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

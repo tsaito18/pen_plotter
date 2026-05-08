@@ -1,0 +1,7 @@
+* text=auto
+
+# Windows cmd.exe は LF 改行の .bat / .cmd を正しく解釈できず、
+# 行頭の文字が次行の一部と結合されて「'v' は内部コマンド…」のような
+# 誤認識が発生する。チェックアウト時に必ず CRLF に揃える。
+*.bat text eol=crlf
+*.cmd text eol=crlf
