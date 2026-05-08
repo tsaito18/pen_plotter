@@ -856,17 +856,12 @@ class UserDeformationTrainer(BaseFinetuner):
             style_strokes, lengths=style_lengths, return_projection=True
         )
         predicted = self.deformer(ref_points, style, stroke_indices)
-        attention_based = self.deformer_type in ("transformer", "twostage")
-        if not attention_based:
-            predicted = smooth_offsets(predicted)
+        # Apply smoothing for all per-point deformers to keep train/inference consistent
+        predicted = smooth_offsets(predicted)
         predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
 
         loss_deform = deformation_loss(predicted, target_offsets)
-        loss_smooth = (
-            smoothness_loss(predicted)
-            if not attention_based
-            else torch.tensor(0.0, device=self.device)
-        )
+        loss_smooth = smoothness_loss(predicted)
 
         beta = self._get_contrastive_beta()
         if beta > 0 and z_proj is not None and "character_labels" in batch:

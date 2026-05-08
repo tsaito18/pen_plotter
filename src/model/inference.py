@@ -389,7 +389,9 @@ class StrokeInference:
             deformed_batch = transformed.detach().numpy()
         else:
             offsets = self.deformer(ref_batch, style_batch, idx_batch)
-            if self.deformer_type not in ("transformer", "twostage"):
+            # Apply smoothing for all per-point deformers (incl. transformer/twostage)
+            # to remove high-frequency offset noise that creates visible jaggedness
+            if self.deformer_type != "affine":
                 offsets = smooth_offsets(offsets)
             offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
             deformed_batch = (ref_batch + offsets).detach().numpy()
