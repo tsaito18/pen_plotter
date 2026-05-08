@@ -149,10 +149,18 @@ class AffineStrokeDeformer(nn.Module):
         hidden_dim: int = 64,
         stroke_embed_dim: int = 16,
         dropout: float = 0.0,
+        theta_mult: float = 0.015,
+        scale_mult: float = 0.04,
+        shear_mult: float = 0.015,
+        translation_mult: float = 0.08,
     ) -> None:
         super().__init__()
         self.style_dim = style_dim
         self.stroke_embedding = nn.Embedding(self.MAX_STROKE_INDEX, stroke_embed_dim)
+        self.theta_mult = theta_mult
+        self.scale_mult = scale_mult
+        self.shear_mult = shear_mult
+        self.translation_mult = translation_mult
         input_dim = style_dim + stroke_embed_dim + 4  # +4 for stroke stats (cx, cy, w, h)
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -199,12 +207,12 @@ class AffineStrokeDeformer(nn.Module):
         features = torch.cat([style, s_emb, stroke_stats], dim=-1)
         params = self.mlp(features)
 
-        theta = params[:, 0] * 0.015
-        sx = 1.0 + params[:, 1] * 0.04
-        sy = 1.0 + params[:, 2] * 0.04
-        shear = params[:, 3] * 0.015
-        tx = params[:, 4] * 0.08
-        ty = params[:, 5] * 0.08
+        theta = params[:, 0] * self.theta_mult
+        sx = 1.0 + params[:, 1] * self.scale_mult
+        sy = 1.0 + params[:, 2] * self.scale_mult
+        shear = params[:, 3] * self.shear_mult
+        tx = params[:, 4] * self.translation_mult
+        ty = params[:, 5] * self.translation_mult
 
         cos_t = torch.cos(theta)
         sin_t = torch.sin(theta)
@@ -340,6 +348,89 @@ class TransformerDeformer(nn.Module):
 
         # Output projection (zero-initialized -> starts as identity)
         return self.output_proj(x)
+
+
+class TwoStageDeformer(nn.Module):
+    """Two-stage deformer: per-stroke affine + per-point Transformer offsets.
+
+    Stage 1 (Affine): captures global per-stroke transformations
+        — rotation, scale, shear, translation. Models user style traits
+        like consistent slant, stroke size, and stroke position bias.
+    Stage 2 (Transformer): per-point offsets on the affine-transformed
+        reference, capturing fine-grained local style.
+
+    Forward returns offsets relative to the ORIGINAL reference points,
+    so it remains a drop-in replacement for StrokeDeformer / TransformerDeformer:
+        deformed = ref + deformer(ref, style, stroke_index)
+    """
+
+    MAX_STROKE_INDEX = 16
+
+    def __init__(
+        self,
+        style_dim: int = 128,
+        d_model: int = 64,
+        nhead: int = 4,
+        num_self_attn_layers: int = 2,
+        ff_dim: int = 128,
+        affine_hidden_dim: int = 64,
+        stroke_embed_dim: int = 16,
+        max_points: int = 64,
+        dropout: float = 0.0,
+        # Affine multipliers tuned for larger global deformation
+        theta_mult: float = 0.05,        # ~3° at param=1
+        scale_mult: float = 0.10,        # ±10%
+        shear_mult: float = 0.05,
+        translation_mult: float = 0.30,  # ±0.3 in [0,10] coord = 3%
+    ) -> None:
+        super().__init__()
+        self.affine = AffineStrokeDeformer(
+            style_dim=style_dim,
+            hidden_dim=affine_hidden_dim,
+            stroke_embed_dim=stroke_embed_dim,
+            dropout=dropout,
+            theta_mult=theta_mult,
+            scale_mult=scale_mult,
+            shear_mult=shear_mult,
+            translation_mult=translation_mult,
+        )
+        self.transformer = TransformerDeformer(
+            style_dim=style_dim,
+            d_model=d_model,
+            nhead=nhead,
+            num_self_attn_layers=num_self_attn_layers,
+            ff_dim=ff_dim,
+            stroke_embed_dim=stroke_embed_dim,
+            max_points=max_points,
+            dropout=dropout,
+        )
+
+    def forward(
+        self,
+        reference_points: torch.Tensor,
+        style: torch.Tensor,
+        stroke_index: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Predict per-point offsets from original reference points.
+
+        Args:
+            reference_points: (batch, N, 2)
+            style: (batch, style_dim)
+            stroke_index: (batch,)
+
+        Returns:
+            offsets: (batch, N, 2) — total offset (affine + transformer per-point)
+            relative to the ORIGINAL reference_points. Apply via:
+                deformed = reference_points + offsets
+        """
+        # Stage 1: affine-transformed points
+        affined, _params = self.affine(reference_points, style, stroke_index)
+
+        # Stage 2: per-point offsets on the affined points
+        per_point = self.transformer(affined, style, stroke_index)
+
+        # Return total offset relative to original reference
+        return (affined - reference_points) + per_point
 
 
 def affine_deformation_loss(

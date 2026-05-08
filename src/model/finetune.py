@@ -795,6 +795,17 @@ class UserDeformationTrainer(BaseFinetuner):
                 ff_dim=config.ff_dim,
                 dropout=config.dropout,
             ).to(self.device)
+        elif config.deformer_type == "twostage":
+            from src.model.stroke_deformer import TwoStageDeformer
+
+            self.deformer = TwoStageDeformer(
+                style_dim=config.style_dim,
+                d_model=config.d_model,
+                nhead=config.nhead,
+                num_self_attn_layers=config.num_self_attn_layers,
+                ff_dim=config.ff_dim,
+                dropout=config.dropout,
+            ).to(self.device)
         else:
             self.deformer = StrokeDeformer(
                 style_dim=config.style_dim,
@@ -845,14 +856,15 @@ class UserDeformationTrainer(BaseFinetuner):
             style_strokes, lengths=style_lengths, return_projection=True
         )
         predicted = self.deformer(ref_points, style, stroke_indices)
-        if self.deformer_type != "transformer":
+        attention_based = self.deformer_type in ("transformer", "twostage")
+        if not attention_based:
             predicted = smooth_offsets(predicted)
         predicted = predicted.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
 
         loss_deform = deformation_loss(predicted, target_offsets)
         loss_smooth = (
             smoothness_loss(predicted)
-            if self.deformer_type != "transformer"
+            if not attention_based
             else torch.tensor(0.0, device=self.device)
         )
 

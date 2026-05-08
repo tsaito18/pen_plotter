@@ -96,8 +96,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--deformer-type",
         type=str,
         default="offset",
-        choices=["offset", "transformer"],
-        help="Deformer type (v3-user only): offset=MLP, transformer=Transformer",
+        choices=["offset", "transformer", "twostage"],
+        help="Deformer type (v3-user only): offset=MLP, transformer=Transformer, twostage=Affine+Transformer",
     )
     return parser.parse_args(argv)
 

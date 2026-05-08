@@ -430,9 +430,11 @@ KanjiVGアンカー方式（StrokeAlignerで座標系を統一）も試したが
 - リファクタリング済み（HTML分離、責務分割、重複削除）
 - 621+テスト全パス
 
-### 本番モデル（2026-04-14時点）
-- **deformer_type=transformer** を採用（381文字/925サンプル訓練）
-- MLPより文字構造の整合性が高い（点間協調変形）
+### 本番モデル（2026-05-08時点）
+- **deformer_type=twostage** を採用（381文字/925サンプル訓練、loss=0.41）
+- 2段階変形: Stage1 Affine（per-stroke 大域変形）+ Stage2 Transformer（per-point 細部変形）
+- ユーザーの「字を小さめに書く癖」など大域的な傾向をAffineで捉え、Transformerが細部を補完
+- AffineMultipliers: theta=0.05, scale=0.10, shear=0.05, translation=0.30
 - OFFSET_CLAMP=0.5, SMOOTHING_KERNEL_SIZE=15
 - 推論時のスムージング: 角検出（cos<0.85）+ セグメント内CubicSpline補間
 
@@ -448,7 +450,8 @@ KanjiVGアンカー方式（StrokeAlignerで座標系を統一）も試したが
 ### 残りTODO
 - [ ] **手書きらしさ改善（将来検討）**
   - [ ] Clamp値の段階的緩和（訓練初期±0.6→後期±1.2）or 学習可能clamp
-  - [ ] 2段階変形（Affine per-stroke → per-point offset）で大域+局所変形を分離
+  - [x] 2段階変形（Affine per-stroke → per-point offset）— 採用済み
+  - [ ] AffineMultipliersをさらに拡大して大域変形を強化（右下がり傾斜などの再現）
   - [ ] KanjiVGテンプレートに代わる手書きプロトタイプ学習（構造保証との両立が課題）
 - [ ] ユーザーサンプル追加収集（全文字3サンプル化）
 - [ ] 実機テスト（G-code出力→ペンプロッタで印刷）

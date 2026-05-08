@@ -11,6 +11,7 @@ from src.model.stroke_deformer import (
     AffineStrokeDeformer,
     StrokeDeformer,
     TransformerDeformer,
+    TwoStageDeformer,
     affine_deformation_loss,
     compute_local_curvature,
     deformation_loss,
@@ -364,3 +365,62 @@ class TestTransformerDeformerDefaults:
 
         assert out16.shape == (2, 16, 2)
         assert out48.shape == (2, 48, 2)
+
+
+class TestTwoStageDeformer:
+    @pytest.fixture()
+    def small_model(self) -> "TwoStageDeformer":
+        return TwoStageDeformer(
+            style_dim=64, d_model=32, nhead=2, num_self_attn_layers=1, ff_dim=64,
+            affine_hidden_dim=32,
+        )
+
+    def test_output_shape(self, small_model: "TwoStageDeformer") -> None:
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        stroke_index = torch.tensor([0, 1, 2, 3])
+        with torch.no_grad():
+            out = small_model(ref, style, stroke_index)
+        assert out.shape == (4, 32, 2)
+
+    def test_without_stroke_index(self, small_model: "TwoStageDeformer") -> None:
+        ref = torch.randn(2, 32, 2)
+        style = torch.randn(2, 64)
+        with torch.no_grad():
+            out = small_model(ref, style, stroke_index=None)
+        assert out.shape == (2, 32, 2)
+
+    def test_zero_init_output(self, small_model: "TwoStageDeformer") -> None:
+        """At init both Affine and Transformer output zero, so total offset ≈ 0."""
+        ref = torch.randn(4, 32, 2)
+        style = torch.zeros(4, 64)
+        stroke_index = torch.tensor([0, 1, 2, 3])
+        with torch.no_grad():
+            out = small_model(ref, style, stroke_index)
+        # Affine zero-init means params=0 -> identity transform; transformer also zero
+        assert out.abs().max() < 1e-4
+
+    def test_gradient_flows(self, small_model: "TwoStageDeformer") -> None:
+        # Randomize output projections so gradient propagates through stages
+        nn.init.xavier_uniform_(small_model.transformer.output_proj.weight)
+        nn.init.xavier_uniform_(small_model.affine.mlp[-1].weight)
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        stroke_index = torch.tensor([0, 1, 2, 3])
+        out = small_model(ref, style, stroke_index)
+        out.sum().backward()
+        for name in ("affine", "transformer"):
+            module = getattr(small_model, name)
+            params = list(module.parameters())
+            assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in params), (
+                f"No gradient flowed to {name}"
+            )
+
+    def test_api_compatible(self, small_model: "TwoStageDeformer") -> None:
+        """Same forward signature as StrokeDeformer / TransformerDeformer."""
+        ref = torch.randn(4, 32, 2)
+        style = torch.randn(4, 64)
+        stroke_index = torch.tensor([0, 1, 2, 3])
+        with torch.no_grad():
+            out = small_model(ref, style, stroke_index)
+        assert out.shape == ref.shape
