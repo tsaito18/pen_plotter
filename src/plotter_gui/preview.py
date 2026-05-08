@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from src.plotter_gui._resources import resource_path
+
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
@@ -30,11 +32,10 @@ _Z_RE = re.compile(r"[Zz](-?\d+(?:\.\d+)?)")
 # 先頭 G1/G0 として認識できるようにする (これは Z 軸行で別途除外)。
 _GCMD_RE = re.compile(r"^\s*G(?P<num>\d+)")
 
-# プロジェクトルート基準でレポート用紙画像のパスを解決する。
-# preview.py は src/plotter_gui/ 配下にあるため parents[2] = リポジトリルート。
-# `python -m src.plotter_gui` / scripts/run_plotter_gui.py のいずれの起動経路でも
-# 同じパスに解決され、CWD に依存しない (CWD 依存だと systemd や cron 経由で壊れる)。
-_REPORT_PAPER_PATH = Path(__file__).resolve().parents[2] / "data" / "report_paper.jpg"
+# レポート用紙画像のパス解決は _resources.resource_path 経由に統一する。
+# 通常実行時は repository root 基準、PyInstaller --onefile bundle 実行時は
+# sys._MEIPASS 配下に解決され、いずれの起動経路でも CWD 非依存で動く。
+_REPORT_PAPER_PATH = resource_path("data/report_paper.jpg")
 
 # A4 用紙寸法 (mm)。Web UI 側 PlotterConfig の既定値と一致させ、
 # 背景画像 extent と xlim/ylim の単位を揃える。

@@ -17,6 +17,7 @@ dependencies = [
 ml = ["torch", "torchvision", "scipy"]
 ui = ["gradio"]
 dev = ["pytest", "ruff"]
+build = ["pyinstaller"]
 
 [tool.ruff]
 line-length = 100
