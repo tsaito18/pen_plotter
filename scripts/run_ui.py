@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.ui.web_app import PlotterPipeline
+from src.ui.gradio_app import create_app
 
 
 def main() -> None:
@@ -34,21 +34,7 @@ def main() -> None:
 
     kanjivg_dir = args.kanjivg_dir if args.kanjivg_dir.exists() else None
     checkpoint = args.checkpoint if args.checkpoint and args.checkpoint.exists() else None
-    user_strokes_dir = (
-        args.user_strokes_dir if args.user_strokes_dir.exists() else None
-    )
-
-    pipeline = PlotterPipeline(
-        checkpoint_path=checkpoint,
-        kanjivg_dir=kanjivg_dir,
-        user_strokes_dir=user_strokes_dir,
-    )
-
-    app = pipeline.create_app()
-    if app is None:
-        print("Error: gradio がインストールされていません。")
-        print("  pip install gradio")
-        sys.exit(1)
+    user_strokes_dir = args.user_strokes_dir if args.user_strokes_dir.exists() else None
 
     mode = []
     if checkpoint:
@@ -61,11 +47,17 @@ def main() -> None:
         mode.append("矩形フォールバック")
     print(f"描画モード: {', '.join(mode)}")
 
+    app = create_app(
+        checkpoint_path=checkpoint,
+        kanjivg_dir=kanjivg_dir,
+        user_strokes_dir=user_strokes_dir,
+    )
+
     app.launch(
         server_name="0.0.0.0",
         server_port=args.port,
         share=args.share,
-        css=".gradio-container { max-width: 1200px !important; }",
+        css=".gradio-container { max-width: 1400px !important; }",
     )
 
 

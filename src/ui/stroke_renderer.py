@@ -25,6 +25,7 @@ class CharCoverageReport:
     rect_fallback: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,6 +72,11 @@ class StrokeRenderer:
         self._page_config = page_config or PageConfig()
         self._temperature = temperature
         self._augmenter = augmenter
+
+        # 既存呼び出し元（pipeline.create_app() 等）が UI 構築時に環境引数を
+        # 復元できるよう、入力時のパスを保持しておく
+        self._checkpoint_path = checkpoint_path
+        self._user_strokes_dir = user_strokes_dir
 
         self._inference = None
         if checkpoint_path is not None:

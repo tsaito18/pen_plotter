@@ -1,16 +1,34 @@
-"""Gradio Web UI for pen plotter."""
+"""Pen Plotter Gradio Web UI（全面書き換え版）。
+
+副作用ゼロを徹底するため、UI 層は UISettings の snapshot を gr.State に保持し、
+プレビュー / G-code 生成のたびに build_pipeline で新規パイプラインを構築する。
+旧版の _apply_settings によるパイプライン属性差し替えは廃止。
+
+設計の核:
+- gr.State(UISettings) と gr.State(stale: bool) を起点に状態を一元管理
+- Slider の change で UISettings を不変的に更新（dataclass.replace）し、stale=True
+- バリデーションは UISettings.validate() に委譲し、エラー時はボタン disable
+- 例外時のテンポラリリークを try/finally で防ぐ
+- ユーザー指示により旧 gradio_app.py は完全置き換え（保険ファイルなし）
+"""
 
 from __future__ import annotations
 
 import logging
+import shutil
+import tempfile
 import time
+from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 
 import gradio as gr
 
-from src.ui.web_app import PlotterPipeline
+from src.ui.settings import UISettings
+from src.ui.web_app import PlotterPipeline, build_pipeline
 
 logger = logging.getLogger(__name__)
+
 
 _EXAMPLE_REPORT_HEADER = """\
 # 物理学実験レポート
@@ -79,311 +97,58 @@ _HELP_MARKDOWN = """\
 
 ### ヒント
 
-- 設定タブでフォントサイズや余白を調整できます
+- 設定パネルでフォントサイズや余白を調整できます
 - 温度を上げると文字の揺らぎが増し、下げると整った字になります
-- G-code 生成は1ページ目のみ出力されます
+- G-code 生成は全ページ分が自動ダウンロードされます（初回はブラウザの許可ダイアログを承認してください）
+- 設定を変更したらプレビューを再生成してください（黄色の警告が出ます）
+"""
+
+_STALE_BANNER_HTML = (
+    '<div style="padding:8px 12px;background:#fff7e6;border-left:4px solid #faad14;'
+    'border-radius:4px;color:#874d00;">'
+    "設定が変更されました。プレビューを再生成してください。"
+    "</div>"
+)
+
+
+# Gradio 6.9 の gr.Files は JS callback に FileData[] を渡す。
+# 各要素は {path, url, size, orig_name, mime_type, meta} 構造。
+# Chrome の multi-download 許可ダイアログは初回のみ。400ms 間隔で順次クリックする。
+_TRIGGER_MULTI_DOWNLOAD_JS = r"""
+(files) => {
+    if (!files) { return; }
+    const list = Array.isArray(files) ? files : [files];
+    list.forEach((f, i) => {
+        if (!f) { return; }
+        const url = f.url || f.path || (typeof f === 'string' ? f : null);
+        if (!url) { return; }
+        const name = f.orig_name || (typeof url === 'string' ? url.split('/').pop() : 'file');
+        setTimeout(() => {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }, i * 400);
+    });
+}
 """
 
 
-def create_app(pipeline: PlotterPipeline) -> gr.Blocks:
-    """Create the Gradio application."""
-
-    with gr.Blocks(title="Pen Plotter") as app:
-        prev_files = gr.State([])
-
-        gr.Markdown("# Pen Plotter")
-
-        with gr.Tabs():
-            with gr.Tab("作成"):
-                with gr.Row(equal_height=False):
-                    # --- 左カラム: 入力 ---
-                    with gr.Column(scale=2):
-                        text_input = gr.Textbox(
-                            lines=16,
-                            placeholder=(
-                                "テキストを入力...\n\n# 見出し\n$数式$ / $$ブロック数式$$"
-                            ),
-                            label="テキスト入力",
-                        )
-                        char_count_md = gr.Markdown("文字数: 0")
-
-                        with gr.Row():
-                            preview_btn = gr.Button("プレビュー", variant="primary", scale=2)
-                            gcode_btn = gr.Button("G-code 生成", scale=2)
-                            clear_btn = gr.Button("クリア", variant="secondary", scale=1)
-
-                    # --- 右カラム: 出力 ---
-                    with gr.Column(scale=3):
-                        status_md = gr.Markdown(visible=False)
-                        preview_gallery = gr.Gallery(
-                            label="プレビュー",
-                            columns=1,
-                            height=700,
-                            show_label=False,
-                            object_fit="contain",
-                            preview=True,
-                        )
-                        with gr.Accordion("文字カバレッジ", open=False):
-                            coverage_md = gr.Markdown("")
-                        gcode_file = gr.File(label="G-code ダウンロード")
-
-            with gr.Tab("設定"):
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("### レイアウト")
-                        font_size = gr.Slider(
-                            3.0, 10.0, value=4.5, step=0.1, label="フォントサイズ (mm)"
-                        )
-                        line_spacing = gr.Slider(
-                            5.0, 15.0, value=7.16, step=0.01, label="行間隔 (mm)"
-                        )
-                        gr.Markdown("### 余白 (mm)")
-                        margin_top = gr.Slider(5, 60, value=48, step=1, label="上")
-                        margin_bottom = gr.Slider(5, 50, value=34, step=1, label="下")
-                        margin_left = gr.Slider(1, 50, value=5, step=1, label="左")
-                        margin_right = gr.Slider(1, 50, value=5, step=1, label="右")
-
-                    with gr.Column():
-                        gr.Markdown("### プロッタ")
-                        draw_speed = gr.Slider(
-                            200, 3000, value=1000, step=50, label="描画速度 (mm/min)"
-                        )
-                        travel_speed = gr.Slider(
-                            1000, 5000, value=3000, step=100, label="移動速度 (mm/min)"
-                        )
-                        pen_delay = gr.Slider(
-                            0.05, 0.50, value=0.15, step=0.01, label="ペン遅延 (s)"
-                        )
-                        gr.Markdown("### ML モデル")
-                        temperature = gr.Slider(
-                            0.1,
-                            2.0,
-                            value=1.0,
-                            step=0.1,
-                            label="温度",
-                            info="高いほど文字の揺らぎが大きくなります",
-                        )
-
-                reset_btn = gr.Button("デフォルトに戻す")
-
-            with gr.Tab("ヘルプ"):
-                gr.Markdown(_HELP_MARKDOWN)
-                gr.Markdown("### 例文を試す")
-                with gr.Row():
-                    ex_report_btn = gr.Button("レポートヘッダー")
-                    ex_math_btn = gr.Button("数式レポート")
-                    ex_essay_btn = gr.Button("小論文")
-
-        # --- Callbacks ---
-
-        def _update_char_count(text: str) -> str:
-            n = len(text) if text else 0
-            page_config = pipeline._page_config
-            chars_per_line = int(
-                (page_config.paper_size[0] - page_config.margin_left - page_config.margin_right)
-                / pipeline._typesetter.font_size
-            )
-            lines_per_page = int(
-                (page_config.paper_size[1] - page_config.margin_top - page_config.margin_bottom)
-                / page_config.line_spacing
-            )
-            chars_per_page = max(chars_per_line * lines_per_page, 1)
-            est_pages = max(1, -(-n // chars_per_page))
-            return f"文字数: {n} | 推定ページ数: {est_pages}"
-
-        text_input.change(_update_char_count, inputs=[text_input], outputs=[char_count_md])
-
-        all_settings = [
-            font_size,
-            line_spacing,
-            margin_top,
-            margin_bottom,
-            margin_left,
-            margin_right,
-            draw_speed,
-            travel_speed,
-            pen_delay,
-            temperature,
-        ]
-
-        def _on_preview(
-            text: str,
-            prev: list[str],
-            font_sz: float,
-            line_sp: float,
-            m_top: float,
-            m_bottom: float,
-            m_left: float,
-            m_right: float,
-            draw_spd: float,
-            travel_spd: float,
-            pen_dl: float,
-            temp: float,
-            progress=gr.Progress(),
-        ):
-            for f in prev or []:
-                Path(f).unlink(missing_ok=True)
-
-            if not text or not text.strip():
-                return (
-                    [],
-                    [],
-                    gr.update(value="**テキストを入力してください。**", visible=True),
-                    None,
-                    "",
-                )
-
-            def _progress_cb(frac: float, desc: str) -> None:
-                progress(frac, desc=desc)
-
-            try:
-                _apply_settings(
-                    pipeline,
-                    font_sz,
-                    line_sp,
-                    m_top,
-                    m_bottom,
-                    m_left,
-                    m_right,
-                    draw_spd,
-                    travel_spd,
-                    pen_dl,
-                    temp,
-                )
-
-                start = time.time()
-                import tempfile
-
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                    path = Path(f.name)
-                paths = pipeline.generate_preview(
-                    text, save_path=path, progress_callback=_progress_cb
-                )
-                elapsed = time.time() - start
-
-                str_paths = [str(p) for p in paths]
-                status = f"**{len(paths)}ページ生成しました** ({elapsed:.1f}秒)"
-                coverage_text = _format_coverage(pipeline._last_coverage)
-                return (
-                    str_paths,
-                    str_paths,
-                    gr.update(value=status, visible=True),
-                    None,
-                    coverage_text,
-                )
-            except Exception as e:
-                logger.exception("Preview failed")
-                return (
-                    [],
-                    prev or [],
-                    gr.update(value=f"**エラー:** {e}", visible=True),
-                    None,
-                    "",
-                )
-
-        preview_btn.click(
-            _on_preview,
-            inputs=[text_input, prev_files] + all_settings,
-            outputs=[preview_gallery, prev_files, status_md, gcode_file, coverage_md],
-        )
-
-        def _on_generate(
-            text: str,
-            font_sz: float,
-            line_sp: float,
-            m_top: float,
-            m_bottom: float,
-            m_left: float,
-            m_right: float,
-            draw_spd: float,
-            travel_spd: float,
-            pen_dl: float,
-            temp: float,
-            progress=gr.Progress(),
-        ):
-            if not text or not text.strip():
-                return None, gr.update(value="**テキストを入力してください。**", visible=True)
-
-            def _progress_cb(frac: float, desc: str) -> None:
-                progress(frac, desc=desc)
-
-            try:
-                _apply_settings(
-                    pipeline,
-                    font_sz,
-                    line_sp,
-                    m_top,
-                    m_bottom,
-                    m_left,
-                    m_right,
-                    draw_spd,
-                    travel_spd,
-                    pen_dl,
-                    temp,
-                )
-
-                start = time.time()
-                import tempfile
-
-                with tempfile.NamedTemporaryFile(suffix=".gcode", delete=False) as f:
-                    gcode_path = Path(f.name)
-                pipeline.generate_gcode_file(
-                    text, save_path=gcode_path, progress_callback=_progress_cb
-                )
-                elapsed = time.time() - start
-
-                status = f"**G-code を生成しました** ({elapsed:.1f}秒)"
-                return str(gcode_path), gr.update(value=status, visible=True)
-            except Exception as e:
-                logger.exception("G-code generation failed")
-                return None, gr.update(value=f"**エラー:** {e}", visible=True)
-
-        gcode_btn.click(
-            _on_generate,
-            inputs=[text_input] + all_settings,
-            outputs=[gcode_file, status_md],
-        )
-
-        clear_btn.click(
-            lambda: (
-                "",
-                gr.update(value=[], visible=True),
-                None,
-                gr.update(visible=False),
-                "文字数: 0",
-                "",
-            ),
-            outputs=[
-                text_input,
-                preview_gallery,
-                gcode_file,
-                status_md,
-                char_count_md,
-                coverage_md,
-            ],
-        )
-
-        def _reset_defaults() -> tuple:
-            return 6.0, 8.0, 30, 15, 25, 15, 1000, 3000, 0.15, 1.0
-
-        reset_btn.click(_reset_defaults, outputs=all_settings)
-
-        ex_report_btn.click(lambda: _EXAMPLE_REPORT_HEADER, outputs=[text_input])
-        ex_math_btn.click(lambda: _EXAMPLE_MATH_REPORT, outputs=[text_input])
-        ex_essay_btn.click(lambda: _EXAMPLE_ESSAY, outputs=[text_input])
-
-    return app
-
-
 def _format_coverage(report: object) -> str:
-    """CharCoverageReport をMarkdownにフォーマット。"""
+    """CharCoverageReport を Markdown サマリへ変換する。
+
+    各カバレッジ階層（ユーザー筆跡 / ML / KanjiVG / 幾何 / 矩形）を
+    descending priority で表示し、矩形フォールバックには警告アイコンを付ける。
+    """
     total = (
-        len(report.user_strokes)
-        + len(report.ml_inference)
-        + len(report.kanjivg)
-        + len(report.geometric)
-        + len(report.rect_fallback)
-        + len(report.skipped)
+        len(report.user_strokes)  # type: ignore[attr-defined]
+        + len(report.ml_inference)  # type: ignore[attr-defined]
+        + len(report.kanjivg)  # type: ignore[attr-defined]
+        + len(report.geometric)  # type: ignore[attr-defined]
+        + len(report.rect_fallback)  # type: ignore[attr-defined]
+        + len(report.skipped)  # type: ignore[attr-defined]
     )
     if total == 0:
         return ""
@@ -400,49 +165,489 @@ def _format_coverage(report: object) -> str:
         prefix = f"{icon} " if icon else ""
         tiers.append(f"{prefix}**{label}** ({len(chars)}字 / {n_unique}種): {preview}{suffix}")
 
-    _tier("ユーザー筆跡", report.user_strokes)
-    _tier("ML推論", report.ml_inference)
-    _tier("KanjiVG", report.kanjivg)
-    _tier("幾何生成", report.geometric)
-    _tier("矩形フォールバック", report.rect_fallback, icon="\u26a0\ufe0f")
+    _tier("ユーザー筆跡", report.user_strokes)  # type: ignore[attr-defined]
+    _tier("ML推論", report.ml_inference)  # type: ignore[attr-defined]
+    _tier("KanjiVG", report.kanjivg)  # type: ignore[attr-defined]
+    _tier("幾何生成", report.geometric)  # type: ignore[attr-defined]
+    _tier("矩形フォールバック", report.rect_fallback, icon="⚠️")  # type: ignore[attr-defined]
 
-    rendered = total - len(report.skipped)
-    summary = f"全{total}文字 (描画: {rendered}, スキップ: {len(report.skipped)})"
+    rendered = total - len(report.skipped)  # type: ignore[attr-defined]
+    summary = f"全{total}文字 (描画: {rendered}, スキップ: {len(report.skipped)})"  # type: ignore[attr-defined]
 
     return summary + "\n\n" + " | ".join(tiers) if tiers else summary
 
 
-def _apply_settings(
-    pipeline: PlotterPipeline,
-    font_sz: float,
-    line_sp: float,
-    m_top: float,
-    m_bottom: float,
-    m_left: float,
-    m_right: float,
-    draw_spd: float,
-    travel_spd: float,
-    pen_dl: float,
-    temp: float,
-) -> None:
-    """設定をパイプラインに反映する。"""
-    from src.layout.page_layout import PageConfig
-    from src.layout.typesetter import Typesetter
+def _cleanup_paths(paths: Iterable[str | Path] | None) -> None:
+    """テンポラリ画像のクリーンアップ。失敗してもログのみで握りつぶす。"""
+    if not paths:
+        return
+    for p in paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("temp cleanup failed for %s: %s", p, exc)
 
-    page_config = PageConfig(
-        line_spacing=float(line_sp),
-        margin_top=float(m_top),
-        margin_bottom=float(m_bottom),
-        margin_left=float(m_left),
-        margin_right=float(m_right),
+
+def _validation_status(errors: list[str]) -> str:
+    """validate() の戻り値を赤色 HTML で表示するためのフラグメント。"""
+    if not errors:
+        return ""
+    items = "".join(f"<li>{e}</li>" for e in errors)
+    return (
+        '<div style="padding:8px 12px;background:#fff1f0;border-left:4px solid #ff4d4f;'
+        'border-radius:4px;color:#a8071a;"><strong>設定エラー</strong>'
+        f'<ul style="margin:4px 0 0 16px;">{items}</ul></div>'
     )
-    pipeline._page_config = page_config
-    pipeline._typesetter = Typesetter(
-        page_config=page_config,
-        font_size=float(font_sz),
-        augmenter=pipeline._typesetter.augmenter,
-    )
-    pipeline._temperature = float(temp)
-    pipeline._plotter_config.draw_speed = float(draw_spd)
-    pipeline._plotter_config.travel_speed = float(travel_spd)
-    pipeline._plotter_config.pen_delay = float(pen_dl)
+
+
+def create_app(
+    checkpoint_path: Path | str | None = None,
+    kanjivg_dir: Path | str | None = None,
+    user_strokes_dir: Path | str | None = None,
+) -> gr.Blocks:
+    """Gradio Blocks を構築する。
+
+    Args:
+        checkpoint_path: ML モデルチェックポイント (.pt)。
+        kanjivg_dir: KanjiVG JSON ディレクトリ。
+        user_strokes_dir: ユーザー手書きストロークディレクトリ。
+
+    Returns:
+        構築済みの gr.Blocks。
+
+    Note:
+        環境引数（checkpoint_path 等）は closure に保持し、
+        UI 操作のたびに UISettings + これらを束ねて build_pipeline を呼ぶ。
+    """
+
+    # 重い初期化（モデルロード/KanjiVG スキャン）を 1 度だけ走らせ、
+    # 以降は UISettings 差分のみで PlotterPipeline を再生成する。
+    # _stroke_renderer は環境引数依存なので毎回再構築でも OK。
+    env_kwargs: dict[str, object] = {
+        "checkpoint_path": checkpoint_path,
+        "kanjivg_dir": kanjivg_dir,
+        "user_strokes_dir": user_strokes_dir,
+    }
+
+    def _build(settings: UISettings) -> PlotterPipeline:
+        return build_pipeline(
+            settings,
+            checkpoint_path=env_kwargs["checkpoint_path"],
+            kanjivg_dir=env_kwargs["kanjivg_dir"],
+            user_strokes_dir=env_kwargs["user_strokes_dir"],
+        )
+
+    default_settings = UISettings.default()
+
+    with gr.Blocks(title="Pen Plotter") as app:
+        settings_state = gr.State(value=default_settings)
+        # stale=True なら「設定が変わったがプレビュー未更新」状態
+        preview_stale = gr.State(value=False)
+        # 旧プレビューの一時パスを保持し、再生成時に確実にクリーンアップする
+        prev_preview_paths = gr.State(value=[])
+        # G-code 生成時の一時ディレクトリ（次回生成時に丸ごと削除）
+        prev_gcode_tmpdir = gr.State(value=None)
+
+        gr.Markdown("# Pen Plotter")
+
+        with gr.Row(equal_height=False):
+            # ========== 左カラム: 入力 ==========
+            with gr.Column(scale=2):
+                text_input = gr.Textbox(
+                    lines=18,
+                    placeholder=("テキストを入力...\n\n# 見出し\n$数式$ / $$ブロック数式$$"),
+                    label="テキスト入力",
+                )
+                char_count_md = gr.Markdown("文字数: 0")
+
+                with gr.Row():
+                    preview_btn = gr.Button("プレビュー", variant="primary", scale=2)
+                    gcode_btn = gr.Button("G-code 生成", variant="secondary", scale=2)
+                    clear_btn = gr.Button("クリア", scale=1)
+
+                with gr.Accordion("例文を挿入", open=False):
+                    with gr.Row():
+                        ex_report_btn = gr.Button("レポートヘッダー", size="sm")
+                        ex_math_btn = gr.Button("数式レポート", size="sm")
+                        ex_essay_btn = gr.Button("小論文", size="sm")
+
+            # ========== 中央カラム: プレビュー ==========
+            with gr.Column(scale=3):
+                stale_banner = gr.HTML(value="", visible=False)
+                status_md = gr.Markdown(visible=False)
+                preview_gallery = gr.Gallery(
+                    label="プレビュー",
+                    columns=1,
+                    height=700,
+                    show_label=False,
+                    object_fit="contain",
+                    preview=True,
+                )
+                with gr.Accordion("文字カバレッジ", open=False):
+                    coverage_md = gr.Markdown("")
+                gcode_files = gr.Files(label="G-code ダウンロード", interactive=False)
+
+            # ========== 右カラム: 設定 ==========
+            with gr.Column(scale=2):
+                gr.Markdown("### レイアウト")
+                font_size = gr.Slider(
+                    3.0,
+                    10.0,
+                    value=default_settings.font_size,
+                    step=0.1,
+                    label="フォントサイズ (mm)",
+                )
+                line_spacing = gr.Slider(
+                    5.0,
+                    15.0,
+                    value=default_settings.line_spacing,
+                    step=0.01,
+                    label="行間隔 (mm)",
+                )
+
+                gr.Markdown("### 余白 (mm)")
+                margin_top = gr.Slider(5, 60, value=default_settings.margin_top, step=1, label="上")
+                margin_bottom = gr.Slider(
+                    5, 50, value=default_settings.margin_bottom, step=1, label="下"
+                )
+                margin_left = gr.Slider(
+                    1, 50, value=default_settings.margin_left, step=1, label="左"
+                )
+                margin_right = gr.Slider(
+                    1, 50, value=default_settings.margin_right, step=1, label="右"
+                )
+
+                gr.Markdown("### プロッタ")
+                draw_speed = gr.Slider(
+                    200,
+                    3000,
+                    value=default_settings.draw_speed,
+                    step=50,
+                    label="描画速度 (mm/min)",
+                )
+                travel_speed = gr.Slider(
+                    1000,
+                    5000,
+                    value=default_settings.travel_speed,
+                    step=100,
+                    label="移動速度 (mm/min)",
+                )
+                pen_delay = gr.Slider(
+                    0.0,
+                    0.50,
+                    value=default_settings.pen_delay,
+                    step=0.01,
+                    label="ペン遅延 (s)",
+                )
+
+                gr.Markdown("### ML モデル")
+                temperature = gr.Slider(
+                    0.1,
+                    2.0,
+                    value=default_settings.temperature,
+                    step=0.1,
+                    label="温度",
+                    info="高いほど文字の揺らぎが大きくなります",
+                )
+
+                reset_btn = gr.Button("デフォルトに戻す", size="sm")
+                validation_md = gr.HTML(value="", visible=False)
+
+        with gr.Accordion("ヘルプ", open=False):
+            gr.Markdown(_HELP_MARKDOWN)
+
+        slider_components = [
+            font_size,
+            line_spacing,
+            margin_top,
+            margin_bottom,
+            margin_left,
+            margin_right,
+            draw_speed,
+            travel_speed,
+            pen_delay,
+            temperature,
+        ]
+
+        # ===== コールバック =====
+
+        def _update_char_count(text: str, settings: UISettings) -> str:
+            n = len(text) if text else 0
+            content_w = settings.paper_width - settings.margin_left - settings.margin_right
+            content_h = settings.paper_height - settings.margin_top - settings.margin_bottom
+            chars_per_line = max(int(content_w / settings.font_size), 1)
+            lines_per_page = max(int(content_h / settings.line_spacing), 1)
+            chars_per_page = max(chars_per_line * lines_per_page, 1)
+            est_pages = max(1, -(-n // chars_per_page))
+            return f"文字数: {n} | 推定ページ数: {est_pages}"
+
+        text_input.change(
+            _update_char_count,
+            inputs=[text_input, settings_state],
+            outputs=[char_count_md],
+        )
+
+        # 各 Slider の change で UISettings を不変更新し、stale=True にする。
+        # validate() のエラーをボタン disable とエラー HTML 表示に紐付ける。
+        def _make_setting_updater(field: str):
+            def _update(value, settings: UISettings):
+                # frozen=True なので dataclasses.replace で新インスタンスを作る
+                new_settings = replace(settings, **{field: float(value)})
+                errors = new_settings.validate()
+                has_err = bool(errors)
+                return (
+                    new_settings,
+                    True,  # stale
+                    gr.update(value=_STALE_BANNER_HTML, visible=True),
+                    gr.update(value=_validation_status(errors), visible=has_err),
+                    gr.update(interactive=not has_err),
+                    gr.update(interactive=not has_err),
+                )
+
+            return _update
+
+        slider_field_map = {
+            font_size: "font_size",
+            line_spacing: "line_spacing",
+            margin_top: "margin_top",
+            margin_bottom: "margin_bottom",
+            margin_left: "margin_left",
+            margin_right: "margin_right",
+            draw_speed: "draw_speed",
+            travel_speed: "travel_speed",
+            pen_delay: "pen_delay",
+            temperature: "temperature",
+        }
+        for slider, field in slider_field_map.items():
+            slider.change(
+                _make_setting_updater(field),
+                inputs=[slider, settings_state],
+                outputs=[
+                    settings_state,
+                    preview_stale,
+                    stale_banner,
+                    validation_md,
+                    preview_btn,
+                    gcode_btn,
+                ],
+            )
+
+        def _on_preview(
+            text: str,
+            settings: UISettings,
+            old_paths: list[str],
+            progress=gr.Progress(),
+        ):
+            # 旧プレビュー画像は確実に消す（リセット時にも再利用される）
+            _cleanup_paths(old_paths)
+
+            errors = settings.validate()
+            if errors:
+                return (
+                    [],
+                    [],
+                    gr.update(value=_validation_status(errors), visible=True),
+                    "",
+                    False,
+                    gr.update(visible=False),
+                )
+
+            if not text or not text.strip():
+                return (
+                    [],
+                    [],
+                    gr.update(value="**テキストを入力してください。**", visible=True),
+                    "",
+                    False,
+                    gr.update(visible=False),
+                )
+
+            def _progress_cb(frac: float, desc: str) -> None:
+                # web_app 側で page_base + frac*span 等の累積計算を行うため、
+                # ここでは念のため [0,1] にクランプして UI 表示を安定させる
+                clamped = max(0.0, min(1.0, float(frac)))
+                progress(clamped, desc=desc)
+
+            generated: list[Path] = []
+            try:
+                pipeline = _build(settings)
+
+                start = time.time()
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp:
+                    base_path = Path(fp.name)
+                # NamedTemporaryFile の context で作られる空ファイルは
+                # generate_preview が上書きするので問題なし。
+                generated = pipeline.generate_preview(
+                    text, save_path=base_path, progress_callback=_progress_cb
+                )
+                elapsed = time.time() - start
+
+                str_paths = [str(p) for p in generated]
+                status = f"**{len(generated)}ページ生成しました** ({elapsed:.1f}秒)"
+                coverage_text = _format_coverage(pipeline._last_coverage)
+                return (
+                    str_paths,
+                    str_paths,
+                    gr.update(value=status, visible=True),
+                    coverage_text,
+                    False,  # stale クリア
+                    gr.update(visible=False),  # stale バナー隠す
+                )
+            except Exception as exc:
+                logger.exception("Preview failed")
+                # 例外時は中途半端に作られた画像も全削除（リーク防止）
+                _cleanup_paths([str(p) for p in generated])
+                return (
+                    [],
+                    [],
+                    gr.update(value=f"**エラー:** {exc}", visible=True),
+                    "",
+                    True,  # 失敗時は stale 維持（再試行を促す）
+                    gr.update(value=_STALE_BANNER_HTML, visible=True),
+                )
+
+        preview_btn.click(
+            _on_preview,
+            inputs=[text_input, settings_state, prev_preview_paths],
+            outputs=[
+                preview_gallery,
+                prev_preview_paths,
+                status_md,
+                coverage_md,
+                preview_stale,
+                stale_banner,
+            ],
+        )
+
+        def _on_generate(
+            text: str,
+            settings: UISettings,
+            old_tmpdir: str | None,
+            progress=gr.Progress(),
+        ):
+            # 前回の G-code テンポラリを丸ごと掃除
+            if old_tmpdir:
+                shutil.rmtree(old_tmpdir, ignore_errors=True)
+
+            errors = settings.validate()
+            if errors:
+                return (
+                    None,
+                    None,
+                    gr.update(value=_validation_status(errors), visible=True),
+                )
+            if not text or not text.strip():
+                return (
+                    None,
+                    None,
+                    gr.update(value="**テキストを入力してください。**", visible=True),
+                )
+
+            def _progress_cb(frac: float, desc: str) -> None:
+                clamped = max(0.0, min(1.0, float(frac)))
+                progress(clamped, desc=desc)
+
+            tmp_dir: Path | None = None
+            try:
+                pipeline = _build(settings)
+                tmp_dir = Path(tempfile.mkdtemp(prefix="penplotter_"))
+                base_path = tmp_dir / "output.gcode"
+
+                start = time.time()
+                paths = pipeline.generate_gcode_file(
+                    text, save_path=base_path, progress_callback=_progress_cb
+                )
+                elapsed = time.time() - start
+
+                str_paths = [str(p) for p in paths]
+                status = (
+                    f"**G-code を {len(paths)} ページ生成しました** ({elapsed:.1f}秒) "
+                    "— 自動ダウンロードを開始します"
+                )
+                return str_paths, str(tmp_dir), gr.update(value=status, visible=True)
+            except Exception as exc:
+                logger.exception("G-code generation failed")
+                if tmp_dir is not None:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                return None, None, gr.update(value=f"**エラー:** {exc}", visible=True)
+
+        gcode_btn.click(
+            _on_generate,
+            inputs=[text_input, settings_state, prev_gcode_tmpdir],
+            outputs=[gcode_files, prev_gcode_tmpdir, status_md],
+        ).then(
+            fn=None,
+            inputs=[gcode_files],
+            outputs=None,
+            js=_TRIGGER_MULTI_DOWNLOAD_JS,
+        )
+
+        def _on_clear(old_paths: list[str], old_tmpdir: str | None):
+            _cleanup_paths(old_paths)
+            if old_tmpdir:
+                shutil.rmtree(old_tmpdir, ignore_errors=True)
+            return (
+                "",  # text_input
+                [],  # preview_gallery
+                None,  # gcode_files
+                gr.update(visible=False),  # status_md
+                "文字数: 0",  # char_count_md
+                "",  # coverage_md
+                [],  # prev_preview_paths
+                None,  # prev_gcode_tmpdir
+            )
+
+        clear_btn.click(
+            _on_clear,
+            inputs=[prev_preview_paths, prev_gcode_tmpdir],
+            outputs=[
+                text_input,
+                preview_gallery,
+                gcode_files,
+                status_md,
+                char_count_md,
+                coverage_md,
+                prev_preview_paths,
+                prev_gcode_tmpdir,
+            ],
+        )
+
+        def _on_reset():
+            d = UISettings.default()
+            return (
+                d,  # settings_state
+                False,  # stale
+                gr.update(value="", visible=False),  # stale_banner
+                gr.update(value="", visible=False),  # validation_md
+                gr.update(interactive=True),  # preview_btn
+                gr.update(interactive=True),  # gcode_btn
+                d.font_size,
+                d.line_spacing,
+                d.margin_top,
+                d.margin_bottom,
+                d.margin_left,
+                d.margin_right,
+                d.draw_speed,
+                d.travel_speed,
+                d.pen_delay,
+                d.temperature,
+            )
+
+        reset_btn.click(
+            _on_reset,
+            outputs=[
+                settings_state,
+                preview_stale,
+                stale_banner,
+                validation_md,
+                preview_btn,
+                gcode_btn,
+                *slider_components,
+            ],
+        )
+
+        ex_report_btn.click(lambda: _EXAMPLE_REPORT_HEADER, outputs=[text_input])
+        ex_math_btn.click(lambda: _EXAMPLE_MATH_REPORT, outputs=[text_input])
+        ex_essay_btn.click(lambda: _EXAMPLE_ESSAY, outputs=[text_input])
+
+    return app

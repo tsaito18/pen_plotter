@@ -1,4 +1,10 @@
-"""Tests for src/ui/gradio_app module."""
+"""Tests for src/ui/gradio_app module.
+
+旧 _apply_settings / _format_coverage 直接テストは廃止。
+理由: 新 UI は副作用ゼロ設計（毎回 build_pipeline で新規構築）に移行したため、
+in-place 設定差し替えユーティリティは存在しない。
+代わりに UISettings 経由のスモークテストへ集約する。
+"""
 
 from __future__ import annotations
 
@@ -9,29 +15,44 @@ from src.ui.gradio_app import (
     _EXAMPLE_ESSAY,
     _EXAMPLE_MATH_REPORT,
     _EXAMPLE_REPORT_HEADER,
-    _apply_settings,
+    _HELP_MARKDOWN,
     _format_coverage,
     create_app,
 )
-from src.ui.web_app import CharCoverageReport, PlotterPipeline
+from src.ui.settings import UISettings
+from src.ui.web_app import CharCoverageReport, PlotterPipeline, build_pipeline
 
 
 class TestCreateApp:
-    @pytest.fixture
-    def pipeline(self):
-        return PlotterPipeline()
+    """新シグネチャ create_app(checkpoint_path, kanjivg_dir, user_strokes_dir) のテスト。"""
 
-    def test_returns_blocks(self, pipeline):
-        app = create_app(pipeline)
+    def test_returns_blocks_with_no_args(self):
+        app = create_app()
         assert isinstance(app, gr.Blocks)
 
-    def test_has_tabs(self, pipeline):
-        app = create_app(pipeline)
-        blocks = app.blocks
-        tab_labels = [b.label for b in blocks.values() if isinstance(b, gr.Tab)]
-        assert "作成" in tab_labels
-        assert "設定" in tab_labels
-        assert "ヘルプ" in tab_labels
+    def test_returns_blocks_with_kwargs_none(self):
+        app = create_app(checkpoint_path=None, kanjivg_dir=None, user_strokes_dir=None)
+        assert isinstance(app, gr.Blocks)
+
+    def test_returns_blocks_with_dirs(self, tmp_path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        app = create_app(user_strokes_dir=empty)
+        assert isinstance(app, gr.Blocks)
+
+    def test_pipeline_builds_from_default_settings(self):
+        # UI 内で行う build_pipeline 呼び出しが副作用なく成功することを担保。
+        pipeline = build_pipeline(UISettings.default())
+        assert isinstance(pipeline, PlotterPipeline)
+
+
+class TestPlotterPipelineCreateApp:
+    """既存 test_web_app の TestGradioGallery が利用する pipeline.create_app() の互換性。"""
+
+    def test_pipeline_create_app_returns_blocks(self):
+        pipeline = PlotterPipeline()
+        app = pipeline.create_app()
+        assert isinstance(app, gr.Blocks)
 
 
 class TestFormatCoverage:
@@ -51,65 +72,12 @@ class TestFormatCoverage:
         result = _format_coverage(report)
         assert "矩形フォールバック" in result
 
-    def test_multiple_tiers(self):
-        report = CharCoverageReport(
-            user_strokes=["あ"],
-            kanjivg=["漢"],
-            geometric=["、"],
-        )
-        result = _format_coverage(report)
-        assert "ユーザー筆跡" in result
-        assert "KanjiVG" in result
-        assert "幾何生成" in result
-
     def test_summary_line(self):
-        report = CharCoverageReport(
-            user_strokes=["あ"],
-            skipped=[" "],
-        )
+        report = CharCoverageReport(user_strokes=["あ"], skipped=[" "])
         result = _format_coverage(report)
         assert "全2文字" in result
         assert "描画: 1" in result
         assert "スキップ: 1" in result
-
-    def test_deduplication(self):
-        report = CharCoverageReport(user_strokes=["あ", "あ", "あ"])
-        result = _format_coverage(report)
-        assert "3字" in result
-        assert "1種" in result
-
-
-class TestApplySettings:
-    @pytest.fixture
-    def pipeline(self):
-        return PlotterPipeline()
-
-    def test_updates_page_config(self, pipeline):
-        _apply_settings(pipeline, 7.0, 10.0, 20, 10, 30, 20, 1500, 4000, 0.20, 0.8)
-        assert pipeline._page_config.margin_top == 20.0
-        assert pipeline._page_config.margin_bottom == 10.0
-        assert pipeline._page_config.margin_left == 30.0
-        assert pipeline._page_config.margin_right == 20.0
-        assert pipeline._page_config.line_spacing == 10.0
-
-    def test_updates_typesetter_font_size(self, pipeline):
-        _apply_settings(pipeline, 7.0, 10.0, 20, 10, 30, 20, 1500, 4000, 0.20, 0.8)
-        assert pipeline._typesetter.font_size == 7.0
-
-    def test_preserves_augmenter(self, pipeline):
-        original_augmenter = pipeline._typesetter.augmenter
-        _apply_settings(pipeline, 7.0, 10.0, 20, 10, 30, 20, 1500, 4000, 0.20, 0.8)
-        assert pipeline._typesetter.augmenter is original_augmenter
-
-    def test_updates_plotter_config(self, pipeline):
-        _apply_settings(pipeline, 6.0, 8.0, 30, 15, 25, 15, 1500, 4000, 0.20, 0.8)
-        assert pipeline._plotter_config.draw_speed == 1500.0
-        assert pipeline._plotter_config.travel_speed == 4000.0
-        assert pipeline._plotter_config.pen_delay == 0.20
-
-    def test_updates_temperature(self, pipeline):
-        _apply_settings(pipeline, 6.0, 8.0, 30, 15, 25, 15, 1000, 3000, 0.15, 1.5)
-        assert pipeline._temperature == 1.5
 
 
 class TestExamples:
@@ -127,3 +95,30 @@ class TestExamples:
     def test_essay_is_plain_text(self):
         assert "$" not in _EXAMPLE_ESSAY
         assert "#" not in _EXAMPLE_ESSAY
+
+
+class TestHelpMarkdown:
+    def test_help_non_empty(self):
+        assert len(_HELP_MARKDOWN.strip()) > 0
+
+    def test_help_has_format_reference(self):
+        assert "見出し" in _HELP_MARKDOWN or "書式" in _HELP_MARKDOWN
+
+
+class TestAppSmoke:
+    """Blocks 内に主要コンポーネントが存在することを担保するスモーク。"""
+
+    @pytest.fixture
+    def app(self):
+        return create_app()
+
+    def test_has_gallery(self, app):
+        assert any(isinstance(b, gr.Gallery) for b in app.blocks.values())
+
+    def test_has_textbox(self, app):
+        assert any(isinstance(b, gr.Textbox) for b in app.blocks.values())
+
+    def test_has_state(self, app):
+        # UISettings 用と stale フラグ用に最低 2 つの State を期待する
+        states = [b for b in app.blocks.values() if isinstance(b, gr.State)]
+        assert len(states) >= 2

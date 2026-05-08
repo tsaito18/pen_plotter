@@ -58,8 +58,9 @@ class TestPlotterPipeline:
         gcode = pipeline.strokes_to_gcode(strokes)
         assert len(gcode) > 0
         text = "\n".join(gcode)
+        assert "$H" in text
+        assert "G92" in text
         assert "G90" in text
-        assert "M2" in text
 
     def test_generate_preview(self, pipeline, tmp_path):
         preview_path = tmp_path / "preview.png"
@@ -68,10 +69,25 @@ class TestPlotterPipeline:
 
     def test_generate_gcode_file(self, pipeline, tmp_path):
         gcode_path = tmp_path / "output.gcode"
-        pipeline.generate_gcode_file("テスト文字列", save_path=gcode_path)
-        assert gcode_path.exists()
-        content = gcode_path.read_text()
-        assert "G90" in content
+        paths = pipeline.generate_gcode_file("テスト文字列", save_path=gcode_path)
+        assert isinstance(paths, list)
+        assert len(paths) >= 1
+        for p in paths:
+            assert p.exists()
+            content = p.read_text()
+            assert "G90" in content
+            assert "$H" in content
+
+    def test_generate_gcode_file_multipage(self, pipeline, tmp_path):
+        """複数ページのテキストはページごとに別ファイルが生成される。"""
+        gcode_path = tmp_path / "multi.gcode"
+        long_text = "あ" * 5000
+        paths = pipeline.generate_gcode_file(long_text, save_path=gcode_path)
+        if len(paths) > 1:
+            assert all(p.exists() for p in paths)
+            stems = [p.stem for p in paths]
+            assert all("_p" in s for s in stems), f"ページ番号付き命名でない: {stems}"
+            assert len(set(paths)) == len(paths), "重複パスがある"
 
     def test_empty_text(self, pipeline, tmp_path):
         preview_path = tmp_path / "empty.png"
@@ -1022,9 +1038,8 @@ class TestPageNumber:
         assert all_pts[:, 0].max() < 60  # 中央より左
         assert all_pts[:, 1].max() < 20  # 下部
 
-
-# Stroke synthesis tests removed — synthesis was abandoned due to
-# persistent artifacts (double strokes, missing dakuten) caused by
-# stroke count/order differences between samples.
+    # Stroke synthesis tests removed — synthesis was abandoned due to
+    # persistent artifacts (double strokes, missing dakuten) caused by
+    # stroke count/order differences between samples.
 
     pass

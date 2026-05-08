@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -14,13 +13,11 @@ from src.gcode.optimizer import optimize_stroke_order
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement, Typesetter
 from src.model.augmentation import HandwritingAugmenter
+from src.ui.stroke_renderer import CharCoverageReport  # noqa: F401 (re-export)
 
 Stroke = npt.NDArray[np.float64]
 
 logger = logging.getLogger(__name__)
-
-
-from src.ui.stroke_renderer import CharCoverageReport  # noqa: F401 (re-export)
 
 
 class PlotterPipeline:
@@ -196,7 +193,9 @@ class PlotterPipeline:
         if self._REPORT_PAPER_BG:
             self._preview_renderer._report_bg_path = self._REPORT_PAPER_BG
         self._preview_renderer.preview_with_ruled_lines(
-            strokes, ruled_lines, save_path,
+            strokes,
+            ruled_lines,
+            save_path,
             page_number=page_number,
             page_number_strokes=page_number_strokes,
         )
@@ -262,8 +261,8 @@ class PlotterPipeline:
     def _generate_page_number_strokes(self, page_number: int) -> list[Stroke]:
         """ページ番号を手書きストロークで生成。用紙の「P.」印字の右横に配置。"""
         text = str(page_number)
-        x = 30.0   # 「P.」印字の右、下線の上
-        y = 7.0    # 下端からの距離（下線の上に載るように）
+        x = 30.0  # 「P.」印字の右、下線の上
+        y = 7.0  # 下端からの距離（下線の上に載るように）
         font_size = 3.5
         all_strokes: list[Stroke] = []
         for ch in text:
@@ -357,8 +356,11 @@ class PlotterPipeline:
                 )
             page_num_strokes = self._generate_page_number_strokes(i)
             self._preview_with_ruled_lines(
-                optimized, ruled_lines, page_path,
-                page_number=i, page_number_strokes=page_num_strokes,
+                optimized,
+                ruled_lines,
+                page_path,
+                page_number=i,
+                page_number_strokes=page_num_strokes,
             )
             result.append(page_path)
 
@@ -371,8 +373,16 @@ class PlotterPipeline:
         text: str,
         save_path: str | Path,
         progress_callback: Callable[[float, str], None] | None = None,
-    ) -> None:
+    ) -> list[Path]:
+        """\u30c6\u30ad\u30b9\u30c8\u304b\u3089G-code\u3092\u751f\u6210\u3002\u8907\u6570\u30da\u30fc\u30b8\u306e\u5834\u5408\u306f\u30da\u30fc\u30b8\u3054\u3068\u306b\u5225\u30d5\u30a1\u30a4\u30eb\u3092\u51fa\u529b\u3059\u308b\u3002
+
+        Returns:
+            \u751f\u6210\u3055\u308c\u305fG-code\u30d5\u30a1\u30a4\u30eb\u30d1\u30b9\u306e\u30ea\u30b9\u30c8\uff08\u30da\u30fc\u30b8\u9806\uff09\u3002
+        """
         save_path = Path(save_path)
+        stem = save_path.stem
+        suffix = save_path.suffix or ".gcode"
+        parent = save_path.parent
 
         if progress_callback:
             progress_callback(0.0, "\u7d44\u7248\u4e2d...")
@@ -383,27 +393,48 @@ class PlotterPipeline:
             self._generator.save(gcode, save_path)
             if progress_callback:
                 progress_callback(1.0, "\u5b8c\u4e86")
-            return
+            return [save_path]
 
-        if progress_callback:
-            progress_callback(0.1, "\u30b9\u30c8\u30ed\u30fc\u30af\u751f\u6210\u4e2d...")
+        n_pages = len(pages)
+        result: list[Path] = []
 
-        def _stroke_progress(frac: float, desc: str) -> None:
+        for i, page_placements in enumerate(pages, start=1):
+            page_base = (i - 1) / n_pages
+            page_span = 1.0 / n_pages
+
+            def _stroke_progress(frac: float, desc: str, _base=page_base, _span=page_span) -> None:
+                if progress_callback:
+                    progress_callback(_base + frac * _span * 0.7, desc)
+
+            strokes = self.placements_to_strokes(
+                page_placements, progress_callback=_stroke_progress
+            )
+            page_num_strokes = self._generate_page_number_strokes(i)
+            all_strokes = strokes + page_num_strokes
+
             if progress_callback:
-                progress_callback(0.1 + frac * 0.6, desc)
+                progress_callback(
+                    page_base + page_span * 0.85,
+                    f"G-code \u5909\u63db\u4e2d ({i}/{n_pages})...",
+                )
+            gcode = self._generator.generate(all_strokes, vary_speed=True)
 
-        strokes = self.placements_to_strokes(pages[0], progress_callback=_stroke_progress)
-
-        if progress_callback:
-            progress_callback(0.7, "G-code \u5909\u63db\u4e2d...")
-
-        gcode = self.strokes_to_gcode(strokes)
-        self._generator.save(gcode, save_path)
+            page_path = save_path if n_pages == 1 else parent / f"{stem}_p{i}{suffix}"
+            self._generator.save(gcode, page_path)
+            result.append(page_path)
 
         if progress_callback:
             progress_callback(1.0, "\u5b8c\u4e86")
 
+        return result
+
     def create_app(self):
+        """既存テスト互換のため残す薄いラッパ。
+
+        新 UI は副作用なし設計のため pipeline 自体は使わず、
+        StrokeRenderer が知っている環境引数（checkpoint / kanjivg / user_strokes）
+        を取り出して新シグネチャの create_app へ転送する。
+        """
         try:
             import gradio as gr  # noqa: F401
         except ImportError:
@@ -411,4 +442,75 @@ class PlotterPipeline:
 
         from src.ui.gradio_app import create_app
 
-        return create_app(self)
+        renderer = self._stroke_renderer
+        return create_app(
+            checkpoint_path=getattr(renderer, "_checkpoint_path", None),
+            kanjivg_dir=getattr(renderer, "_kanjivg_dir", None),
+            user_strokes_dir=getattr(renderer, "_user_strokes_dir", None),
+        )
+
+
+def build_pipeline(
+    settings,
+    checkpoint_path: Path | str | None = None,
+    kanjivg_dir: Path | str | None = None,
+    style_sample: object | None = None,
+    user_strokes_dir: Path | str | None = None,
+) -> PlotterPipeline:
+    """UISettings から副作用なしで PlotterPipeline を構築するファクトリ。
+
+    UI 層は「現設定の snapshot」を保持し、操作のたびに本関数で新しい
+    パイプラインを生成することで、_apply_settings 的な属性差し替えを排除する。
+
+    Args:
+        settings: UISettings インスタンス。
+        checkpoint_path: ML モデルの checkpoint パス。
+        kanjivg_dir: KanjiVG JSON ディレクトリ。
+        style_sample: 明示的な style_sample（指定時は user_strokes より優先）。
+        user_strokes_dir: ユーザーストローク JSON ディレクトリ。
+
+    Returns:
+        構築済みの PlotterPipeline。
+    """
+    from src.ui.settings import UISettings
+
+    if not isinstance(settings, UISettings):
+        raise TypeError(f"settings must be UISettings, got {type(settings).__name__}")
+
+    page_config = PageConfig(
+        paper_size=(settings.paper_width, settings.paper_height),
+        margin_top=settings.margin_top,
+        margin_bottom=settings.margin_bottom,
+        margin_left=settings.margin_left,
+        margin_right=settings.margin_right,
+        line_spacing=settings.line_spacing,
+    )
+    plotter_config = PlotterConfig(
+        work_area_width=220.0,
+        work_area_height=310.0,
+        paper_origin_x=0.0,
+        paper_origin_y=0.0,
+        paper_width=settings.paper_width,
+        paper_height=settings.paper_height,
+        draw_speed=settings.draw_speed,
+        travel_speed=settings.travel_speed,
+        pen_delay=settings.pen_delay,
+    )
+    pipeline = PlotterPipeline(
+        page_config=page_config,
+        plotter_config=plotter_config,
+        checkpoint_path=checkpoint_path,
+        kanjivg_dir=kanjivg_dir,
+        style_sample=style_sample,
+        temperature=settings.temperature,
+        user_strokes_dir=user_strokes_dir,
+    )
+    # PlotterPipeline.__init__ は font_size=4.5 ハードコーディングのため、
+    # UISettings.font_size を反映するため Typesetter を再構築する
+    if settings.font_size != 4.5:
+        pipeline._typesetter = Typesetter(
+            page_config,
+            font_size=settings.font_size,
+            augmenter=pipeline._typesetter.augmenter,
+        )
+    return pipeline
