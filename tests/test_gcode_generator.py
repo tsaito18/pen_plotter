@@ -11,19 +11,23 @@ class TestGCodeGeneratorSquare:
     ):
         lines = gcode_generator.generate([square_stroke])
         text = "\n".join(lines)
-        for cmd in ["G90", "G21", "M3", "M5", "G0", "G1", "M2"]:
+        for cmd in ["$H", "G92", "G90", "G0", "G1"]:
             assert cmd in text, f"{cmd} が G-code に含まれていない"
 
-    def test_square_has_move_to_start(
+    def test_square_does_not_contain_pen_commands(
         self, gcode_generator: GCodeGenerator, square_stroke: Stroke
     ):
+        lines = gcode_generator.generate([square_stroke])
+        text = "\n".join(lines)
+        assert gcode_generator.config.pen_down_command not in text
+        assert gcode_generator.config.pen_up_command not in text
+
+    def test_square_has_move_to_start(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         lines = gcode_generator.generate([square_stroke])
         g0_lines = [l for l in lines if l.startswith("G0 X")]
         assert len(g0_lines) >= 1
 
-    def test_square_has_draw_lines(
-        self, gcode_generator: GCodeGenerator, square_stroke: Stroke
-    ):
+    def test_square_has_draw_lines(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         lines = gcode_generator.generate([square_stroke])
         g1_lines = [l for l in lines if l.startswith("G1")]
         assert len(g1_lines) == 4
@@ -35,9 +39,9 @@ class TestGCodeGeneratorEmpty:
     def test_empty_strokes_has_header_and_footer(self, gcode_generator: GCodeGenerator):
         lines = gcode_generator.generate([])
         text = "\n".join(lines)
+        assert "$H" in text
+        assert "G92" in text
         assert "G90" in text
-        assert "G21" in text
-        assert "M2" in text
 
     def test_empty_strokes_returns_list(self, gcode_generator: GCodeGenerator):
         lines = gcode_generator.generate([])
@@ -58,9 +62,7 @@ class TestGCodeGeneratorSave:
         content = filepath.read_text(encoding="utf-8")
         assert "G90" in content
 
-    def test_save_creates_subdirectory(
-        self, tmp_path: Path, gcode_generator: GCodeGenerator
-    ):
+    def test_save_creates_subdirectory(self, tmp_path: Path, gcode_generator: GCodeGenerator):
         lines = gcode_generator.generate([])
         filepath = tmp_path / "sub" / "dir" / "output.gcode"
         gcode_generator.save(lines, filepath)
@@ -70,9 +72,7 @@ class TestGCodeGeneratorSave:
 class TestGCodeGeneratorVarySpeed:
     """フィードレート変調テスト"""
 
-    def test_vary_speed_default_on(
-        self, gcode_generator: GCodeGenerator, square_stroke: Stroke
-    ):
+    def test_vary_speed_default_on(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         """vary_speed=True（デフォルト）でフィードレートが変調される"""
         lines = gcode_generator.generate([square_stroke], vary_speed=True)
         g1_lines = [l for l in lines if l.startswith("G1")]
@@ -83,9 +83,7 @@ class TestGCodeGeneratorVarySpeed:
                     feed_rates.append(float(part[1:]))
         assert len(set(feed_rates)) > 1, "フィードレートが全て同じ"
 
-    def test_vary_speed_off_uniform(
-        self, gcode_generator: GCodeGenerator, square_stroke: Stroke
-    ):
+    def test_vary_speed_off_uniform(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         """vary_speed=Falseで従来通り均一フィードレート"""
         lines = gcode_generator.generate([square_stroke], vary_speed=False)
         g1_lines = [l for l in lines if l.startswith("G1")]
@@ -96,9 +94,7 @@ class TestGCodeGeneratorVarySpeed:
                     feed_rates.add(float(part[1:]))
         assert len(feed_rates) == 1, "vary_speed=Falseなのにフィードレートが変わっている"
 
-    def test_vary_speed_start_slower(
-        self, gcode_generator: GCodeGenerator, square_stroke: Stroke
-    ):
+    def test_vary_speed_start_slower(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         """始点付近のフィードレートが draw_speed より遅い"""
         lines = gcode_generator.generate([square_stroke], vary_speed=True)
         g1_lines = [l for l in lines if l.startswith("G1")]
@@ -109,9 +105,7 @@ class TestGCodeGeneratorVarySpeed:
         assert first_feed is not None
         assert first_feed < gcode_generator.config.draw_speed
 
-    def test_vary_speed_end_slower(
-        self, gcode_generator: GCodeGenerator, square_stroke: Stroke
-    ):
+    def test_vary_speed_end_slower(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         """終点付近のフィードレートが draw_speed より遅い（S字カーブで減速）"""
         lines = gcode_generator.generate([square_stroke], vary_speed=True)
         g1_lines = [l for l in lines if l.startswith("G1")]
