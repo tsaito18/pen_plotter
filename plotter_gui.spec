@@ -63,10 +63,11 @@ exe = EXE(
     upx=True,           # UPX があれば圧縮、無ければ警告のみで続行
     upx_exclude=[],
     runtime_tmpdir=None,
-    # デバッグ用に True にしてコンソールでエラーを表示している。
-    # 配布版では False に戻して --windowed (subsystem=windows) ビルドにする。
-    # TODO: after debug, revert console to False.
-    console=True,
+    # 配布版は --windowed (subsystem=windows): コンソール窓を出さず
+    # ダブルクリック起動時の見た目を整える。クラッシュ詳細は
+    # scripts/run_plotter_gui.py の sys.excepthook 経由で
+    # plotter_gui_error.log に保存されるため、エラー追跡には支障なし。
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
