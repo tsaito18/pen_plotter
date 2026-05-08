@@ -16,24 +16,15 @@ from pathlib import Path
 import serial
 from serial.tools.list_ports import comports
 
+from src.comm.port_finder import find_xdraw_port
 
-XDRAW_VIDS = ["1A86:7523", "1A86:8040"]
 BAUDRATE = 115200
-
-
-def find_xdraw_port() -> str | None:
-    """xDraw のシリアルポートを自動検出。"""
-    for port in comports():
-        for vid in XDRAW_VIDS:
-            if vid in port.hwid.upper():
-                return port.device
-    return None
 
 
 def send_gcode(port_name: str, gcode_path: str, dry_run: bool = False) -> None:
     """G-codeファイルを1行ずつ送信。"""
     with open(gcode_path) as f:
-        lines = [l.strip() for l in f if l.strip() and not l.strip().startswith(";")]
+        lines = [line.strip() for line in f if line.strip() and not line.strip().startswith(";")]
 
     print(f"Port: {port_name}")
     print(f"File: {gcode_path} ({len(lines)} commands)")
@@ -54,7 +45,7 @@ def send_gcode(port_name: str, gcode_path: str, dry_run: bool = False) -> None:
         ser.write((line + "\r").encode("ascii"))
         resp = ser.readline().decode("ascii", errors="replace").strip()
         status = "ok" if resp.startswith("ok") else f"[{resp}]"
-        print(f"  [{i+1}/{len(lines)}] {line} -> {status}")
+        print(f"  [{i + 1}/{len(lines)}] {line} -> {status}")
         if not resp.startswith("ok"):
             print(f"  WARNING: unexpected response: {resp}")
 

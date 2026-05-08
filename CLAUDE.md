@@ -17,7 +17,7 @@
 - Intel Core Ultra 7 258V (Lunar Lake) — GPU: Intel Arc統合, NPU: AI Boost
 - WSL2 (Ubuntu) で開発、ただしWSLではGPU未認識 (/dev/dri/ なし)
 - GPU訓練はWindowsネイティブで実行（PyTorch XPU版、XPU: True確認済み）
-- xDraw A4 はWindows PCにUSB接続、G-code送信は scripts/send_gcode_win.py で実施
+- xDraw A4 はWindows PCにUSB接続、G-code送信はWindows側で `python scripts/run_plotter_gui.py` または `python -m src.plotter_gui` で GUI 起動（src/plotter_gui/）
 
 ## 開発コマンド
 - テスト: `pytest`
@@ -182,5 +182,6 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - ペン制御: Z軸（ダウン: Z5 F5000、アップ: Z0.5 F5000）※M3/M5ではない
 - ホーミング: `$H`（左上角に移動）→ `G92 X0 Y297 Z0`（左上角を紙座標(0,297)に設定）
 - 紙座標: (0,0)=左下、(210,297)=右上
-- G-code送信: Windows側で scripts/send_gcode_win.py を使用（サーバーは192.168.86.100）
+- G-code送信: Windows側で `python scripts/run_plotter_gui.py` または `python -m src.plotter_gui` で GUI を起動（src/plotter_gui/）。CH340 自動検出・ホーミング・ペンテスト・進捗表示・緊急停止が GUI 操作で可能。実機チェックリストは docs/plotter_gui_checklist.md
+- 開発サーバー(192.168.86.100)からの .gcode 取得は、当面は手動 scp。GUI への取込みは Phase 2 で予定
 - Extension ソース: git@github.com:tsaito18/xdraw_inkscape_extension.git

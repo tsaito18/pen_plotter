@@ -1,28 +1,12 @@
+import threading
+
 import pytest
-from unittest.mock import MagicMock
-from src.comm.serial_sender import SerialSender, SerialPort, GrblResponse
-
-
-class MockSerial:
-    """テスト用モックシリアルポート"""
-    def __init__(self):
-        self.written: list[bytes] = []
-        self.responses: list[bytes] = []
-        self._response_idx = 0
-
-    def write(self, data: bytes) -> int:
-        self.written.append(data)
-        return len(data)
-
-    def readline(self, timeout: float = 1.0) -> bytes:
-        if self._response_idx < len(self.responses):
-            resp = self.responses[self._response_idx]
-            self._response_idx += 1
-            return resp
-        return b""
-
-    def queue_response(self, response: str) -> None:
-        self.responses.append((response + "\r\n").encode())
+from src.comm.serial_sender import (
+    GrblResponse,
+    SerialSender,
+    StreamCancelled,
+)
+from tests.comm_mocks import MockSerial
 
 
 class TestGrblResponse:
@@ -79,5 +63,82 @@ class TestSerialSender:
         mock = MockSerial()
         mock.queue_response("ok")
         sender = SerialSender(mock)
-        results = sender.stream(["", "; comment only", "G90"])
+        sender.stream(["", "; comment only", "G90"])
         assert len(mock.written) == 1  # G90のみ送信
+
+    def test_progress_callback_invoked_for_each_line(self):
+        mock = MockSerial()
+        lines = ["G90", "G21", "G0 X10"]
+        for _ in lines:
+            mock.queue_response("ok")
+        sender = SerialSender(mock)
+
+        calls: list[tuple[int, int, str, GrblResponse]] = []
+
+        def cb(idx: int, total: int, line: str, resp: GrblResponse) -> None:
+            calls.append((idx, total, line, resp))
+
+        sender.stream(lines, progress_callback=cb)
+
+        assert len(calls) == 3
+        # idx は 1 始まり、total は有効行数 (=3)
+        assert calls[0][0] == 1 and calls[0][1] == 3
+        assert calls[1][0] == 2 and calls[1][1] == 3
+        assert calls[2][0] == 3 and calls[2][1] == 3
+        assert calls[0][2] == "G90"
+        assert calls[1][2] == "G21"
+        assert calls[2][2] == "G0 X10"
+        assert all(c[3].is_ok for c in calls)
+
+    def test_progress_callback_total_excludes_empty_lines(self):
+        mock = MockSerial()
+        lines = ["", "; comment", "G90", "G21", "G0 X10"]
+        for _ in range(3):
+            mock.queue_response("ok")
+        sender = SerialSender(mock)
+
+        totals: list[int] = []
+
+        def cb(idx: int, total: int, line: str, resp: GrblResponse) -> None:
+            totals.append(total)
+
+        sender.stream(lines, progress_callback=cb)
+
+        # 空行・コメント行を除いた有効行数 (=3) が total になるべき
+        assert totals == [3, 3, 3]
+
+    def test_stream_cancelled_raises_before_next_line(self):
+        mock = MockSerial()
+        mock.queue_response("ok")
+        mock.queue_response("ok")  # 2行目以降は届かない想定だが安全側で用意
+        sender = SerialSender(mock)
+
+        cancel_event = threading.Event()
+        seen: list[int] = []
+
+        # callback 内で cancel をセットし、次の行送信前に StreamCancelled が上がるか検証
+        def cb(idx: int, total: int, line: str, resp: GrblResponse) -> None:
+            seen.append(idx)
+            if idx == 1:
+                cancel_event.set()
+
+        with pytest.raises(StreamCancelled):
+            sender.stream(
+                ["G90", "G21", "G0 X10"],
+                progress_callback=cb,
+                cancel_event=cancel_event,
+            )
+
+        # 1行目は送信済み、2行目以降は送信されないこと
+        assert mock.written == [b"G90\n"]
+        assert seen == [1]
+
+    def test_stream_no_callback_works_without_args(self):
+        # 既存 API（progress_callback / cancel_event を渡さない）の後方互換確認
+        mock = MockSerial()
+        for _ in range(2):
+            mock.queue_response("ok")
+        sender = SerialSender(mock)
+        results = sender.stream(["G90", "G21"])
+        assert len(results) == 2
+        assert all(r.is_ok for r in results)
