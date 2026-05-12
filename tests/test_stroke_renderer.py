@@ -71,3 +71,114 @@ class TestStrokeRendererMethods:
         p = CharPlacement(char="(", x=10.0, y=20.0, font_size=5.0)
         result = renderer._simple_paren_strokes("(", p)
         assert result is not None
+
+    def test_renders_line_segment(self):
+        from src.layout.typesetter import CharPlacement
+
+        renderer = StrokeRenderer()
+        placement = CharPlacement(
+            char="",
+            x=0,
+            y=0,
+            font_size=8.0,
+            page=0,
+            line_segment=(10.0, 20.0, 50.0, 20.0),
+        )
+        strokes = renderer.generate_char_strokes(placement)
+        assert len(strokes) == 1
+        arr = strokes[0]
+        assert arr.shape == (2, 2)
+        assert arr[0].tolist() == [10.0, 20.0]
+        assert arr[1].tolist() == [50.0, 20.0]
+
+
+class TestAsciiMathSymbols:
+    """数式で頻出する ASCII 記号は矩形フォールバックではなく幾何で描画する。"""
+
+    @pytest.mark.parametrize(
+        "char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?"]
+    )
+    def test_ascii_math_renders_geometric(self, char):
+        from src.layout.typesetter import CharPlacement
+
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert len(strokes) > 0
+        for s in strokes:
+            assert s.dtype == np.float64
+            assert s.ndim == 2 and s.shape[1] == 2
+
+        # 矩形フォールバックは「5 点で閉じた単一ストローク」として返る
+        is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
+        assert not is_rect_fallback, f"'{char}' fell back to rect"
+
+    def test_ascii_math_internal_unit_box(self):
+        """_ascii_math_strokes は単位正方形 (0,0)-(1,1) 内に座標を返す。"""
+        renderer = StrokeRenderer()
+        for char in ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?"]:
+            result = renderer._ascii_math_strokes(char)
+            assert result is not None, f"'{char}' returned None"
+            assert len(result) >= 1
+            for s in result:
+                assert s.dtype == np.float64
+                assert s.shape[1] == 2
+                assert s.min() >= -0.05 and s.max() <= 1.05
+
+    def test_ascii_math_returns_none_for_non_math(self):
+        renderer = StrokeRenderer()
+        # ひらがな・漢字・他の記号は対象外
+        assert renderer._ascii_math_strokes("あ") is None
+        assert renderer._ascii_math_strokes("漢") is None
+        assert renderer._ascii_math_strokes("(") is None
+        assert renderer._ascii_math_strokes(",") is None
+
+    def test_plus_has_two_strokes(self):
+        """`+` は横棒と縦棒の 2 ストローク。"""
+        renderer = StrokeRenderer()
+        result = renderer._ascii_math_strokes("+")
+        assert result is not None
+        assert len(result) == 2
+
+    def test_equals_has_two_horizontal_strokes(self):
+        """`=` は上下 2 本の横棒。"""
+        renderer = StrokeRenderer()
+        result = renderer._ascii_math_strokes("=")
+        assert result is not None
+        assert len(result) == 2
+
+    def test_fullwidth_normalized_to_ascii(self):
+        """全角プラスも幾何ルートで処理される（_CHAR_SUBSTITUTIONS 経由）。"""
+        from src.layout.typesetter import CharPlacement
+
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="＋", x=0.0, y=0.0, font_size=8.0, page=0)
+        strokes = renderer.generate_char_strokes(placement)
+        is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
+        assert not is_rect_fallback
+
+
+class TestExtendedMathSymbols:
+    """LaTeX シンボルマップ追加で頻出する Unicode 記号がストロークになることを確認する。"""
+
+    @pytest.mark.parametrize("char", ["ω", "π", "θ", "α", "β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"])
+    def test_math_symbol_renders(self, char):
+        from src.layout.typesetter import CharPlacement
+
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+        strokes = renderer.generate_char_strokes(placement)
+        assert len(strokes) > 0, f"'{char}' returned no strokes"
+        # 矩形フォールバックは「5 点で閉じた単一ストローク」として返る
+        is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
+        assert not is_rect_fallback, f"'{char}' fell back to rect"
+
+    @pytest.mark.parametrize("char", ["β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"])
+    def test_extended_unicode_in_unit_box(self, char):
+        renderer = StrokeRenderer()
+        result = renderer._math_symbol_strokes(char)
+        assert result is not None, f"'{char}' returned None"
+        for s in result:
+            assert s.shape[1] == 2
+            assert s.min() >= -0.05 and s.max() <= 1.05

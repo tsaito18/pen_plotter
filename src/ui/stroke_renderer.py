@@ -177,6 +177,11 @@ class StrokeRenderer:
         """Tier 0-4 フォールバックでストローク生成。"""
         cov = self._last_coverage
 
+        # 分数線・根号の屋根線などの補助線分は文字ではなく単一ストロークとして描画する
+        if placement.line_segment is not None:
+            x1, y1, x2, y2 = placement.line_segment
+            return [np.array([[x1, y1], [x2, y2]], dtype=np.float64)]
+
         if placement.char in self._SKIP_RENDER:
             cov.skipped.append(placement.char)
             return []
@@ -198,6 +203,11 @@ class StrokeRenderer:
         if punct_strokes is not None:
             cov.geometric.append(original_char)
             return self._position_strokes(punct_strokes, placement)
+
+        ascii_math = self._ascii_math_strokes(lookup_char)
+        if ascii_math is not None:
+            cov.geometric.append(original_char)
+            return self._position_strokes(ascii_math, placement)
 
         direct = self._direct_stroke(placement.char)
         if direct is not None:
@@ -337,6 +347,210 @@ class StrokeRenderer:
             x = 0.5 + 0.35 * np.cos(t) / (1 + np.sin(t) ** 2)
             y = 0.5 + 0.25 * np.sin(t) * np.cos(t) / (1 + np.sin(t) ** 2)
             return [np.stack([x, y], axis=1)]
+        elif char == "\u03b2":  # \u03b2: \u7e26\u68d2 + \u4e0a\u4e0b\u306e\u30eb\u30fc\u30d7
+            stem = np.array([[0.25, 0.05], [0.25, 0.95]], dtype=np.float64)
+            t = np.linspace(0, 1, 30)
+            upper = np.stack(
+                [0.25 + 0.45 * np.sin(np.pi * t), 0.5 + 0.4 * (1 - t)], axis=1
+            )
+            lower = np.stack(
+                [0.25 + 0.5 * np.sin(np.pi * t), 0.5 - 0.45 * t], axis=1
+            )
+            return [stem, upper, lower]
+        elif char == "\u03b3":  # \u03b3: \u4e0a\u958b\u304d\u306e y \u5b57
+            left = np.array([[0.15, 0.85], [0.5, 0.4]], dtype=np.float64)
+            right = np.array([[0.85, 0.85], [0.4, 0.05]], dtype=np.float64)
+            return [left, right]
+        elif char == "\u03b4":  # \u03b4: \u4e0a\u958b\u304d\u306e\u5186 + \u4e0a\u306b\u3057\u3063\u307d
+            t = np.linspace(0.2 * np.pi, 1.8 * np.pi, 30)
+            body = np.stack(
+                [0.5 + 0.3 * np.cos(t), 0.4 + 0.3 * np.sin(t)], axis=1
+            )
+            tail = np.array([[0.7, 0.85], [0.55, 0.95]], dtype=np.float64)
+            return [body, tail]
+        elif char == "\u03b5":  # \u03b5: \u6a2a\u5411\u304d\u306e 3 \u5b57
+            t = np.linspace(0.5 * np.pi, 1.5 * np.pi, 16)
+            top = np.stack(
+                [0.55 - 0.3 * np.sin(t), 0.7 + 0.18 * np.cos(t)], axis=1
+            )
+            bot = np.stack(
+                [0.55 - 0.3 * np.sin(t), 0.3 + 0.18 * np.cos(t)], axis=1
+            )
+            mid = np.array([[0.3, 0.5], [0.55, 0.5]], dtype=np.float64)
+            return [top, mid, bot]
+        elif char == "\u03b6":  # \u03b6: \u3072\u3063\u304b\u304d\u306e z + \u4e0b\u306b\u30eb\u30fc\u30d7
+            top = np.array(
+                [[0.2, 0.9], [0.8, 0.9], [0.3, 0.4]], dtype=np.float64
+            )
+            t = np.linspace(0, np.pi, 16)
+            tail = np.stack(
+                [0.5 + 0.25 * np.sin(t), 0.2 - 0.18 * (1 - np.cos(t))], axis=1
+            )
+            return [top, tail]
+        elif char == "\u03b7":  # \u03b7: n \u5b57 + \u53f3\u811a\u3092\u4e0b\u306b\u4f38\u3070\u3059
+            stem_left = np.array([[0.2, 0.7], [0.2, 0.05]], dtype=np.float64)
+            t = np.linspace(np.pi, 0, 16)
+            arch = np.stack(
+                [0.5 + 0.3 * np.cos(t), 0.55 + 0.15 * np.sin(t)], axis=1
+            )
+            stem_right = np.array([[0.8, 0.7], [0.8, 0.2]], dtype=np.float64)
+            return [stem_left, arch, stem_right]
+        elif char == "\u03bb":  # \u03bb: \u659c\u3081\u306e\u00d7 \uff08/ + \u77ed\u3044 \\uff09
+            main = np.array([[0.15, 0.05], [0.85, 0.95]], dtype=np.float64)
+            cross = np.array([[0.3, 0.55], [0.1, 0.95]], dtype=np.float64)
+            return [main, cross]
+        elif char == "\u03bc":  # \u03bc: \u4e0b\u306b\u9577\u3044\u68d2 + n \u5b57
+            left_stem = np.array([[0.2, 0.7], [0.2, 0.0]], dtype=np.float64)
+            t = np.linspace(np.pi, 0, 16)
+            arch = np.stack(
+                [0.5 + 0.3 * np.cos(t), 0.4 + 0.3 * np.sin(t)], axis=1
+            )
+            right_stem = np.array([[0.8, 0.7], [0.8, 0.15]], dtype=np.float64)
+            return [left_stem, arch, right_stem]
+        elif char == "\u03bd":  # \u03bd: V \u5b57
+            return [np.array([[0.15, 0.85], [0.5, 0.1], [0.85, 0.85]], dtype=np.float64)]
+        elif char == "\u03c1":  # \u03c1: \u7e26\u68d2 + \u5186
+            stem = np.array([[0.3, 0.5], [0.3, 0.0]], dtype=np.float64)
+            t = np.linspace(0, 2 * np.pi, 24)
+            circle = np.stack(
+                [0.5 + 0.25 * np.cos(t), 0.55 + 0.25 * np.sin(t)], axis=1
+            )
+            return [stem, circle]
+        elif char == "\u03c3":  # \u03c3: \u5186 + \u4e0a\u306e\u6a2a\u68d2
+            t = np.linspace(0, 2 * np.pi, 24)
+            circle = np.stack(
+                [0.4 + 0.25 * np.cos(t), 0.4 + 0.25 * np.sin(t)], axis=1
+            )
+            top = np.array([[0.4, 0.7], [0.85, 0.7]], dtype=np.float64)
+            return [circle, top]
+        elif char == "\u03c4":  # \u03c4: \u4e0a\u6a2a\u68d2 + \u4e0b\u306b\u66f2\u304c\u308b\u811a
+            top = np.array([[0.1, 0.75], [0.9, 0.75]], dtype=np.float64)
+            t = np.linspace(0, np.pi / 2, 16)
+            stem = np.stack(
+                [0.5 + 0.2 * np.sin(t), 0.75 - 0.7 * t / (np.pi / 2)], axis=1
+            )
+            return [top, stem]
+        elif char == "\u03c7":  # \u03c7: \u5927\u304d\u306a \u00d7
+            d1 = np.array([[0.15, 0.1], [0.85, 0.85]], dtype=np.float64)
+            d2 = np.array([[0.85, 0.1], [0.15, 0.85]], dtype=np.float64)
+            return [d1, d2]
+        elif char == "\u03c8":  # \u03c8: V + \u7e26\u68d2
+            v = np.array(
+                [[0.15, 0.75], [0.5, 0.35], [0.85, 0.75]], dtype=np.float64
+            )
+            stem = np.array([[0.5, 0.95], [0.5, 0.05]], dtype=np.float64)
+            return [v, stem]
+        elif char == "\u0393":  # \u0393: \u4e0a\u6a2a\u68d2 + \u5de6\u7e26\u68d2
+            top = np.array([[0.15, 0.9], [0.85, 0.9]], dtype=np.float64)
+            left = np.array([[0.15, 0.9], [0.15, 0.1]], dtype=np.float64)
+            return [top, left]
+        elif char == "\u039b":  # \u039b: \u4e09\u89d2\u306e\u4e0a (\u0394 \u304b\u3089\u5e95\u8fba\u306a\u3057)
+            return [np.array([[0.1, 0.1], [0.5, 0.9], [0.9, 0.1]], dtype=np.float64)]
+        elif char == "\u0398":  # \u0398: \u6955\u5186 + \u4e2d\u592e\u6a2a\u68d2
+            t = np.linspace(0, 2 * np.pi, 30)
+            ellipse = np.stack(
+                [0.5 + 0.35 * np.cos(t), 0.5 + 0.4 * np.sin(t)], axis=1
+            )
+            bar = np.array([[0.3, 0.5], [0.7, 0.5]], dtype=np.float64)
+            return [ellipse, bar]
+        elif char == "\u03a0":  # \u03a0: \u4e0a\u6a2a\u68d2 + \u5de6\u53f3\u7e26\u68d2
+            top = np.array([[0.1, 0.9], [0.9, 0.9]], dtype=np.float64)
+            left = np.array([[0.2, 0.9], [0.2, 0.1]], dtype=np.float64)
+            right = np.array([[0.8, 0.9], [0.8, 0.1]], dtype=np.float64)
+            return [top, left, right]
+        elif char == "\u03a3" or char == "\u2211":  # \u03a3 / \u2211: \u6a2a3 + \u6298\u8fd4\u3057
+            top = np.array([[0.1, 0.9], [0.9, 0.9]], dtype=np.float64)
+            diag1 = np.array([[0.1, 0.9], [0.5, 0.5]], dtype=np.float64)
+            diag2 = np.array([[0.5, 0.5], [0.1, 0.1]], dtype=np.float64)
+            bot = np.array([[0.1, 0.1], [0.9, 0.1]], dtype=np.float64)
+            return [top, diag1, diag2, bot]
+        elif char == "\u03a6":  # \u03a6: \u5186 + \u7e26\u68d2
+            t = np.linspace(0, 2 * np.pi, 24)
+            circle = np.stack(
+                [0.5 + 0.3 * np.cos(t), 0.5 + 0.3 * np.sin(t)], axis=1
+            )
+            stem = np.array([[0.5, 0.95], [0.5, 0.05]], dtype=np.float64)
+            return [circle, stem]
+        elif char == "\u03a8":  # \u03a8: U + \u7e26\u68d2
+            t = np.linspace(np.pi, 2 * np.pi, 16)
+            cup = np.stack(
+                [0.5 + 0.35 * np.cos(t), 0.55 + 0.25 * np.sin(t)], axis=1
+            )
+            stem = np.array([[0.5, 0.95], [0.5, 0.05]], dtype=np.float64)
+            base = np.array([[0.25, 0.05], [0.75, 0.05]], dtype=np.float64)
+            return [cup, stem, base]
+        elif char == "\u03a9":  # \u03a9: U\u5b57 + \u4e0b\u306b\u811a
+            t = np.linspace(np.pi, 2 * np.pi, 24)
+            arch = np.stack(
+                [0.5 + 0.35 * np.cos(t), 0.4 + 0.45 * np.sin(t)], axis=1
+            )
+            left_foot = np.array([[0.15, 0.4], [0.05, 0.1]], dtype=np.float64)
+            right_foot = np.array([[0.85, 0.4], [0.95, 0.1]], dtype=np.float64)
+            base_l = np.array([[0.05, 0.1], [0.25, 0.1]], dtype=np.float64)
+            base_r = np.array([[0.75, 0.1], [0.95, 0.1]], dtype=np.float64)
+            return [arch, left_foot, right_foot, base_l, base_r]
+        elif char == "\u00d7":  # \u00d7: \u30af\u30ed\u30b9
+            d1 = np.array([[0.25, 0.25], [0.75, 0.75]], dtype=np.float64)
+            d2 = np.array([[0.75, 0.25], [0.25, 0.75]], dtype=np.float64)
+            return [d1, d2]
+        elif char == "\u00f7":  # \u00f7: \u6a2a\u68d2 + \u4e0a\u4e0b\u70b9
+            bar = np.array([[0.2, 0.5], [0.8, 0.5]], dtype=np.float64)
+            return [bar, self._small_dot(0.5, 0.75), self._small_dot(0.5, 0.25)]
+        elif char == "\u2260":  # \u2260: = \u306b\u659c\u3081\u7dda
+            top = np.array([[0.2, 0.4], [0.8, 0.4]], dtype=np.float64)
+            bot = np.array([[0.2, 0.6], [0.8, 0.6]], dtype=np.float64)
+            slash = np.array([[0.7, 0.2], [0.3, 0.8]], dtype=np.float64)
+            return [top, bot, slash]
+        elif char == "\u2264":  # \u2264: < + \u4e0b\u6a2a\u68d2
+            v = np.array([[0.8, 0.25], [0.2, 0.55], [0.8, 0.85]], dtype=np.float64)
+            bar = np.array([[0.2, 0.15], [0.8, 0.15]], dtype=np.float64)
+            return [v, bar]
+        elif char == "\u2265":  # \u2265: > + \u4e0b\u6a2a\u68d2
+            v = np.array([[0.2, 0.25], [0.8, 0.55], [0.2, 0.85]], dtype=np.float64)
+            bar = np.array([[0.2, 0.15], [0.8, 0.15]], dtype=np.float64)
+            return [v, bar]
+        elif char == "\u00b7":  # \u00b7: \u4e2d\u592e\u70b9
+            return [self._small_dot(0.5, 0.5)]
+        elif char == "\u2026":  # \u2026: \u6a2a\u4e26\u3073\u306e 3 \u70b9
+            return [self._small_dot(0.2, 0.2), self._small_dot(0.5, 0.2), self._small_dot(0.8, 0.2)]
+        elif char == "\u2192":  # \u2192: \u6a2a\u7dda + \u77e2\u3058\u308a
+            shaft = np.array([[0.1, 0.5], [0.85, 0.5]], dtype=np.float64)
+            head_top = np.array([[0.85, 0.5], [0.65, 0.65]], dtype=np.float64)
+            head_bot = np.array([[0.85, 0.5], [0.65, 0.35]], dtype=np.float64)
+            return [shaft, head_top, head_bot]
+        elif char == "\u2190":  # \u2190: \u6a2a\u7dda + \u5de6\u306e\u77e2\u3058\u308a
+            shaft = np.array([[0.15, 0.5], [0.9, 0.5]], dtype=np.float64)
+            head_top = np.array([[0.15, 0.5], [0.35, 0.65]], dtype=np.float64)
+            head_bot = np.array([[0.15, 0.5], [0.35, 0.35]], dtype=np.float64)
+            return [shaft, head_top, head_bot]
+        elif char == "\u21d2":  # \u21d2: \u4e8c\u91cd\u7dda + \u77e2\u3058\u308a
+            top = np.array([[0.1, 0.55], [0.8, 0.55]], dtype=np.float64)
+            bot = np.array([[0.1, 0.45], [0.8, 0.45]], dtype=np.float64)
+            head_top = np.array([[0.85, 0.5], [0.65, 0.7]], dtype=np.float64)
+            head_bot = np.array([[0.85, 0.5], [0.65, 0.3]], dtype=np.float64)
+            return [top, bot, head_top, head_bot]
+        elif char == "\u2202":  # \u2202: 6 \u3092\u53cd\u8ee2\u3057\u305f\u5f62\uff08curly d\uff09
+            t = np.linspace(0, 2 * np.pi, 30)
+            body = np.stack(
+                [0.5 + 0.3 * np.cos(t), 0.4 + 0.35 * np.sin(t)], axis=1
+            )
+            tail = np.array([[0.55, 0.75], [0.85, 0.95]], dtype=np.float64)
+            return [body, tail]
+        elif char == "\u2207":  # \u2207: \u4e0b\u5411\u304d\u4e09\u89d2
+            return [np.array([[0.1, 0.9], [0.9, 0.9], [0.5, 0.1], [0.1, 0.9]], dtype=np.float64)]
+        elif char == "\u222b":  # \u222b: \u7e26\u9577\u306e S \u5b57
+            t = np.linspace(0, 2 * np.pi, 40)
+            x = 0.5 + 0.18 * np.sin(t * 0.5 + np.pi)
+            y = np.linspace(0.05, 0.95, 40)
+            stroke = np.stack([x, y], axis=1)
+            top_hook = np.array([[stroke[-1, 0], stroke[-1, 1]], [0.7, 0.95]], dtype=np.float64)
+            bot_hook = np.array([[0.3, 0.05], [stroke[0, 0], stroke[0, 1]]], dtype=np.float64)
+            return [bot_hook, stroke, top_hook]
+        elif char == "\u220f":  # \u220f: \u03a0 \u3068\u540c\u3058\u5f62
+            top = np.array([[0.1, 0.9], [0.9, 0.9]], dtype=np.float64)
+            left = np.array([[0.2, 0.9], [0.2, 0.1]], dtype=np.float64)
+            right = np.array([[0.8, 0.9], [0.8, 0.1]], dtype=np.float64)
+            return [top, left, right]
         return None
 
     def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
@@ -350,6 +564,63 @@ class StrokeRenderer:
             angles = np.linspace(0, 2 * np.pi, 12)
             r = 0.15
             return [np.stack([0.5 + r * np.cos(angles), 0.5 + r * np.sin(angles)], axis=1)]
+        return None
+
+    @staticmethod
+    def _small_dot(cx: float, cy: float, r: float = 0.06) -> Stroke:
+        """単位正方形内の小円（句点・コロン用）。"""
+        angles = np.linspace(0, 2 * np.pi, 12)
+        return np.stack(
+            [cx + r * np.cos(angles), cy + r * np.sin(angles)], axis=1
+        ).astype(np.float64)
+
+    def _ascii_math_strokes(self, char: str) -> list[Stroke] | None:
+        """ASCII の数式記号・句読点を単位正方形 (0,0)-(1,1) で幾何描画する。
+
+        矩形フォールバックを避けるため _simple_punct_strokes より後・ML 推論より
+        前で呼ぶ。座標は np.float64 で統一（後段の _position_strokes 互換）。
+        """
+        if char == "+":
+            h = np.array([[0.2, 0.5], [0.8, 0.5]], dtype=np.float64)
+            v = np.array([[0.5, 0.2], [0.5, 0.8]], dtype=np.float64)
+            return [h, v]
+        elif char == "-":
+            return [np.array([[0.2, 0.5], [0.8, 0.5]], dtype=np.float64)]
+        elif char == "=":
+            top = np.array([[0.2, 0.4], [0.8, 0.4]], dtype=np.float64)
+            bot = np.array([[0.2, 0.6], [0.8, 0.6]], dtype=np.float64)
+            return [top, bot]
+        elif char == "<":
+            return [np.array([[0.8, 0.2], [0.2, 0.5], [0.8, 0.8]], dtype=np.float64)]
+        elif char == ">":
+            return [np.array([[0.2, 0.2], [0.8, 0.5], [0.2, 0.8]], dtype=np.float64)]
+        elif char == "*":
+            cx, cy, r = 0.5, 0.5, 0.3
+            arms: list[Stroke] = []
+            for k in range(3):
+                ang = np.pi * k / 3.0
+                dx, dy = r * np.cos(ang), r * np.sin(ang)
+                arms.append(
+                    np.array([[cx - dx, cy - dy], [cx + dx, cy + dy]], dtype=np.float64)
+                )
+            return arms
+        elif char == "/":
+            return [np.array([[0.2, 0.2], [0.8, 0.8]], dtype=np.float64)]
+        elif char == ":":
+            return [self._small_dot(0.5, 0.7), self._small_dot(0.5, 0.3)]
+        elif char == ";":
+            tail = np.array([[0.55, 0.3], [0.4, 0.0]], dtype=np.float64)
+            return [self._small_dot(0.5, 0.7), tail]
+        elif char == "!":
+            stem = np.array([[0.5, 0.85], [0.5, 0.25]], dtype=np.float64)
+            return [stem, self._small_dot(0.5, 0.05)]
+        elif char == "?":
+            t = np.linspace(np.pi, 0.0, 16)
+            arc = np.stack([0.5 + 0.2 * np.cos(t), 0.725 + 0.125 * np.sin(t)], axis=1).astype(
+                np.float64
+            )
+            stem = np.array([[0.7, 0.6], [0.55, 0.35]], dtype=np.float64)
+            return [arc, stem, self._small_dot(0.55, 0.1)]
         return None
 
     def _simple_paren_strokes(self, char: str, placement: CharPlacement) -> list[Stroke] | None:

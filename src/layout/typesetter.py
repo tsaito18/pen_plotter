@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -75,7 +76,11 @@ def _char_size_scale(ch: str) -> float:
 
 
 _INLINE_MATH_RE = re.compile(r'(?<!\$)\$(?!\$)(.*?)\$')
-_BLOCK_MATH_RE = re.compile(r'\$\$(.*?)\$\$')
+# DOTALL: $$\n...\n$$ のように改行を含む複数行ブロック数式を 1 つのマッチで捕捉する
+_BLOCK_MATH_RE = re.compile(r'\$\$(.*?)\$\$', re.DOTALL)
+# ブロック数式を段落分割前に抽出するためのプレースホルダ（NULL文字で前後を囲み通常テキストと衝突しない形に）
+_BLOCK_MATH_PLACEHOLDER_PREFIX = "\x00BLK\x00"
+_BLOCK_MATH_PLACEHOLDER_SUFFIX = "\x00BLK\x00"
 
 
 def _split_segments(text: str) -> list[tuple[str, str]]:
@@ -110,6 +115,7 @@ class CharPlacement:
     font_size: float
     page: int = 0
     role: str | None = None
+    line_segment: tuple[float, float, float, float] | None = None
 
 
 @dataclass
@@ -166,10 +172,24 @@ class Typesetter:
             y = line_positions[line_idx]
 
             if global_line_idx in doc.block_math_lines:
-                self._place_block_math(
-                    doc.block_math_lines[global_line_idx], y, area, page_idx, current_page
+                math_src = doc.block_math_lines[global_line_idx]
+                consumed = self._place_block_math(
+                    math_src, line_idx, line_positions, area, page_idx, current_page,
                 )
-                line_idx += 1
+                if consumed == -1:
+                    # 残り行不足 → ページ確定して次ページ先頭に再配置
+                    pages.append(current_page)
+                    current_page = []
+                    page_idx += 1
+                    line_idx = 0
+                    consumed = self._place_block_math(
+                        math_src, 0, line_positions, area, page_idx, current_page,
+                    )
+                    # 新ページでも入らないケースは想定外（required_rows > rows/page）。
+                    # 安全策として -1 のまま返ったら 1 行扱いで進めて無限ループを避ける。
+                    if consumed == -1:
+                        consumed = 1
+                line_idx += consumed
                 continue
 
             is_heading = global_line_idx in doc.heading_lines
@@ -211,7 +231,45 @@ class Typesetter:
         body_x: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
         right_x: float = pw - 10.0
 
+        # 改行を含むブロック数式 $$\n...\n$$ は通常 paragraph 分割（\n split）でばらけてしまうため、
+        # 先に DOTALL マッチで全体から抽出してプレースホルダ独立段落に置換しておく。
+        # これにより 1 行 $$...$$ も複数行 $$...\n...$$ も同じ後段処理で扱える。
+        stashed_block_maths: list[str] = []
+
+        def _stash_block_math(m: re.Match) -> str:
+            stashed_block_maths.append(m.group(1).strip())
+            placeholder = (
+                _BLOCK_MATH_PLACEHOLDER_PREFIX
+                + str(len(stashed_block_maths) - 1)
+                + _BLOCK_MATH_PLACEHOLDER_SUFFIX
+            )
+            # 前後に \n を挟むことでプレースホルダ単独段落として split される
+            return "\n" + placeholder + "\n"
+
+        text = _BLOCK_MATH_RE.sub(_stash_block_math, text)
+        placeholder_re = re.compile(
+            re.escape(_BLOCK_MATH_PLACEHOLDER_PREFIX)
+            + r"(\d+)"
+            + re.escape(_BLOCK_MATH_PLACEHOLDER_SUFFIX)
+        )
+
         paragraphs = text.split("\n")
+        # プレースホルダ置換時に追加した前後 \n が元の paragraph 区切りと重複して
+        # 空段落を生むため、placeholder 段落に隣接する空段落のみ取り除く
+        def _is_placeholder_para(s: str) -> bool:
+            return bool(placeholder_re.fullmatch(s.strip()))
+
+        cleaned: list[str] = []
+        for i, p in enumerate(paragraphs):
+            if p == "":
+                next_is_placeholder = (
+                    i + 1 < len(paragraphs) and _is_placeholder_para(paragraphs[i + 1])
+                )
+                prev_is_placeholder = bool(cleaned) and _is_placeholder_para(cleaned[-1])
+                if next_is_placeholder or prev_is_placeholder:
+                    continue
+            cleaned.append(p)
+        paragraphs = cleaned
         lines: list[str] = []
         para_start_indices: set[int] = set()
         block_math_lines: dict[int, str] = {}
@@ -220,6 +278,17 @@ class Typesetter:
         current_body_level: int = 0
 
         for para in paragraphs:
+            # プレースホルダ単独段落を先に処理: ブロック数式行として登録
+            placeholder_match = placeholder_re.fullmatch(para.strip())
+            if placeholder_match is not None:
+                math_src = stashed_block_maths[int(placeholder_match.group(1))]
+                if math_src:
+                    para_start_indices.add(len(lines))
+                    block_math_lines[len(lines)] = math_src
+                    line_body_level[len(lines)] = current_body_level
+                    lines.append("")
+                continue
+
             heading_level = 0
             display_para = para
             if para.startswith('###'):
@@ -371,24 +440,137 @@ class Typesetter:
 
         return output
 
+    @staticmethod
+    def _strip_tag_and_adjacent_spaces(elements: list) -> list:
+        """tag 要素を除き、tag に隣接する空白専用 text 要素も除外する。
+
+        本体の中心位置が tag 周辺空白の影響を受けないようにするため、
+        tag 直前 text の末尾空白と直後 text の先頭空白も除去する。
+        """
+        from src.layout.math_layout import MathElement
+        result: list = []
+        for elem in elements:
+            if elem.type == "tag":
+                # 直前 text の末尾空白を削る
+                while result and result[-1].type == "text":
+                    stripped = result[-1].content.rstrip()
+                    if stripped == "":
+                        result.pop()
+                        continue
+                    if stripped != result[-1].content:
+                        result[-1] = MathElement(type="text", content=stripped)
+                    break
+                continue
+            result.append(elem)
+        # 末尾の空白専用 text を削る（tag が末尾にあった場合の trailing space 除去）
+        while result and result[-1].type == "text" and result[-1].content.strip() == "":
+            result.pop()
+        if result and result[-1].type == "text":
+            stripped = result[-1].content.rstrip()
+            if stripped != result[-1].content:
+                result[-1] = MathElement(type="text", content=stripped)
+        return result
+
+    @staticmethod
+    def _split_by_linebreak(elements: list) -> list[list]:
+        """linebreak 要素でグループ分割。空グループは除外。"""
+        groups: list[list] = []
+        current: list = []
+        for elem in elements:
+            if elem.type == "linebreak":
+                if current:
+                    groups.append(current)
+                    current = []
+                continue
+            current.append(elem)
+        if current:
+            groups.append(current)
+        return groups
+
     def _place_block_math(
         self,
         math_src: str,
-        y: float,
+        line_idx: int,
+        line_positions: list[float],
         area: object,
         page_idx: int,
         output: list[CharPlacement],
-    ) -> None:
-        """ブロック数式を行の中央に配置する。"""
+    ) -> int:
+        """ブロック数式を確保した行範囲の垂直中央に配置する。
+
+        分数等で高さが大きいときは複数行を確保する（最低2行）。\\tag{} は確保した
+        行範囲の中央 y で右端に併置する。
+
+        Returns:
+            消費した行数（>=2）。残り行数が足りない場合は -1（呼び出し側で次ページ送り）。
+        """
         elements = MathParser.parse(math_src)
-        # x=0 で仮レイアウトして幅を測定
-        temp = MathLayoutEngine.layout(elements, x=0, y=y, font_size=self.font_size)
-        math_width = MathLayoutEngine.total_width(temp) if temp else 0.0
-        center_x = area.x + (area.width - math_width) / 2
-        placements = MathLayoutEngine.layout(
-            elements, x=center_x, y=y, font_size=self.font_size
-        )
-        self._convert_math_placements(placements, page_idx, output)
+        # 本体中心位置を tag 幅から独立させるため、tag と tag 周辺の空白テキストを除外する
+        tag_elem = next((e for e in elements if e.type == "tag"), None)
+        body_elements = self._strip_tag_and_adjacent_spaces(elements)
+
+        # \\ 改行でグループ分割。linebreak が無いときは 1 グループ＝従来挙動。
+        groups = self._split_by_linebreak(body_elements)
+
+        line_spacing = self._config.line_spacing
+
+        # 各グループの寸法を仮配置で測定
+        group_boxes = [
+            MathLayoutEngine.layout(g, x=0.0, y=0.0, font_size=self.font_size)
+            for g in groups
+        ]
+
+        if group_boxes:
+            # 多段時はグループ間隔として line_spacing を使う（ベースライン間隔）。
+            # 全体高さ = 先頭グループ ascent + 末尾グループ descent + (n-1)*line_spacing
+            total_height = (
+                group_boxes[0].ascent
+                + group_boxes[-1].descent
+                + line_spacing * (len(group_boxes) - 1)
+            )
+        else:
+            total_height = self.font_size
+
+        # 最低2行、それを超える高さなら必要な行数を ceil で確保
+        required_rows = max(2, math.ceil(total_height / line_spacing))
+
+        # ページ末尾チェック: 残り行数が足りなければ次ページ送りシグナル
+        remaining = len(line_positions) - line_idx
+        if remaining < required_rows:
+            return -1
+
+        # 確保した行範囲の垂直中央にグループ列の中心を置く
+        top_y = line_positions[line_idx]
+        bottom_y = line_positions[line_idx + required_rows - 1]
+        center_y = (top_y + bottom_y) / 2
+
+        # 各グループのベースライン y: 中心から等間隔（line_spacing 刻み）に上下分散。
+        # 上から下へ並ぶよう、index 0 が最上段（最大の +offset）。
+        group_count = len(group_boxes)
+        last_baseline_y = center_y
+        for i, (g_elems, g_box) in enumerate(zip(groups, group_boxes)):
+            offset = (group_count - 1) / 2 * line_spacing - i * line_spacing
+            baseline_y = center_y + offset
+            last_baseline_y = baseline_y
+            # 中央寄せのため幅測定→本配置の2段構え（既存挙動踏襲）
+            center_x = area.x + (area.width - g_box.width) / 2
+            placed = MathLayoutEngine.layout(
+                g_elems, x=center_x, y=baseline_y, font_size=self.font_size
+            )
+            self._convert_math_placements(placed.placements, page_idx, output)
+
+        if tag_elem is not None:
+            tag_y = last_baseline_y if group_boxes else center_y
+            tag_temp = MathLayoutEngine.layout(
+                [tag_elem], x=0, y=tag_y, font_size=self.font_size
+            )
+            tag_x = area.x + area.width - tag_temp.width
+            tag_box = MathLayoutEngine.layout(
+                [tag_elem], x=tag_x, y=tag_y, font_size=self.font_size
+            )
+            self._convert_math_placements(tag_box.placements, page_idx, output)
+
+        return required_rows
 
     def _place_math(
         self,
@@ -400,10 +582,11 @@ class Typesetter:
     ) -> float:
         """数式をパース・レイアウトしてCharPlacementに変換する。xの次の位置を返す。"""
         elements = MathParser.parse(math_src)
-        placements = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
-        self._convert_math_placements(placements, page_idx, output)
-        total_w = MathLayoutEngine.total_width(placements) if placements else 0.0
-        return x + total_w
+        # インライン数式中の \tag{} は配置しない（仕様: ブロック数式専用）
+        elements = [e for e in elements if e.type != "tag"]
+        box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
+        self._convert_math_placements(box.placements, page_idx, output)
+        return x + box.width
 
     @staticmethod
     def _convert_math_placements(
@@ -413,15 +596,22 @@ class Typesetter:
     ) -> None:
         """MathPlacement リストを CharPlacement に変換して output に追加。"""
         for mp in placements:
-            if len(mp.text) == 1:
+            if not mp.text and mp.line_segment is not None:
+                output.append(CharPlacement(
+                    char="", x=mp.x, y=mp.y,
+                    font_size=mp.font_size, page=page_idx,
+                    role=mp.role, line_segment=mp.line_segment,
+                ))
+            elif len(mp.text) == 1:
                 output.append(CharPlacement(
                     char=mp.text, x=mp.x, y=mp.y,
                     font_size=mp.font_size, page=page_idx,
-                    role=mp.role,
+                    role=mp.role, line_segment=mp.line_segment,
                 ))
             else:
                 for i, ch in enumerate(mp.text):
                     role = mp.role if i == 0 else None
+                    seg = mp.line_segment if i == 0 else None
                     output.append(CharPlacement(
                         char=ch,
                         x=mp.x + i * mp.font_size * _CHAR_WIDTH_RATIO,
@@ -429,6 +619,7 @@ class Typesetter:
                         font_size=mp.font_size,
                         page=page_idx,
                         role=role,
+                        line_segment=seg,
                     ))
 
     @staticmethod

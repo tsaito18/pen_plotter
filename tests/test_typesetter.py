@@ -457,6 +457,253 @@ class TestBlockMath:
         assert len(ys) >= 3
 
 
+class TestBlockMathTag:
+    """ブロック数式の \\tag{n} 記法（右寄せ式番号）のテスト。"""
+
+    def test_block_tag_right_aligned(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        layout = PageLayout(PageConfig())
+        area = layout.content_area()
+        pages = ts.typeset(r"$$ x = 1 \tag{1} $$")
+        placements = pages[0]
+        # tag の '(' が本体の 'x' より右に配置される
+        body_x = [p.x for p in placements if p.char == "x"][0]
+        paren_x = [p.x for p in placements if p.char == "("][0]
+        assert paren_x > body_x
+        # tag は area の右端付近にある
+        assert paren_x > area.x + area.width / 2
+
+    def test_block_tag_chars_present(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset(r"$$ x = 1 \tag{1} $$")
+        chars = [p.char for p in pages[0]]
+        assert "(" in chars
+        assert ")" in chars
+        assert "1" in chars
+
+    def test_inline_tag_ignored(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset(r"$x = 1 \tag{1}$")
+        placements = pages[0]
+        chars = [p.char for p in placements]
+        # インライン tag は配置されない
+        assert "(" not in chars
+        assert ")" not in chars
+
+    def test_block_no_tag_centered(self):
+        """tag 無しでも中央寄せが壊れていない（既存挙動の確認）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset(r"$$ x = 1 $$")
+        chars = [p.char for p in pages[0]]
+        assert "x" in chars
+
+    def test_block_tag_body_centered_independent_of_tag_width(self):
+        """本体の中心位置は tag の幅に影響されない（area 中央に配置）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages_with_tag = ts.typeset(r"$$ x = 1 \tag{1} $$")
+        pages_no_tag = ts.typeset(r"$$ x = 1 $$")
+        x_with = [p.x for p in pages_with_tag[0] if p.char == "x"][0]
+        x_no = [p.x for p in pages_no_tag[0] if p.char == "x"][0]
+        assert x_with == pytest.approx(x_no)
+
+    def test_block_tag_only(self):
+        """本体なしでブロック tag だけ（$$ \\tag{1} $$）でも例外を投げない。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset(r"$$ \tag{1} $$")
+        chars = [p.char for p in pages[0]]
+        assert "(" in chars
+        assert ")" in chars
+
+
+class TestBlockMathRowConsumption:
+    """ブロック数式が必要な行数を消費する（最低2行、分数なら高さに応じて増加）。"""
+
+    def test_simple_block_consumes_two_rows(self):
+        """単純な式は 2 行ぶん（最低 2 行）消費する。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("前\n$$ x = 1 $$\n後")
+        placements = pages[0]
+        前_y = next(p.y for p in placements if p.char == "前")
+        後_y = next(p.y for p in placements if p.char == "後")
+        line_spacing = ts._config.line_spacing
+        # 前-後 の差は line_spacing*2.5 以上 = 数式が最低 2 行消費している証拠
+        assert (前_y - 後_y) >= line_spacing * 2.5
+
+    def test_nested_frac_consumes_three_or_more_rows(self):
+        """ネスト分数は 3 行以上消費する。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset(r"前" + "\n" + r"$$ \frac{\frac{1}{2}}{x} $$" + "\n" + r"後")
+        placements = pages[0]
+        前_y = next(p.y for p in placements if p.char == "前")
+        後_y = next(p.y for p in placements if p.char == "後")
+        line_spacing = ts._config.line_spacing
+        # 3 行以上消費 → 前-後 の差は line_spacing*4 以上（行間4個分）
+        assert (前_y - 後_y) >= line_spacing * 3.5
+
+    def test_block_math_pages_overflow(self):
+        """ページ末尾近くに数式があり残行が足りないと次ページに送られる。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        layout = PageLayout(PageConfig())
+        line_positions = layout.line_positions()
+        rows = len(line_positions)
+        # 最後から1行手前まで本文を埋める（残り1行）
+        body = "\n".join([f"行{i}" for i in range(rows - 1)])
+        text = body + "\n" + r"$$ \frac{1}{2} $$"
+        pages = ts.typeset(text)
+        # 残り1行で2行必要なので次ページ送り
+        assert len(pages) >= 2
+        # 数式の '1' または '2' が最終ページに存在する
+        last_page_chars = [p.char for p in pages[-1]]
+        assert "1" in last_page_chars or "2" in last_page_chars
+
+    def test_block_math_centered_vertically_in_consumed_rows(self):
+        """確保した行範囲の垂直中央に数式が配置される（2行確保時）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        layout = PageLayout(PageConfig())
+        line_positions = layout.line_positions()
+        line_spacing = ts._config.line_spacing
+        # ページ先頭にブロック数式
+        pages = ts.typeset(r"$$ x = 1 $$")
+        placements = pages[0]
+        x_chars = [p.y for p in placements if p.char == "x"]
+        assert len(x_chars) == 1
+        # 2行ぶん確保 → 中央 = (line_positions[0] + line_positions[1]) / 2
+        expected_center = (line_positions[0] + line_positions[1]) / 2
+        # 数式のベースライン（'x' の y）が中央付近にあるか（半行ぶんの誤差を許容）
+        assert abs(x_chars[0] - expected_center) < line_spacing * 0.5
+
+    def test_consecutive_block_math_each_consumes_two_rows(self):
+        """連続するブロック数式がそれぞれ2行ずつ消費する。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("$$ a = 1 $$\n$$ b = 2 $$")
+        placements = pages[0]
+        a_y = next(p.y for p in placements if p.char == "a")
+        b_y = next(p.y for p in placements if p.char == "b")
+        line_spacing = ts._config.line_spacing
+        # 1個目が2行確保(中央=spacing*1.5地点)、2個目も2行確保(中央=spacing*3.5地点)
+        # 差は line_spacing * 2 程度になる
+        assert (a_y - b_y) >= line_spacing * 1.5
+        assert (a_y - b_y) <= line_spacing * 2.5
+
+
+class TestBlockMathLineBreak:
+    """ブロック数式内の \\\\ による強制改行のテスト。"""
+
+    def test_double_backslash_creates_two_lines(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        text = "前\n$$ a = 1 \\\\ b = 2 $$\n後"
+        pages = ts.typeset(text)
+        a_y = next(p.y for p in pages[0] if p.char == "a")
+        b_y = next(p.y for p in pages[0] if p.char == "b")
+        # a が上、b が下
+        assert a_y > b_y
+        # 「前」「後」が a/b を挟まないこと（ブロック数式は別行）
+        前_y = next(p.y for p in pages[0] if p.char == "前")
+        後_y = next(p.y for p in pages[0] if p.char == "後")
+        assert 前_y > a_y
+        assert b_y > 後_y
+
+    def test_multiline_block_consumes_more_rows(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        text_one = "前\n$$ a = 1 $$\n後"
+        text_three = "前\n$$ a = 1 \\\\ b = 2 \\\\ c = 3 $$\n後"
+        pages_one = ts.typeset(text_one)
+        pages_three = ts.typeset(text_three)
+        前_one_y = next(p.y for p in pages_one[0] if p.char == "前")
+        後_one_y = next(p.y for p in pages_one[0] if p.char == "後")
+        前_three_y = next(p.y for p in pages_three[0] if p.char == "前")
+        後_three_y = next(p.y for p in pages_three[0] if p.char == "後")
+        assert (前_three_y - 後_three_y) > (前_one_y - 後_one_y)
+
+    def test_linebreak_with_tag(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        text = r"$$ a = 1 \\ b = 2 \tag{1} $$"
+        pages = ts.typeset(text)
+        # a, b, ( がある
+        chars = [p.char for p in pages[0]]
+        assert "a" in chars
+        assert "b" in chars
+        assert "(" in chars
+        # ( のy座標は b と同じ（最終行）
+        b_y = next(p.y for p in pages[0] if p.char == "b")
+        paren_y = next(p.y for p in pages[0] if p.char == "(")
+        assert abs(b_y - paren_y) < 0.5
+
+
+class TestBlockMathMultiline:
+    """改行を含むブロック数式 $$\\n...\\n$$ のテスト。"""
+
+    def test_block_math_with_newlines(self):
+        """$$ と $$ の間に改行があってもブロック数式として認識される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        text = "前\n$$\ny = ax + b\n$$\n後"
+        pages = ts.typeset(text)
+        chars = [p.char for p in pages[0]]
+        assert "y" in chars
+        assert "=" in chars
+        assert "a" in chars
+        assert "x" in chars
+        assert "b" in chars
+        # ブロック数式として認識されているなら $ は文字として配置されない
+        assert "$" not in chars
+        # 「前」「後」と数式の y 座標が分離していること（前 > y > 後）
+        前_y = next(p.y for p in pages[0] if p.char == "前")
+        後_y = next(p.y for p in pages[0] if p.char == "後")
+        y_eq = next(p.y for p in pages[0] if p.char == "y")
+        assert 前_y > y_eq > 後_y
+
+    def test_block_math_multiline_with_linebreak(self):
+        """$$ と $$ の間に改行と \\\\ 改行が混在しても正しく処理される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        text = "$$\ny = ax + b \\\\\ny = cx + d \\tag{1}\n$$"
+        pages = ts.typeset(text)
+        chars = [p.char for p in pages[0]]
+        # 両式とも描画されている
+        assert "a" in chars
+        assert "c" in chars
+        assert "b" in chars
+        assert "d" in chars
+        # tag の (1) も
+        assert "(" in chars
+        assert ")" in chars
+        assert "1" in chars
+
+    def test_block_math_singleline_still_works(self):
+        """既存の 1 行 $$...$$ も壊れない。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        text = "$$ x = 1 $$"
+        pages = ts.typeset(text)
+        chars = [p.char for p in pages[0]]
+        assert "x" in chars
+        assert "=" in chars
+        assert "1" in chars
+
+    def test_block_math_multiline_single_equation(self):
+        """改行を含む単一行の数式（前後空行のみ）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        text = "$$\nE = mc^{2}\n$$"
+        pages = ts.typeset(text)
+        chars = [p.char for p in pages[0]]
+        assert "E" in chars
+        assert "m" in chars
+        assert "c" in chars
+        assert "2" in chars
+        # $ デリミタが文字として残っていないこと
+        assert "$" not in chars
+
+    def test_block_math_multiline_with_backslash_newline(self):
+        """$$\\n の後に \\\\ 改行を含む数式。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        text = "$$\na = 1 \\\\\nb = 2\n$$"
+        pages = ts.typeset(text)
+        chars = [p.char for p in pages[0]]
+        assert "$" not in chars
+        a_y = next(p.y for p in pages[0] if p.char == "a")
+        b_y = next(p.y for p in pages[0] if p.char == "b")
+        # a が上、b が下（ \\\\ で改行）
+        assert a_y > b_y
+
+
 class TestInlineMath:
     """インライン数式 $...$ の検出・配置テスト。"""
 
