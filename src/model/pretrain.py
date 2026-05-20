@@ -349,6 +349,8 @@ class Pretrainer:
             self.scaler = torch.amp.GradScaler(self.device.type)
         else:
             self.scaler = None
+        self.progress_callback = None
+        self.cancel_callback = None
 
     def train(self) -> dict:
         print(f"Device: {self.device}" + (" (AMP)" if self.amp else ""))
@@ -356,6 +358,8 @@ class Pretrainer:
         total_batches = len(self.dataloader)
 
         for epoch in range(self.config.epochs):
+            if self.cancel_callback is not None and self.cancel_callback():
+                raise RuntimeError("Training cancelled")
             epoch_loss = 0.0
             n_batches = 0
 
@@ -764,6 +768,8 @@ class DeformationPretrainer:
             history["losses"].append(avg_loss)
             self.scheduler.step()
             print(f"\r  [V3] Epoch {epoch + 1}/{self.config.epochs} — avg loss: {avg_loss:.4f}")
+            if self.progress_callback is not None:
+                self.progress_callback(epoch + 1, self.config.epochs, avg_loss)
 
         cpu = torch.device("cpu")
         config_dict = asdict(self.config)

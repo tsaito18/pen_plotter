@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.model.finetune import FinetuneConfig, Finetuner
+from src.collector.profiles import list_profiles
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -76,13 +77,16 @@ def main(argv: list[str] | None = None) -> dict:
         print(f"Error: reference directory not found: {args.ref_dir}")
         sys.exit(1)
 
-    user_json = len(list(args.user_dir.rglob("*.json")))
+    profiles = list_profiles(args.user_dir)
+    user_data_arg: Path | list[Path] = [p.path for p in profiles] if profiles else args.user_dir
+    user_dirs = user_data_arg if isinstance(user_data_arg, list) else [user_data_arg]
+    user_json = sum(len(list(Path(d).rglob("*.json"))) for d in user_dirs)
     if user_json == 0:
         print("Error: no user stroke data found")
         sys.exit(1)
 
     print(f"Checkpoint: {args.checkpoint}")
-    print(f"User data: {args.user_dir} ({user_json} files)")
+    print(f"User data: {', '.join(str(d) for d in user_dirs)} ({user_json} files)")
     print(f"Reference: {args.ref_dir}")
 
     import torch
@@ -105,7 +109,7 @@ def main(argv: list[str] | None = None) -> dict:
         finetuner = DeformationFinetuner(
             config=config,
             pretrain_checkpoint=args.checkpoint,
-            user_data_dir=args.user_dir,
+            user_data_dir=user_data_arg,
             ref_dir=args.ref_dir,
             output_dir=args.output_dir,
             device=args.device,
@@ -116,7 +120,7 @@ def main(argv: list[str] | None = None) -> dict:
         finetuner = Finetuner(
             config=config,
             pretrain_checkpoint=args.checkpoint,
-            user_data_dir=args.user_dir,
+            user_data_dir=user_data_arg,
             ref_dir=args.ref_dir,
             output_dir=args.output_dir,
             device=args.device,

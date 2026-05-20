@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.model.pretrain import PretrainConfig, Pretrainer
+from src.collector.profiles import list_profiles
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -106,6 +107,7 @@ def main(argv: list[str] | None = None) -> dict:
     args = parse_args(argv)
 
     hand_dir = args.hand_dir
+    hand_data_arg: Path | list[Path] = hand_dir
     ref_dir = args.ref_dir
     pot_dir = args.pot_dir
 
@@ -122,11 +124,15 @@ def main(argv: list[str] | None = None) -> dict:
         if not hand_dir.exists():
             print(f"Error: hand directory not found: {hand_dir}")
             sys.exit(1)
-        hand_json = len(list(hand_dir.rglob("*.json")))
+        profiles = list_profiles(hand_dir)
+        if profiles:
+            hand_data_arg = [p.path for p in profiles]
+        hand_dirs = hand_data_arg if isinstance(hand_data_arg, list) else [hand_data_arg]
+        hand_json = sum(len(list(Path(d).rglob("*.json"))) for d in hand_dirs)
         if hand_json == 0:
             print(f"Error: no stroke data found in {hand_dir}")
             sys.exit(1)
-        print(f"Hand data: {hand_dir} ({hand_json} files)")
+        print(f"Hand data: {', '.join(str(d) for d in hand_dirs)} ({hand_json} files)")
 
     if not ref_dir.exists():
         print(f"Error: reference directory not found: {ref_dir}")
@@ -155,7 +161,7 @@ def main(argv: list[str] | None = None) -> dict:
         )
         pretrainer = UserDeformationTrainer(
             config=user_config,
-            user_data_dir=hand_dir,
+            user_data_dir=hand_data_arg,
             ref_dir=ref_dir,
             output_dir=args.output_dir,
             device=args.device,
@@ -196,7 +202,7 @@ def main(argv: list[str] | None = None) -> dict:
         )
         pretrainer = Pretrainer(
             config=config,
-            hand_dir=hand_dir,
+            hand_dir=hand_data_arg,
             ref_dir=ref_dir,
             output_dir=args.output_dir,
             device=args.device,

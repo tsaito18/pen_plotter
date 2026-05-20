@@ -17,7 +17,13 @@ def main() -> None:
         "--output-dir",
         type=Path,
         default=Path("data/user_strokes"),
-        help="保存先ディレクトリ (default: data/user_strokes)",
+        help="プロファイルを格納するルートディレクトリ (default: data/user_strokes)",
+    )
+    parser.add_argument(
+        "--person-id",
+        type=str,
+        default="taiga",
+        help="起動時に選択する人物プロファイル ID (default: taiga)",
     )
     parser.add_argument("--port", type=int, default=8080, help="ポート番号 (default: 8080)")
     parser.add_argument(
@@ -30,10 +36,13 @@ def main() -> None:
 
     kanjivg_dir = args.kanjivg_dir if args.kanjivg_dir.exists() else None
     app = StrokeCollectorApp(
-        output_dir=args.output_dir, port=args.port, kanjivg_dir=kanjivg_dir
+        output_dir=args.output_dir,
+        port=args.port,
+        kanjivg_dir=kanjivg_dir,
+        person_id=args.person_id,
     )
     print(f"収集サーバー起動: http://localhost:{args.port}/")
-    print(f"保存先: {args.output_dir}")
+    print(f"保存先: {args.output_dir / args.person_id}")
     print("iPad/PCのブラウザでアクセスし、文字を書いて送信してください。")
     print("Ctrl+C で終了")
     app.serve()

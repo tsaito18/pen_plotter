@@ -3,11 +3,19 @@ from __future__ import annotations
 import json
 import urllib.parse
 from functools import partial
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from src.collector.data_format import StrokePoint, StrokeSample
+from src.collector.profiles import (
+    StrokeProfile,
+    ensure_profile,
+    list_profiles,
+    profile_to_dict,
+    validate_profile_id,
+)
 from src.collector.stroke_recorder import StrokeRecorder
+from src.collector.training_jobs import TrainingJobManager
 
 GUIDED_CHARS: list[str] = list(
     # ひらがな (51: 基本46 + レポート頻出5)
@@ -101,14 +109,51 @@ class StrokeCollectorApp:
         port: int = 8080,
         target_samples: int = 3,
         kanjivg_dir: Path | str | None = None,
+        person_id: str = "taiga",
     ) -> None:
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.root_output_dir = Path(output_dir)
+        self.root_output_dir.mkdir(parents=True, exist_ok=True)
         self.port = port
         self.target_samples = target_samples
+        self.current_profile_id = validate_profile_id(person_id)
+        self.output_dir = ensure_profile(self.root_output_dir, self.current_profile_id)
         self._recorder = StrokeRecorder(output_dir=self.output_dir)
         self._next_char_cache: str | None = None
         self._kanjivg_dir = Path(kanjivg_dir) if kanjivg_dir else None
+        self.training_jobs = TrainingJobManager(
+            root_dir=self.root_output_dir,
+            ref_dir=self._kanjivg_dir,
+        )
+
+    def list_profiles(self) -> list[dict]:
+        profiles = list_profiles(self.root_output_dir)
+        if self.current_profile_id not in {p.id for p in profiles}:
+            profiles.append(
+                StrokeProfile(
+                    id=self.current_profile_id,
+                    path=self.output_dir,
+                    character_count=0,
+                    sample_count=0,
+                )
+            )
+        return [profile_to_dict(p) for p in sorted(profiles, key=lambda p: p.id)]
+
+    def create_profile(self, profile_id: str) -> dict:
+        path = ensure_profile(self.root_output_dir, profile_id)
+        return {
+            "id": validate_profile_id(profile_id),
+            "path": str(path),
+            "character_count": 0,
+            "sample_count": 0,
+        }
+
+    def select_profile(self, profile_id: str) -> dict:
+        profile_id = validate_profile_id(profile_id)
+        self.output_dir = ensure_profile(self.root_output_dir, profile_id)
+        self.current_profile_id = profile_id
+        self._recorder = StrokeRecorder(output_dir=self.output_dir)
+        self._next_char_cache = None
+        return {"current": self.current_profile_id, "path": str(self.output_dir)}
 
     def get_kanjivg_strokes(self, char: str) -> list[list[dict[str, float]]] | None:
         """KanjiVGのストロークデータを返す。"""
@@ -242,7 +287,7 @@ class StrokeCollectorApp:
 
     def serve(self) -> None:
         handler = partial(_RequestHandler, self)
-        server = HTTPServer(("0.0.0.0", self.port), handler)
+        server = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
         if self.port == 0:
             self.port = server.server_address[1]
         print(f"Stroke Collector: http://0.0.0.0:{self.port}/")
@@ -269,6 +314,16 @@ class _RequestHandler(BaseHTTPRequestHandler):
         if path == "/" or path == "":
             body = self.app.build_html().encode("utf-8")
             self._respond(200, "text/html; charset=utf-8", body)
+        elif path == "/api/profiles":
+            self._json_respond(
+                200,
+                {
+                    "current": self.app.current_profile_id,
+                    "profiles": self.app.list_profiles(),
+                },
+            )
+        elif path == "/api/training":
+            self._json_respond(200, self.app.training_jobs.status())
         elif path == "/api/characters":
             chars = self.app.list_saved_characters()
             self._json_respond(200, chars)
@@ -308,6 +363,35 @@ class _RequestHandler(BaseHTTPRequestHandler):
             sample = self.app.parse_stroke_data(data)
             saved = self.app.save_stroke(sample)
             self._json_respond(200, {"status": "ok", "path": str(saved)})
+        elif path == "/api/profiles":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            data = json.loads(raw.decode("utf-8"))
+            try:
+                profile = self.app.create_profile(str(data.get("id", "")))
+                self._json_respond(200, {"status": "ok", "profile": profile})
+            except ValueError as e:
+                self._json_respond(400, {"error": str(e)})
+        elif path == "/api/profile/select":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            data = json.loads(raw.decode("utf-8"))
+            try:
+                result = self.app.select_profile(str(data.get("id", "")))
+                self._json_respond(200, {"status": "ok", **result})
+            except ValueError as e:
+                self._json_respond(400, {"error": str(e)})
+        elif path == "/api/training/start":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            data = json.loads(raw.decode("utf-8"))
+            try:
+                status = self.app.training_jobs.start(data, self.app.current_profile_id)
+                self._json_respond(200, status)
+            except (RuntimeError, ValueError) as e:
+                self._json_respond(400, {"error": str(e)})
+        elif path == "/api/training/cancel":
+            self._json_respond(200, self.app.training_jobs.cancel())
         elif path == "/api/samples/metadata":
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length)
@@ -382,5 +466,3 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args) -> None:
         pass
-
-

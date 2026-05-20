@@ -26,6 +26,7 @@ import gradio as gr
 
 from src.ui.settings import UISettings
 from src.ui.web_app import PlotterPipeline, build_pipeline
+from src.collector.profiles import list_profiles
 
 logger = logging.getLogger(__name__)
 
@@ -223,18 +224,34 @@ def create_app(
     # 重い初期化（モデルロード/KanjiVG スキャン）を 1 度だけ走らせ、
     # 以降は UISettings 差分のみで PlotterPipeline を再生成する。
     # _stroke_renderer は環境引数依存なので毎回再構築でも OK。
+    profile_options: list[tuple[str, str]] = []
+    profile_root = Path(user_strokes_dir) if user_strokes_dir else None
+    if profile_root is not None:
+        profile_options = [(p.id, str(p.path)) for p in list_profiles(profile_root)]
+        if not profile_options and profile_root.is_dir():
+            profile_options = [(profile_root.name, str(profile_root))]
+
+    default_profile = profile_options[0][0] if profile_options else None
+
     env_kwargs: dict[str, object] = {
         "checkpoint_path": checkpoint_path,
         "kanjivg_dir": kanjivg_dir,
-        "user_strokes_dir": user_strokes_dir,
     }
 
-    def _build(settings: UISettings) -> PlotterPipeline:
+    def _profile_dir(profile_id: str | None) -> str | Path | None:
+        if not profile_options:
+            return user_strokes_dir
+        for pid, path in profile_options:
+            if pid == profile_id:
+                return path
+        return profile_options[0][1]
+
+    def _build(settings: UISettings, profile_id: str | None = None) -> PlotterPipeline:
         return build_pipeline(
             settings,
             checkpoint_path=env_kwargs["checkpoint_path"],
             kanjivg_dir=env_kwargs["kanjivg_dir"],
-            user_strokes_dir=env_kwargs["user_strokes_dir"],
+            user_strokes_dir=_profile_dir(profile_id),
         )
 
     default_settings = UISettings.default()
@@ -341,6 +358,13 @@ def create_app(
                 )
 
                 gr.Markdown("### ML モデル")
+                profile_select = gr.Dropdown(
+                    choices=[pid for pid, _ in profile_options],
+                    value=default_profile,
+                    label="人物プロファイル",
+                    visible=bool(profile_options),
+                    interactive=bool(profile_options),
+                )
                 temperature = gr.Slider(
                     0.1,
                     2.0,
@@ -432,9 +456,22 @@ def create_app(
                 ],
             )
 
+        def _on_profile_change(_profile_id: str | None):
+            return (
+                True,
+                gr.update(value=_STALE_BANNER_HTML, visible=True),
+            )
+
+        profile_select.change(
+            _on_profile_change,
+            inputs=[profile_select],
+            outputs=[preview_stale, stale_banner],
+        )
+
         def _on_preview(
             text: str,
             settings: UISettings,
+            profile_id: str | None,
             old_paths: list[str],
             progress=gr.Progress(),
         ):
@@ -470,7 +507,7 @@ def create_app(
 
             generated: list[Path] = []
             try:
-                pipeline = _build(settings)
+                pipeline = _build(settings, profile_id)
 
                 start = time.time()
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp:
@@ -508,7 +545,7 @@ def create_app(
 
         preview_btn.click(
             _on_preview,
-            inputs=[text_input, settings_state, prev_preview_paths],
+            inputs=[text_input, settings_state, profile_select, prev_preview_paths],
             outputs=[
                 preview_gallery,
                 prev_preview_paths,
@@ -522,6 +559,7 @@ def create_app(
         def _on_generate(
             text: str,
             settings: UISettings,
+            profile_id: str | None,
             old_tmpdir: str | None,
             progress=gr.Progress(),
         ):
@@ -549,7 +587,7 @@ def create_app(
 
             tmp_dir: Path | None = None
             try:
-                pipeline = _build(settings)
+                pipeline = _build(settings, profile_id)
                 tmp_dir = Path(tempfile.mkdtemp(prefix="penplotter_"))
                 base_path = tmp_dir / "output.gcode"
 
@@ -573,7 +611,7 @@ def create_app(
 
         gcode_btn.click(
             _on_generate,
-            inputs=[text_input, settings_state, prev_gcode_tmpdir],
+            inputs=[text_input, settings_state, profile_select, prev_gcode_tmpdir],
             outputs=[gcode_files, prev_gcode_tmpdir, status_md],
         ).then(
             fn=None,

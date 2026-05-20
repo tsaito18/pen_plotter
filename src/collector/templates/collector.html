@@ -417,6 +417,43 @@
     color: #0a84ff; font-weight: 700; margin-left: 8px;
   }
 
+  .profile-bar {
+    position: fixed; top: 10px; right: 10px; z-index: 20;
+    display: flex; gap: 6px; align-items: center;
+    padding: 8px; background: rgba(255,255,255,0.95);
+    border: 1px solid #d1d1d6; border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .profile-bar select, .profile-bar input,
+  .train-panel select, .train-panel input {
+    height: 32px; border: 1px solid #d1d1d6; border-radius: 6px;
+    padding: 0 8px; font-size: 0.9rem;
+  }
+  .profile-bar button, .train-panel button {
+    height: 32px; border: 0; border-radius: 6px; padding: 0 10px;
+    background: #007aff; color: white; font-size: 0.85rem;
+  }
+  .train-mode {
+    display: none; width: min(720px, calc(100vw - 32px)); margin: 72px auto 0;
+  }
+  .train-mode.visible { display: block; }
+  .train-panel {
+    background: white; border: 1px solid #d1d1d6; border-radius: 8px; padding: 14px;
+  }
+  .train-grid {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px; margin: 12px 0;
+  }
+  .train-field label {
+    display: block; font-size: 0.75rem; color: #6e6e73; margin-bottom: 4px;
+  }
+  .train-field input, .train-field select { width: 100%; }
+  .train-log {
+    white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem; background: #f5f5f7; border-radius: 6px;
+    padding: 10px; max-height: 220px; overflow: auto;
+  }
+
   /* 縦画面フォールバック */
   @media (orientation: portrait) {
     body { flex-direction: column; align-items: center; }
@@ -436,6 +473,13 @@
 </head>
 <body>
 
+<div class="profile-bar">
+  <span>Profile</span>
+  <select id="profileSelect"></select>
+  <input id="newProfileId" type="text" placeholder="new id">
+  <button id="createProfileBtn">作成</button>
+</div>
+
 <!-- 収集モード -->
 <div class="collect-mode" id="collectMode">
   <!-- 左パネル: お手本 + ボタン（左手操作） -->
@@ -443,6 +487,7 @@
     <div class="mode-tabs">
       <button id="collectTab" class="tab active" onclick="switchMode('collect')">収集</button>
       <button id="manageTab" class="tab" onclick="switchMode('manage')">管理</button>
+      <button id="trainTab" class="tab" onclick="switchMode('train')">学習</button>
     </div>
     <div class="char-display">
       <canvas id="guideCanvas" width="160" height="160"></canvas>
@@ -481,6 +526,7 @@
   <div class="mode-tabs">
     <button class="tab" onclick="switchMode('collect')">収集</button>
     <button class="tab active" onclick="switchMode('manage')">管理</button>
+    <button class="tab" onclick="switchMode('train')">学習</button>
   </div>
 
   <!-- 統計ダッシュボード -->
@@ -523,6 +569,75 @@
   <!-- 文字グリッド -->
   <div class="char-grid-wrapper">
     <div class="char-grid" id="charGrid"></div>
+  </div>
+</div>
+
+<!-- 学習モード -->
+<div class="train-mode" id="trainMode">
+  <div class="mode-tabs">
+    <button class="tab" onclick="switchMode('collect')">収集</button>
+    <button class="tab" onclick="switchMode('manage')">管理</button>
+    <button class="tab active" onclick="switchMode('train')">学習</button>
+  </div>
+  <div class="train-panel">
+    <h3>学習</h3>
+    <div class="train-grid">
+      <div class="train-field">
+        <label>学習種別</label>
+        <select id="trainKind">
+          <option value="user_train">ユーザーデータ学習</option>
+          <option value="pretrain">pretrain</option>
+          <option value="finetune">finetune</option>
+        </select>
+      </div>
+      <div class="train-field">
+        <label>データセット</label>
+        <select id="trainDataset">
+          <option value="current">選択中 profile</option>
+          <option value="all">全 profile</option>
+        </select>
+      </div>
+      <div class="train-field">
+        <label>epochs</label>
+        <input id="trainEpochs" type="number" value="80" min="1">
+      </div>
+      <div class="train-field">
+        <label>batch size</label>
+        <input id="trainBatchSize" type="number" value="256" min="1">
+      </div>
+      <div class="train-field">
+        <label>learning rate</label>
+        <input id="trainLearningRate" type="number" value="0.001" step="0.0001">
+      </div>
+      <div class="train-field">
+        <label>deformer</label>
+        <select id="trainDeformer">
+          <option value="twostage">twostage</option>
+          <option value="transformer">transformer</option>
+          <option value="offset">offset</option>
+        </select>
+      </div>
+      <div class="train-field">
+        <label>checkpoint (finetune)</label>
+        <input id="trainCheckpoint" type="text" value="data/models/pretrain_checkpoint.pt">
+      </div>
+      <div class="train-field">
+        <label>CASIA pot dir (pretrain)</label>
+        <input id="trainPotDir" type="text" value="data/casia_raw/train">
+      </div>
+      <div class="train-field">
+        <label>output dir</label>
+        <input id="trainOutputDir" type="text" value="data/models/ui_train">
+      </div>
+      <div class="train-field">
+        <label>device</label>
+        <input id="trainDevice" type="text" placeholder="auto">
+      </div>
+    </div>
+    <button id="startTrainingBtn">学習開始</button>
+    <button id="cancelTrainingBtn">キャンセル</button>
+    <p id="trainingStatus"></p>
+    <div class="train-log" id="trainingLog"></div>
   </div>
 </div>
 
@@ -866,19 +981,17 @@ let currentFilter = 'all';
 function switchMode(mode) {
   const collectMode = document.getElementById('collectMode');
   const manageMode = document.getElementById('manageMode');
+  const trainMode = document.getElementById('trainMode');
+  collectMode.classList.toggle('hidden', mode !== 'collect');
+  manageMode.classList.toggle('visible', mode === 'manage');
+  trainMode.classList.toggle('visible', mode === 'train');
+  document.querySelectorAll('.mode-tabs .tab').forEach(function(t) {
+    t.classList.toggle('active', t.textContent === (mode === 'collect' ? '収集' : mode === 'manage' ? '管理' : '学習'));
+  });
   if (mode === 'manage') {
-    collectMode.classList.add('hidden');
-    manageMode.classList.add('visible');
-    document.querySelectorAll('.mode-tabs .tab').forEach(function(t) {
-      t.classList.toggle('active', t.textContent === '管理');
-    });
     loadGallery();
-  } else {
-    collectMode.classList.remove('hidden');
-    manageMode.classList.remove('visible');
-    document.querySelectorAll('.mode-tabs .tab').forEach(function(t) {
-      t.classList.toggle('active', t.textContent === '収集');
-    });
+  } else if (mode === 'train') {
+    loadTrainingStatus();
   }
 }
 
@@ -1364,6 +1477,124 @@ document.getElementById('undoToast').addEventListener('click', function() {
 document.getElementById('charSearch').addEventListener('input', function() {
   renderGallery();
 });
+
+function refreshProfileSensitiveViews() {
+  if (window.loadProgress) window.loadProgress();
+  if (document.getElementById('manageMode').classList.contains('visible')) loadGallery();
+  loadTrainingStatus();
+}
+
+function loadProfiles() {
+  fetch('/api/profiles')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var sel = document.getElementById('profileSelect');
+      sel.innerHTML = '';
+      (data.profiles || []).forEach(function(p) {
+        var opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.id + ' (' + p.sample_count + ')';
+        if (p.id === data.current) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    });
+}
+
+document.getElementById('profileSelect').addEventListener('change', function(e) {
+  fetch('/api/profile/select', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: e.target.value })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) alert(data.error);
+    loadProfiles();
+    refreshProfileSensitiveViews();
+  });
+});
+
+document.getElementById('createProfileBtn').addEventListener('click', function() {
+  var input = document.getElementById('newProfileId');
+  var id = (input.value || '').trim();
+  if (!id) return;
+  fetch('/api/profiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: id })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) {
+      alert(data.error);
+      return;
+    }
+    input.value = '';
+    loadProfiles();
+  });
+});
+
+function trainingPayload() {
+  var datasetMode = document.getElementById('trainDataset').value;
+  return {
+    kind: document.getElementById('trainKind').value,
+    dataset: { mode: datasetMode },
+    epochs: Number(document.getElementById('trainEpochs').value || 1),
+    batch_size: Number(document.getElementById('trainBatchSize').value || 1),
+    learning_rate: Number(document.getElementById('trainLearningRate').value || 0.001),
+    deformer_type: document.getElementById('trainDeformer').value,
+    checkpoint: document.getElementById('trainCheckpoint').value,
+    pot_dir: document.getElementById('trainPotDir').value,
+    output_dir: document.getElementById('trainOutputDir').value,
+    device: document.getElementById('trainDevice').value || null,
+    use_aligner: true
+  };
+}
+
+function loadTrainingStatus() {
+  fetch('/api/training')
+    .then(function(r) { return r.json(); })
+    .then(renderTrainingStatus);
+}
+
+function renderTrainingStatus(s) {
+  var status = document.getElementById('trainingStatus');
+  var log = document.getElementById('trainingLog');
+  var startBtn = document.getElementById('startTrainingBtn');
+  var running = s.state === 'running';
+  startBtn.disabled = running;
+  var parts = [s.state || 'idle'];
+  if (s.kind) parts.push(s.kind);
+  if (s.total_epochs) parts.push('epoch ' + s.epoch + '/' + s.total_epochs);
+  if (s.loss !== null && s.loss !== undefined) parts.push('loss ' + Number(s.loss).toFixed(4));
+  if (s.checkpoint_path) parts.push(s.checkpoint_path);
+  if (s.error) parts.push(s.error);
+  status.textContent = parts.join(' | ');
+  log.textContent = (s.logs || []).join('\n');
+}
+
+document.getElementById('startTrainingBtn').addEventListener('click', function() {
+  fetch('/api/training/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(trainingPayload())
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) alert(data.error);
+    renderTrainingStatus(data);
+  });
+});
+
+document.getElementById('cancelTrainingBtn').addEventListener('click', function() {
+  fetch('/api/training/cancel', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(renderTrainingStatus);
+});
+
+setInterval(loadTrainingStatus, 2500);
+loadProfiles();
+loadTrainingStatus();
 </script>
 </body>
 </html>

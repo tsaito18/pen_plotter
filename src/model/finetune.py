@@ -33,9 +33,9 @@ OFFSET_CLAMP = 0.5
 SMOOTHING_KERNEL_SIZE = 15
 
 
-def _scan_char_pairs(user_dir: Path, ref_dir: Path) -> list[tuple[str, Path, Path]]:
+def _scan_char_pairs(user_dir: Path | list[Path], ref_dir: Path) -> list[tuple[str, Path, Path]]:
     """Scan user_dir and ref_dir, return matched (char, user_json, ref_json) triples."""
-    user_dir = Path(user_dir)
+    user_dirs = user_dir if isinstance(user_dir, list) else [user_dir]
     ref_dir = Path(ref_dir)
 
     ref_chars: dict[str, Path] = {}
@@ -47,8 +47,11 @@ def _scan_char_pairs(user_dir: Path, ref_dir: Path) -> list[tuple[str, Path, Pat
                     ref_chars[char_dir.name] = ref_files[0]
 
     pairs: list[tuple[str, Path, Path]] = []
-    if user_dir.is_dir():
-        for char_dir in sorted(user_dir.iterdir()):
+    for one_user_dir in user_dirs:
+        one_user_dir = Path(one_user_dir)
+        if not one_user_dir.is_dir():
+            continue
+        for char_dir in sorted(one_user_dir.iterdir()):
             if char_dir.is_dir() and char_dir.name in ref_chars:
                 for f in sorted(char_dir.glob("*.json")):
                     pairs.append((char_dir.name, f, ref_chars[char_dir.name]))
@@ -122,7 +125,7 @@ class FinetuneDataset(Dataset):
     user_dirとref_dirの両方に存在する文字のみをペアリングする。
     """
 
-    def __init__(self, user_dir: Path, ref_dir: Path) -> None:
+    def __init__(self, user_dir: Path | list[Path], ref_dir: Path) -> None:
         self.char_samples = _scan_char_pairs(user_dir, ref_dir)
 
         self.samples: list[tuple[int, int, int]] = []
@@ -278,7 +281,7 @@ class Finetuner(BaseFinetuner):
         self,
         config: FinetuneConfig,
         pretrain_checkpoint: Path,
-        user_data_dir: Path,
+        user_data_dir: Path | list[Path],
         ref_dir: Path,
         output_dir: Path,
         device: str | None = None,
@@ -397,7 +400,7 @@ class FinetuneDeformationDataset(Dataset):
 
     def __init__(
         self,
-        user_dir: Path,
+        user_dir: Path | list[Path],
         ref_dir: Path,
         num_points: int = 32,
         augment: bool = False,
@@ -622,7 +625,7 @@ class DeformationFinetuner(BaseFinetuner):
         self,
         config: FinetuneConfig,
         pretrain_checkpoint: Path,
-        user_data_dir: Path,
+        user_data_dir: Path | list[Path],
         ref_dir: Path,
         output_dir: Path,
         device: str | None = None,
@@ -749,7 +752,7 @@ class UserDeformationTrainer(BaseFinetuner):
     def __init__(
         self,
         config: UserTrainConfig,
-        user_data_dir: Path,
+        user_data_dir: Path | list[Path],
         ref_dir: Path,
         output_dir: Path,
         device: str | None = None,
