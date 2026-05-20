@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+<_name>xDraw Naming</_name>
+<id>command.idraw2_naming</id>
+<dependency type="extension">org.inkscape.output.svg.inkscape</dependency>
+<dependency type="executable" location="extensions">idraw2_naming.py</dependency>
+
+<param name="mode" type="notebook" >
+<page name="list_names" _gui-text="Read xDraw Name">
+
+<_param name="read1" type="description" appearance="header">
+Read xDraw Nickname
+</_param>
+
+<_param name="read2"  type="description" indent="2"  xml:space="preserve">
+Click "Apply" to read and list all xDraw units found via
+USB. Each is listed by assigned Nickname (if any) or by
+USB port enumeration.
+</_param>
+
+</page>
+
+
+<page name="write_name" _gui-text="Write xDraw Name">
+
+<_param name="write1" type="description" appearance="header">
+Write xDraw Nickname
+</_param>
+
+<param indent="1" name="nickname" type="string" max_length="16" _gui-text="Nickname:">xdraw</param>
+
+<_param name="write2" type="description"  indent="2" xml:space="preserve">
+Click "Apply" to assign the Nickname above to the xDraw
+connected via USB. (If more than one xDraw is
+connected, only the first one found will be updated.)
+
+Names should be 3-16 characters long.
+</_param>
+
+
+</page>
+
+
+<page name="about" _gui-text="About">
+
+<_param name="aboutpage" type="description" indent="2" xml:space="preserve">
+This extension allows you to assign a "nickname" (a digital
+name tag) to a given xDraw, or to read out that name. 
+
+Nicknames are not required, but can be helpful if you have
+more than one xDraw connected: You can specify which
+xDraw to plot to when using xDraw Control.
+
+xDraw Naming requires firmware version 2.13 or newer. 
+You can use the "Config" tab in xDraw Control to check
+which firmware version is currently installed.
+
+</_param>
+
+
+</page>
+
+
+</param>
+
+
+
+
+<effect needs-live-preview="false">
+<object-type>all</object-type>
+<effects-menu>
+<submenu _name="xDraw Utilities"/>
+</effects-menu>
+</effect>
+
+<script>
+<command reldir="extensions" interpreter="python">idraw2_naming.py</command>
+</script>
+
+</inkscape-extension>

@@ -1,0 +1,513 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+<_name>xDraw Lite Merge</_name>
+<id>command.idraw_merge</id>
+<dependency type="extension">org.inkscape.output.svg.inkscape</dependency>
+<dependency type="executable" location="extensions">idraw_merge.py</dependency>
+<image>idraw_deps/hta/inx_images/idraw_merge_logo.svg</image>
+<param name="mode" type="notebook">
+
+<page name="single_plot" gui-text="Once">
+
+<image>idraw_deps/hta/inx_images/merge_once.svg</image>
+
+<hbox>
+<image width="20" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+<label xml:space="preserve">
+Plot a single page, each time that you click Apply with this tab selected.
+
+When merging data, either specify a data table row to merge (e.g., Row 1), or
+automatically advance from the last row completed.
+
+Plot status, including the last row number plotted, is stored within the SVG file.
+</label>
+
+<image width="20" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+</hbox>
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox >
+<vbox indent="8" >
+
+<param name="single_type" type="optiongroup" appearance="radio"
+    gui-text="Action on Apply:">
+<_option value="single_fix">Plot; use data from specific row below</_option>
+<_option value="single_adv">Auto-advance: Plot; use data from next row</_option>
+<_option value="query_row" >Do not plot: Report last row only</_option>
+
+</param>
+<param name="single_row" indent="10" type="int" min="1" max="1000"  gui-text="Specified row to merge:">1</param>
+
+</vbox>
+</hbox>
+
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<image>idraw_deps/hta/inx_images/merge_hr.svg</image>
+
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+<hbox indent="1">
+<image width="50" height="1">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<spacer size="expand" />
+<_label>Version 1.0.1 2025-01-10</_label>
+<image width="50" height="1">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+</hbox>
+</page>
+
+
+<page name="auto_plot" gui-text="Auto">
+<image>idraw_deps/hta/inx_images/merge_auto.svg</image>
+
+<hbox>
+<image width="20" height="20">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+<label xml:space="preserve">
+Merge and plot a sequence of pages, with a time delay between pages, when you click Apply with this tab selected.
+
+Select the Start and End data table rows below to select the page range. If the End row is set to 0, continue plotting until the end of the data table or paused.
+
+To cancel a sequence in progress, press the physical pause button on the xDraw.
+</label>
+<image width="20" height="20">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+</hbox>
+
+<hbox indent="3" >
+<vbox >
+<param indent="10" name="first_row" type="int" min="1" max="10000"  gui-text="Start row:">1</param>
+<param indent="10" name="last_row" type="int" min="0" max="10000"   gui-text="End row:  ">1</param>
+<param indent="10" name="page_delay" type="int" min="0" max="3600" gui-text="Time delay (s)">10</param>
+</vbox>
+</hbox>
+
+</page>
+
+
+<page name='setup' gui-text='Setup'>
+<_param name="instructions_setup" type="description" appearance="header">xDraw: Basic Setup</_param>
+<_param indent="1" name="instructions_setup1" type="description" xml:space="preserve">
+- Pen height: UP,  default(20%).(min 17,max 30)
+- Pen height: DOWN, default(45%).(min 20,max 60)
+</_param>
+
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox>
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<spacer />
+<vbox>
+<label appearance="header">Pen Heights:  </label>
+
+<param name="pen_pos_up" type="int" min="17" max="30"
+gui-text="Pen height: UP (%):">20</param>
+<param name="pen_pos_down" type="int" min="20" max="60" 
+gui-text="Pen height: DOWN, (%):">45</param>
+
+</vbox>
+<spacer />
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+</hbox>
+
+<image width="10" height="20">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox >
+<vbox indent="9" >
+
+<param name="setup_type"  type="optiongroup"  gui-text="Action on 'Apply': ">
+<_option value="cycle">Cycle pen down then up</_option>	
+<_option value="align">Raise pen, turn off motors</_option>	
+<_option value="toggle">Toggle pen between up, down</_option>
+</param>
+
+</vbox>
+</hbox>
+
+</page>
+
+
+<page name='csv' gui-text='Data'>
+<image>idraw_deps/hta/inx_images/merge_data.svg</image>
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+<param type="path" name="csv_file" gui-text="CSV File: " indent="1" mode="file" filetypes="csv,txt"/>
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox>
+<image width="20" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+<vbox>
+<label xml:space="preserve">
+A CSV (spreadsheet) data file is needed only when there are merge fields within the text of your document.
+
+Tip 1:  The first row of the CSV file must be a Header Row, which specifies a unique name for each column. The second row of the data table (the first below the Header Row) is called Row 1.
+
+Tip 2:  You can add merge fields to text in your document by putting the CSV column name in double curly braces, for example {{Address1}} for data from a column named Address1.
+
+</label>
+
+<label appearance="header" indent="1">
+Click Apply with this tab selected to preview CSV file rows and columns.
+</label>
+
+</vbox>
+
+<image width="20" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+</hbox>
+
+</page>
+
+
+<page name="text" gui-text="Text">
+
+<param name="textmodes" type="notebook">
+
+<page name='font' gui-text='Font'>
+
+<image>idraw_deps/hta/inx_images/merge_font.svg</image>
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+
+<hbox>
+<image width="45" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+    <param indent="0" name="font_option" 
+        type="optiongroup" appearance="combo" gui-text="Font face: "
+        gui-description="Font to render the text in (or Other, to select a font not in the list).">
+        <option value="HersheySans1">Hershey Sans 1-stroke</option>
+        <option value="HersheySansMed">Hershey Sans medium</option> 
+
+        <option value="HersheySerifMed">Hershey Serif medium</option>
+        <option value="HersheySerifMedItalic">Hershey Serif medium italic</option>
+
+        <option value="HersheySerifBold">Hershey Serif bold</option>
+        <option value="HersheySerifBoldItalic">Hershey Serif bold italic</option>
+
+        <option value="HersheyScript1">Hershey Script 1-stroke</option>
+        <option value="HersheyScriptMed">Hershey Script medium</option>
+
+        <option value="HersheyGothEnglish">Hershey Gothic English</option>
+        <option value="HersheyGothGerman">Hershey Gothic German</option>
+        <option value="HersheyGothItalian">Hershey Gothic Italian</option>	   
+        
+        <!-- Block below this are derived from fonts licensed under SIL Open Font License -->
+        <option value="EMSAllure">EMS Allure</option>
+        <option value="EMSBird">EMS Bird</option>
+        <option value="EMSBirdSwashCaps">EMS Bird Swash Caps</option>
+        <option value="EMSBrush">EMS Brush</option>
+        <option value="EMSCapitol">EMS Capitol</option>
+
+        <option value="EMSCasualHand">EMS Casual Hand</option>
+        <option value="EMSDecorousScript">EMS Decorous Script</option>
+        <option value="EMSDelight">EMS Delight</option>
+        <option value="EMSDelightSwashCaps">EMS Delight Swash Caps</option>
+        <option value="EMSElfin">EMS Elfin</option>
+
+        <option value="EMSFelix">EMS Felix</option>
+        <option value="EMSHerculean">EMS Herculean</option>
+        <option value="EMSInvite">EMS Invite</option>
+        <option value="EMSLeague">EMS League</option>
+        <option value="EMSLittlePrincess">EMS Little Princess</option>
+
+        <option value="EMSMistyNight">EMS Misty Night</option>
+        <option value="EMSNeato">EMS Neato</option>
+        <option value="EMSNixish">EMS Nixish</option>
+        <option value="EMSNixishItalic">EMS Nixish Italic</option>
+        <option value="EMSOsmotron">EMS Osmotron</option>
+
+        <option value="EMSPancakes">EMS Pancakes</option>
+        <option value="EMSPepita">EMS Pepita</option>
+        <option value="EMSQwandry">EMS Qwandry</option>
+        <option value="EMSReadability">EMS Readability</option>
+        <option value="EMSReadabilityItalic">EMS Readability Italic</option>
+
+        <option value="EMSSociety">EMS Society</option>
+        <option value="EMSSwiss">EMS Swiss</option>
+        <option value="EMSTech">EMS Tech</option> 
+        <!-- Block above this are derived from fonts licensed under SIL Open Font License -->
+        <option value="other">Other, selected below</option> 
+      </param>
+
+</hbox>
+
+<param type="path" name="font_face" gui-text="Other SVG Font: " indent="1" mode="file" filetypes="svg"/>
+
+</page>
+
+
+<page name='txt_defects' gui-text='Defects'>
+
+<image>idraw_deps/hta/inx_images/merge_text.svg</image>
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+
+<hbox indent="0">
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<vbox indent="2">
+<image width="10" height="40">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+<label appearance="header">Handwriting-like Defects:</label>
+<param  indent="2" name="enable_defects" type="boolean" gui-text="Enable">false</param>
+</vbox>
+
+<vbox indent="2">
+<param name="leading_var" type="int" min="0" max="100" gui-text="Line spacing:">15</param>
+<param name="baseline_var" type="int" min="0" max="100" gui-text="Baseline jitter:">15</param>
+<param name="indent_var" type="int" min="0" max="100" gui-text="Indent:">15</param>
+<param name="kern_var" type="int" min="0" max="100" gui-text="Kerning:">15</param>
+<param name="size_var" type="int" min="0" max="100" gui-text="Letter Size:">15</param>
+
+</vbox>
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+</hbox>
+</page>
+
+<page name='txt_adjustments' gui-text='Adjustments'>
+<image>idraw_deps/hta/inx_images/merge_text_adj.svg</image>
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox indent="2">
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<label indent="2" appearance="header">Spacing adjustment:    </label>
+<vbox indent="5">
+<param name="letter_spacing" type="int" min="1" max="400"
+gui-text="Letter (%):     ">100</param>
+<param  name="word_spacing" type="int" min="1" max="600" 
+gui-text="Word (%):     ">100</param>
+</vbox>
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+</hbox>
+
+</page>
+
+</param>
+</page>
+
+
+
+<page name='options' gui-text='Options'>
+<param name="submode" type="notebook">
+
+<page name='Speed' gui-text='Speed'>
+
+<_param name="instructions_timing1" type="description" appearance="header">Movement speeds:</_param>
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox>
+<vbox indent="4" >
+<image width="350" height="1">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<param name="speed_pendown" type="int" min="1" max="110" gui-text="Writing/Drawing speed (%):">25</param>	
+<param name="speed_penup" type="int" min="1" max="110" gui-text="Pen-up movement speed (%):">75</param>
+
+<param name="accel" type="optiongroup" appearance="minimal" gui-text="Acceleration :">
+<_option value="50">Standard</_option>
+<_option value="100">Maximum</_option>
+<_option value="75">High</_option>
+<_option value="35">Slow</_option>
+<_option value="10">Very slow</_option>
+</param>
+</vbox>
+</hbox>
+<image width="10" height="20">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox >
+<vbox indent="7" >
+<param indent="1" name="const_speed" type="boolean" gui-text="Use constant speed when pen is down">false</param>	
+</vbox>
+</hbox>
+
+</page>
+
+
+<page name='pen_timing' gui-text='Pen timing'>
+
+<!-- <image>idraw_deps/hta/inx_images/merge_pentiming.svg</image> -->
+
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox>
+<vbox indent="4" >
+<image width="350" height="1">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<param indent="1" name="pen_rate_raise" type="optiongroup" appearance="minimal" gui-text="Pen raising speed :">
+<_option value="100">Maximum</_option>
+<_option value="38">Standard</_option>
+<_option value="25">Slow</_option>
+<_option value="12">Very slow</_option>
+</param>
+
+<param indent="1" name="pen_rate_lower" type="optiongroup" appearance="minimal" gui-text="Pen lowering speed :">
+<_option value="50">Standard</_option>
+<_option value="100">Maximum</_option>
+<_option value="25">Slow</_option>
+<_option value="12">Very slow</_option>
+</param>
+<spacer />
+<param indent="1" name="pen_delay_up" type="int" min="-500" max="500" gui-text="Optional delay after raising pen (ms):">0</param>
+<param indent="1" name="pen_delay_down" type="int" min="-500" max="500" gui-text="Optional delay after lowering pen (ms):">0</param>
+
+</vbox>
+</hbox>
+<image width="10" height="20">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+</page>
+
+
+<page name='preview' gui-text='Preview &amp; Alerts'>
+
+<!-- <image>idraw_deps/hta/inx_images/merge_preview.svg</image> -->
+
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox>
+<vbox indent="2" >
+<image width="350" height="1">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+
+<hbox>
+<_param name="instructions_preview" type="description" appearance="header">Preview mode:</_param>
+<param name="preview" type="boolean" gui-text="Enable offline preview mode; Simulate plotting only">false</param> 
+<spacer size="expand" />
+</hbox>
+
+<param indent="1" name="rendering" type="optiongroup" appearance="minimal" gui-text="Preview mode rendering:">
+<_option value="3">All movement</_option>
+<_option value="1">Pen-down movement</_option>
+<_option value="2">Pen-up movement</_option>
+<_option value="0">None</_option>
+</param>
+</vbox>
+</hbox>
+
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+<image>idraw_deps/hta/inx_images/merge_hr.svg</image>
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox>
+<vbox indent="2" >
+<image width="350" height="1">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox>
+<_param name="instructions_preview" type="description" appearance="header">Webhook notifications:</_param>
+<param name="webhook" type="boolean" gui-text="Post to webhook when a plot finishes">false</param> 
+<spacer size="expand" />
+</hbox>
+<param indent="3" name="webhook_url" type="string" gui-text="Webhook URL: "></param>
+</vbox>
+</hbox>
+</page>
+
+
+<page name='advanced' gui-text='Advanced'>
+<!-- <image>idraw_deps/hta/inx_images/merge_options.svg</image> -->
+
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<hbox>
+<vbox indent="4" >
+<image width="350" height="1">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<param indent="1" name="auto_rotate" type="boolean" gui-text="Auto-rotate page when printing">true</param>	
+<param indent="1" name="random_start" type="boolean" gui-text="Randomize starts of closed paths">false</param>
+<param indent="1" name="report_time" type="boolean" gui-text="Report time elapsed">false</param> 
+<param indent="1" name="hiding" type="bool" gui-text="Hidden-line removal">false</param>
+
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<param indent="1" name="reordering" type="optiongroup" appearance="minimal" gui-text="Plot optimization:">
+<_option value="0">Least; Only connect adjoining paths</_option>
+<_option value="1">Basic; Also reorder paths for speed</_option>
+<_option value="2">Full; Also allow path reversal</_option>
+<_option value="4">None; Strictly preserve file order</_option>
+</param>
+
+<param indent="1" name="resolution" type="optiongroup" appearance="minimal" gui-text="Motor Resolution:">
+<_option value="1">~2870 DPI (Slightly smoother)</_option>
+<_option value="2">~1435 DPI (Slightly faster)</_option>
+</param>
+</vbox>
+</hbox>
+</page>
+
+
+<page name="sysinfo" gui-text="Config">
+
+<!-- <image>idraw_deps/hta/inx_images/merge_config1.svg</image> -->
+
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+<hbox>
+<vbox indent="4">
+<image width="350" height="1">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<param name="model" type="optiongroup" appearance="minimal" gui-text="xDraw model:">
+<_option value="1">xDraw A4</_option>
+<_option value="2">xDraw A3</_option>
+</param>
+<image width="10" height="5">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+<param name="port_config" type="optiongroup" appearance="minimal" gui-text="Machine selection:">
+<_option value="1">Use First xDraw located</_option>
+<_option value="2">Use xDraw named below</_option>
+</param>
+<param name="port" type="string" gui-text="xDraw name or port: "></param>
+
+
+</vbox>
+</hbox>
+
+</page>
+
+</param>
+</page>
+
+
+<page name="resume" gui-text="Resume">
+<image>idraw_deps/hta/inx_images/merge_resume.svg</image>
+
+<hbox>
+<image width="20" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+<label xml:space="preserve">
+To pause a plot in progress, press the pause button on the left side of the xDraw. After pausing, you can change settings or perform any manual adjustments that are needed.
+
+To resume plotting a given row, or to simply cancel and return the carriage to the Home Corner, press 'Apply' with this tab selected.
+
+Plot progress is stored in the SVG file itself. If you plan to quit Inkscape and resume later, save the document first.
+
+You can resume directly where you paused, or after using the Return to Home Corner command.
+</label>
+<image width="20" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+</hbox>
+
+<image width="10" height="10">idraw_deps/hta/inx_images/spacer_10px.svg</image>
+
+
+<hbox indent="7" >
+<param name="resume_type" type="optiongroup" gui-text="Action on 'Apply':   ">
+<_option indent="1" value="plot" >Resume (From Home or Where Paused)</_option>
+<_option indent="1" value="home">Return to Home Corner (only)</_option>
+</param>
+</hbox>
+
+</page>
+
+
+</param>
+
+<effect needs-live-preview="false">
+<object-type>all</object-type>
+<effects-menu>
+    <submenu _name="xDraw Utilities"/>
+</effects-menu>
+</effect>
+
+<script>
+<command reldir="extensions" interpreter="python">idraw_merge.py</command>
+</script>
+
+</inkscape-extension>
+

@@ -28,6 +28,5 @@ data/samples/
 .vscode/
 *.swp
 *.swo
-data/casia_raw/
 test_env/
 data/user_strokes_old/
