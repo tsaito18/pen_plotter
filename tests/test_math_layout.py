@@ -1,5 +1,4 @@
-import pytest
-from src.layout.math_layout import MathElement, MathParser, MathLayoutEngine
+from src.layout.math_layout import MathParser, MathLayoutEngine
 
 
 class TestMathParser:

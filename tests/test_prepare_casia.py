@@ -6,7 +6,6 @@ import json
 import struct
 from pathlib import Path
 
-import pytest
 
 from scripts.prepare_casia import convert_pot_directory
 

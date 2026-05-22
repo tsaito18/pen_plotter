@@ -1,5 +1,4 @@
 import numpy as np
-import numpy.typing as npt
 import pytest
 
 from src.gcode.config import PlotterConfig

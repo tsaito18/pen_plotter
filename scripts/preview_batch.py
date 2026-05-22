@@ -1,5 +1,7 @@
 """複数文字を一括生成し、品質比較用のグリッド画像を出力する CLI。"""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -154,7 +156,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     print(f"Valid characters: {''.join(valid_chars)} ({len(valid_chars)}/{len(chars)})")
-    print(f"Loading model...")
+    print("Loading model...")
 
     inference = StrokeInference(checkpoint_path=args.checkpoint)
     print("Model loaded successfully")

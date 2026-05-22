@@ -1,5 +1,4 @@
 import math
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -30,7 +29,7 @@ class GCodeGenerator:
             f"G92 X0 Y{self.config.paper_height:.0f} Z0",
             "G90",
         ]
-        return [l for l in lines if l]
+        return [line for line in lines if line]
 
     def _footer(self) -> list[str]:
         """ホーム付近に移動"""

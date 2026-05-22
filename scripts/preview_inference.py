@@ -1,5 +1,7 @@
 """事前学習済みチェックポイントから手書き文字を生成・プレビューする CLI。"""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -12,7 +14,6 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 
 from src.model.inference import StrokeInference
 

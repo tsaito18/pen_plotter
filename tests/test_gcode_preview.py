@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from src.gcode.generator import GCodeGenerator, Stroke
+from src.gcode.generator import Stroke
 from src.gcode.preview import preview_gcode, preview_strokes
 
 

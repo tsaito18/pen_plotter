@@ -56,15 +56,16 @@ class TestPageLayout:
             assert y <= area.y + area.height
 
     def test_ruled_line_strokes(self):
-        layout = PageLayout(PageConfig())
+        cfg = PageConfig()
+        layout = PageLayout(cfg)
         strokes = layout.ruled_line_strokes()
         assert len(strokes) > 0
-        area = layout.content_area()
+        paper_width = cfg.paper_size[0]
         for stroke in strokes:
             assert isinstance(stroke, np.ndarray)
             assert stroke.shape == (2, 2)  # 2点の直線
-            assert stroke[0, 0] == pytest.approx(area.x)  # 左端から
-            assert stroke[1, 0] == pytest.approx(area.x + area.width)  # 右端まで
+            assert stroke[0, 0] == pytest.approx(0.0)  # 用紙左端から
+            assert stroke[1, 0] == pytest.approx(paper_width)  # 用紙右端まで
 
     def test_b5_has_smaller_area(self):
         a4 = PageLayout(PageConfig(paper_size=PaperSize.A4))

@@ -1,6 +1,5 @@
 """PreviewRenderer の単体テスト。"""
 import numpy as np
-import pytest
 
 from src.gcode.config import PlotterConfig
 from src.layout.page_layout import PageConfig

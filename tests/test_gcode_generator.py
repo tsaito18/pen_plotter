@@ -24,12 +24,12 @@ class TestGCodeGeneratorSquare:
 
     def test_square_has_move_to_start(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         lines = gcode_generator.generate([square_stroke])
-        g0_lines = [l for l in lines if l.startswith("G0 X")]
+        g0_lines = [line for line in lines if line.startswith("G0 X")]
         assert len(g0_lines) >= 1
 
     def test_square_has_draw_lines(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         lines = gcode_generator.generate([square_stroke])
-        g1_lines = [l for l in lines if l.startswith("G1")]
+        g1_lines = [line for line in lines if line.startswith("G1")]
         assert len(g1_lines) == 4
 
 
@@ -75,10 +75,10 @@ class TestGCodeGeneratorVarySpeed:
     def test_vary_speed_default_on(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         """vary_speed=True（デフォルト）でフィードレートが変調される"""
         lines = gcode_generator.generate([square_stroke], vary_speed=True)
-        g1_lines = [l for l in lines if l.startswith("G1")]
+        g1_lines = [line for line in lines if line.startswith("G1")]
         feed_rates = []
-        for l in g1_lines:
-            for part in l.split():
+        for line in g1_lines:
+            for part in line.split():
                 if part.startswith("F"):
                     feed_rates.append(float(part[1:]))
         assert len(set(feed_rates)) > 1, "フィードレートが全て同じ"
@@ -86,10 +86,10 @@ class TestGCodeGeneratorVarySpeed:
     def test_vary_speed_off_uniform(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         """vary_speed=Falseで従来通り均一フィードレート"""
         lines = gcode_generator.generate([square_stroke], vary_speed=False)
-        g1_lines = [l for l in lines if l.startswith("G1")]
+        g1_lines = [line for line in lines if line.startswith("G1")]
         feed_rates = set()
-        for l in g1_lines:
-            for part in l.split():
+        for line in g1_lines:
+            for part in line.split():
                 if part.startswith("F"):
                     feed_rates.add(float(part[1:]))
         assert len(feed_rates) == 1, "vary_speed=Falseなのにフィードレートが変わっている"
@@ -97,7 +97,7 @@ class TestGCodeGeneratorVarySpeed:
     def test_vary_speed_start_slower(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         """始点付近のフィードレートが draw_speed より遅い"""
         lines = gcode_generator.generate([square_stroke], vary_speed=True)
-        g1_lines = [l for l in lines if l.startswith("G1")]
+        g1_lines = [line for line in lines if line.startswith("G1")]
         first_feed = None
         for part in g1_lines[0].split():
             if part.startswith("F"):
@@ -108,7 +108,7 @@ class TestGCodeGeneratorVarySpeed:
     def test_vary_speed_end_slower(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         """終点付近のフィードレートが draw_speed より遅い（S字カーブで減速）"""
         lines = gcode_generator.generate([square_stroke], vary_speed=True)
-        g1_lines = [l for l in lines if l.startswith("G1")]
+        g1_lines = [line for line in lines if line.startswith("G1")]
         last_feed = None
         for part in g1_lines[-1].split():
             if part.startswith("F"):
@@ -121,10 +121,10 @@ class TestGCodeGeneratorVarySpeed:
     ):
         """中盤のフィードレートが始点・終点より速い（ベル型S字カーブ）"""
         lines = gcode_generator.generate([square_stroke], vary_speed=True)
-        g1_lines = [l for l in lines if l.startswith("G1")]
+        g1_lines = [line for line in lines if line.startswith("G1")]
         feed_rates = []
-        for l in g1_lines:
-            for part in l.split():
+        for line in g1_lines:
+            for part in line.split():
                 if part.startswith("F"):
                     feed_rates.append(float(part[1:]))
         assert len(feed_rates) >= 3
@@ -137,9 +137,9 @@ class TestGCodeGeneratorVarySpeed:
     ):
         """F値が整数であること（小数点を含まない）"""
         lines = gcode_generator.generate([square_stroke], vary_speed=True)
-        g1_lines = [l for l in lines if l.startswith("G1")]
-        for l in g1_lines:
-            for part in l.split():
+        g1_lines = [line for line in lines if line.startswith("G1")]
+        for line in g1_lines:
+            for part in line.split():
                 if part.startswith("F"):
                     f_value = part[1:]
                     assert "." not in f_value, f"F値に小数点が含まれている: {part}"
@@ -149,5 +149,5 @@ class TestGCodeGeneratorVarySpeed:
     ):
         """2点ストローク（1セグメント）でもクラッシュしない"""
         lines = gcode_generator.generate([line_stroke], vary_speed=True)
-        g1_lines = [l for l in lines if l.startswith("G1")]
+        g1_lines = [line for line in lines if line.startswith("G1")]
         assert len(g1_lines) == 1

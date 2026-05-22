@@ -893,8 +893,6 @@ class TestHeadings:
         """見出し行はインデントしない（段落先頭でも）。"""
         cfg = PageConfig()
         ts = Typesetter(cfg, font_size=7.0)
-        layout = PageLayout(cfg)
-        area = layout.content_area()
         pages = ts.typeset("前の段落\n# 見出し")
         placements = pages[0]
         heading_chars = [p for p in placements if p.char == "見"]
