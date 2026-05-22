@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +14,34 @@ from src.model.stroke_model import StrokeGenerator
 from src.model.style_encoder import StyleEncoder
 from src.model.train import TrainConfig
 
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _cuda_is_usable() -> bool:
+    """CUDA kernel が実行できるか確認する。available だけでは不十分。"""
+    if not torch.cuda.is_available():
+        return False
+    try:
+        probe = torch.ones(1, device="cuda")
+        probe.add_(1)
+        torch.cuda.synchronize()
+    except Exception as exc:
+        logger.warning("CUDA unavailable for inference; falling back to CPU: %s", exc)
+        return False
+    return True
+
+
+def _detect_device(device: str | torch.device | None = None) -> torch.device:
+    """推論に使うデバイスを選ぶ。明示指定がなければ accelerator 優先。"""
+    if device is not None:
+        return torch.device(device)
+    if _cuda_is_usable():
+        return torch.device("cuda")
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return torch.device("xpu")
+    return torch.device("cpu")
+
 
 class StrokeInference:
     def __init__(
@@ -19,7 +49,9 @@ class StrokeInference:
         checkpoint_path: Path | str,
         generator_kwargs: dict | None = None,
         style_encoder_kwargs: dict | None = None,
+        device: str | torch.device | None = None,
     ) -> None:
+        self.device = _detect_device(device)
         torch.serialization.add_safe_globals([TrainConfig])
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
@@ -83,9 +115,7 @@ class StrokeInference:
                 if missing:
                     # キーのリマップ: 旧 mlp.{0,2,4} → 新 mlp.{0,3,6} 等
                     remap = {}
-                    saved_mlp = sorted(
-                        k for k in saved_keys if k.startswith("mlp.")
-                    )
+                    saved_mlp = sorted(k for k in saved_keys if k.startswith("mlp."))
                     model_mlp = sorted(k for k in model_keys if k.startswith("mlp."))
                     for sk, mk in zip(saved_mlp, model_mlp):
                         remap[mk] = state[sk]
@@ -94,6 +124,7 @@ class StrokeInference:
                         for k, v in self.deformer.state_dict().items()
                     }
                     self.deformer.load_state_dict(new_state)
+            self.deformer.to(self.device)
             self.deformer.eval()
 
             style_enc_kwargs = dict(style_encoder_kwargs or {})
@@ -101,6 +132,7 @@ class StrokeInference:
                 style_enc_kwargs["style_dim"] = style_dim
             self.style_encoder = StyleEncoder(**style_enc_kwargs)
             self.style_encoder.load_state_dict(checkpoint["style_encoder_state_dict"])
+            self.style_encoder.to(self.device)
             self.style_encoder.eval()
 
             self.version = 3
@@ -147,6 +179,7 @@ class StrokeInference:
                 num_layers=num_layers,
             )
             self.char_encoder.load_state_dict(char_enc_sd)
+            self.char_encoder.to(self.device)
             self.char_encoder.eval()
             self.version = 2
         else:
@@ -158,6 +191,8 @@ class StrokeInference:
         self.generator.load_state_dict(checkpoint["generator_state_dict"])
         self.style_encoder.load_state_dict(checkpoint["style_encoder_state_dict"])
 
+        self.generator.to(self.device)
+        self.style_encoder.to(self.device)
         self.generator.eval()
         self.style_encoder.eval()
 
@@ -174,6 +209,7 @@ class StrokeInference:
         if self.version == 3:
             return self._generate_v3(style_sample, reference_strokes, noise_scale)
 
+        style_sample = style_sample.to(self.device)
         if self.norm_stats is not None:
             from src.model.data_utils import normalize_deltas
 
@@ -187,20 +223,20 @@ class StrokeInference:
                 from src.model.char_encoder import CharEncoder
 
                 seq = CharEncoder.strokes_to_sequence(reference_strokes)
-                seq_tensor = torch.tensor(seq, dtype=torch.float32).unsqueeze(0)
+                seq_tensor = torch.tensor(seq, dtype=torch.float32, device=self.device).unsqueeze(0)
                 if self.ref_norm_stats is not None:
                     from src.model.data_utils import normalize_reference
 
                     seq_tensor = normalize_reference(seq_tensor, self.ref_norm_stats)
                 char_embedding = self.char_encoder(seq_tensor)
             else:
-                char_embedding = torch.zeros(1, self.generator.char_dim)
+                char_embedding = torch.zeros(1, self.generator.char_dim, device=self.device)
 
         num_ref_strokes = len(reference_strokes) if reference_strokes is not None else 1
         all_strokes: list[np.ndarray] = []
 
         for stroke_idx in range(num_ref_strokes):
-            stroke_index_tensor = torch.tensor([stroke_idx])
+            stroke_index_tensor = torch.tensor([stroke_idx], device=self.device)
 
             ref_stroke_len = len(reference_strokes[stroke_idx]) if reference_strokes else num_steps
             max_stroke_steps = min(int(ref_stroke_len * 1.5), num_steps)
@@ -208,9 +244,9 @@ class StrokeInference:
             if self.norm_stats is not None:
                 init_dx = -self.norm_stats["mean_x"] / self.norm_stats["std_x"]
                 init_dy = -self.norm_stats["mean_y"] / self.norm_stats["std_y"]
-                current = torch.tensor([[[init_dx, init_dy]]])
+                current = torch.tensor([[[init_dx, init_dy]]], device=self.device)
             else:
-                current = torch.zeros(1, 1, 2)
+                current = torch.zeros(1, 1, 2, device=self.device)
 
             points: list[list[float]] = []
 
@@ -256,7 +292,7 @@ class StrokeInference:
                 if eos_prob > 0.5:
                     break
 
-                next_input = torch.tensor([[[dx.item(), dy.item()]]])
+                next_input = torch.tensor([[[dx.item(), dy.item()]]], device=self.device)
                 current = torch.cat([current, next_input], dim=1)
 
             if len(points) >= 2:
@@ -329,9 +365,7 @@ class StrokeInference:
                 part = np.stack([x_new, y_new], axis=1)
             else:
                 # Arc-length parameterized exact cubic spline (s=0)
-                cum = np.concatenate([[0.0], np.cumsum(
-                    np.sqrt((seg_diffs**2).sum(axis=1))
-                )])
+                cum = np.concatenate([[0.0], np.cumsum(np.sqrt((seg_diffs**2).sum(axis=1)))])
                 if cum[-1] < 1e-12:
                     part = seg
                 else:
@@ -364,6 +398,7 @@ class StrokeInference:
         if self.norm_stats is not None:
             style_sample = normalize_deltas(style_sample, self.norm_stats)
 
+        style_sample = style_sample.to(self.device)
         style = self.style_encoder(style_sample)
 
         batch_refs: list[NDArray[np.float32]] = []
@@ -380,13 +415,13 @@ class StrokeInference:
         if not batch_refs:
             return [np.array([[0.0, 0.0], [1.0, 1.0]])]
 
-        ref_batch = torch.tensor(np.stack(batch_refs), dtype=torch.float32)
-        idx_batch = torch.tensor(batch_indices)
+        ref_batch = torch.tensor(np.stack(batch_refs), dtype=torch.float32, device=self.device)
+        idx_batch = torch.tensor(batch_indices, device=self.device)
         style_batch = style.expand(len(batch_refs), -1)
 
         if self.deformer_type == "affine":
             transformed, _params = self.deformer(ref_batch, style_batch, idx_batch)
-            deformed_batch = transformed.detach().numpy()
+            deformed_batch = transformed.detach().cpu().numpy()
         else:
             offsets = self.deformer(ref_batch, style_batch, idx_batch)
             # Apply smoothing for all per-point deformers (incl. transformer/twostage)
@@ -394,7 +429,7 @@ class StrokeInference:
             if self.deformer_type != "affine":
                 offsets = smooth_offsets(offsets)
             offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
-            deformed_batch = (ref_batch + offsets).detach().numpy()
+            deformed_batch = (ref_batch + offsets).detach().cpu().numpy()
 
         all_strokes: list[np.ndarray] = []
         for j in range(len(batch_refs)):
@@ -418,4 +453,3 @@ class StrokeInference:
             all_strokes.append(result)
 
         return all_strokes
-

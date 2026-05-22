@@ -3,10 +3,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from src.model.char_encoder import CharEncoder
-from src.model.inference import StrokeInference
-from src.model.stroke_model import StrokeGenerator
-from src.model.style_encoder import StyleEncoder
+from src.model.char_encoder import CharEncoder  # noqa: E402
+from src.model.inference import StrokeInference, _detect_device  # noqa: E402
+from src.model.stroke_model import StrokeGenerator  # noqa: E402
+from src.model.style_encoder import StyleEncoder  # noqa: E402
 
 
 class TestStrokeInference:
@@ -60,7 +60,8 @@ class TestStrokeInference:
             np.array([[0.2, 0.8], [0.8, 0.2]], dtype=np.float64),
         ]
         strokes = inference_engine.generate(
-            style_sample=style_sample, num_steps=20,
+            style_sample=style_sample,
+            num_steps=20,
             reference_strokes=reference,
         )
         for stroke in strokes:
@@ -232,7 +233,8 @@ class TestStrokeInferenceNormStats:
             np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64),
         ]
         strokes = engine_with_norm.generate(
-            style_sample=style_sample, num_steps=20,
+            style_sample=style_sample,
+            num_steps=20,
             reference_strokes=reference,
         )
         assert isinstance(strokes, list)
@@ -250,14 +252,14 @@ class TestStrokeInferenceNormStats:
             np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64),
         ]
         strokes = engine_with_norm.generate(
-            style_sample=style_sample, num_steps=50, temperature=0.5,
+            style_sample=style_sample,
+            num_steps=50,
+            temperature=0.5,
             reference_strokes=reference,
         )
         for s in strokes:
             assert np.all(np.isfinite(s)), "Output contains non-finite values"
-            assert np.all(np.abs(s) < 1000), (
-                f"Output coordinates too large: max={np.abs(s).max()}"
-            )
+            assert np.all(np.abs(s) < 1000), f"Output coordinates too large: max={np.abs(s).max()}"
 
     def test_ref_norm_stats_loaded(self, tmp_path, norm_stats):
         """ref_norm_stats is loaded from checkpoint."""
@@ -281,7 +283,12 @@ class TestStrokeInferenceNormStats:
 
         engine = StrokeInference(
             checkpoint_path=ckpt_path,
-            generator_kwargs={"input_dim": 2, "hidden_dim": 64, "style_dim": 128, "num_mixtures": 3},
+            generator_kwargs={
+                "input_dim": 2,
+                "hidden_dim": 64,
+                "style_dim": 128,
+                "num_mixtures": 3,
+            },
             style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 128},
         )
         assert engine.ref_norm_stats == ref_norm_stats
@@ -375,6 +382,22 @@ class TestStrokeInferenceV3:
         assert v3_engine.generator is None
         assert v3_engine.char_encoder is None
 
+    def test_auto_device_prefers_usable_cuda(self, monkeypatch):
+        monkeypatch.setattr("src.model.inference._cuda_is_usable", lambda: True)
+
+        assert _detect_device().type == "cuda"
+
+    def test_v3_explicit_cpu_device(self, v3_checkpoint_path):
+        engine = StrokeInference(
+            checkpoint_path=v3_checkpoint_path,
+            style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 64},
+            device="cpu",
+        )
+
+        assert engine.device.type == "cpu"
+        assert next(engine.style_encoder.parameters()).device.type == "cpu"
+        assert next(engine.deformer.parameters()).device.type == "cpu"
+
     def test_v3_generation_stroke_count(self, v3_engine):
         style_sample = torch.randn(1, 20, 3)
         reference = [
@@ -409,6 +432,27 @@ class TestStrokeInferenceV3:
         )
         for s in strokes:
             assert np.all(np.isfinite(s))
+
+    def test_v3_cuda_generation_returns_numpy(self, v3_checkpoint_path):
+        if _detect_device().type != "cuda":
+            pytest.skip("usable CUDA is unavailable")
+
+        engine = StrokeInference(
+            checkpoint_path=v3_checkpoint_path,
+            style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 64},
+            device="cuda",
+        )
+
+        strokes = engine.generate(
+            style_sample=torch.randn(1, 15, 3),
+            reference_strokes=[np.array([[0.0, 0.0], [5.0, 5.0]], dtype=np.float64)],
+            noise_scale=0.01,
+        )
+
+        assert engine.device.type == "cuda"
+        assert next(engine.style_encoder.parameters()).device.type == "cuda"
+        assert next(engine.deformer.parameters()).device.type == "cuda"
+        assert isinstance(strokes[0], np.ndarray)
 
     def test_v3_smooth_offsets(self, v3_engine):
         """Smoothing should reduce variation between adjacent offset differences."""
@@ -551,8 +595,11 @@ class TestStrokeInferenceV3Transformer:
 
         style_dim = 64
         deformer = TransformerDeformer(
-            style_dim=style_dim, d_model=32, nhead=2,
-            num_self_attn_layers=1, ff_dim=64,
+            style_dim=style_dim,
+            d_model=32,
+            nhead=2,
+            num_self_attn_layers=1,
+            ff_dim=64,
         )
         style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=style_dim)
         checkpoint = {
