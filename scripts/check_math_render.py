@@ -8,6 +8,7 @@ A1+A2+B 完了後の確認用:
 - ASCII 数式記号（+ - = 等）の新規ストローク（A1）
 - LaTeX コマンド → Unicode 変換（\\omega \\pi \\theta 等、A2）
 - ブロック数式 $$\\n...\\n$$ の DOTALL 対応（B）
+- λ, \\left/\\right, \\mathrm, \\cos/\\sin, \\bar/\\overline の回帰確認
 """
 
 from __future__ import annotations
@@ -51,6 +52,18 @@ $$
 $$
 \sigma^2 = \frac{1}{n} \sum (x_i - \mu)^2 \tag{5}
 $$
+
+## 報告サンプル
+
+特性方程式 $\lambda^2 + 4 = 0$ より $\lambda = \pm 2i$。
+
+$$
+y = C_1 \cos 2x + C_2 \sin 2x
+$$
+
+括弧とローマン体: $\left( \frac{1}{2} \right) \mathrm{dx}$
+
+修飾子: $\bar{x} + \overline{AB}$
 """
 
 

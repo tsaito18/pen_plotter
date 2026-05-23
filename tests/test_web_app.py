@@ -153,8 +153,8 @@ class TestFallbackStrokes:
         assert len(strokes) == 1
         assert strokes[0].shape == (5, 2)
 
-    def test_pipeline_inference_fallback(self, tmp_path):
-        """MLモデルが読み込まれている場合はML推論を優先使用。"""
+    def test_pipeline_inference_without_reference_falls_to_rect(self, tmp_path):
+        """参照ストロークがない場合はML推論を呼ばず矩形フォールバックする。"""
         mock_strokes = [
             np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]]),
             np.array([[0.2, 0.3], [0.4, 0.5], [0.6, 0.7]]),
@@ -170,10 +170,9 @@ class TestFallbackStrokes:
         placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=5.0)
         strokes = pipeline.placements_to_strokes([placement])
 
-        mock_inference.generate.assert_called_once()
-        assert len(strokes) == 2
-        for s in strokes:
-            assert isinstance(s, np.ndarray)
+        mock_inference.generate.assert_not_called()
+        assert len(strokes) == 1
+        assert strokes[0].shape == (5, 2)
 
     def test_position_strokes(self):
         """_position_strokesがアスペクト比保持・セル中央配置で正しく動作する。"""
@@ -274,8 +273,8 @@ class TestFallbackStrokes:
             assert isinstance(arr, np.ndarray)
             assert arr.shape == (8, 2)
 
-    def test_inference_v1_backward_compatible(self):
-        """V1推論（KanjiVGなし）ではreference_strokes=Noneが渡される。"""
+    def test_inference_without_reference_is_skipped(self):
+        """KanjiVGなしではreference_strokes=NoneのML推論を実行しない。"""
         mock_strokes = [
             np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]),
         ]
@@ -287,10 +286,11 @@ class TestFallbackStrokes:
         pipeline._temperature = 0.8
 
         placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=5.0)
-        pipeline.placements_to_strokes([placement])
+        strokes = pipeline.placements_to_strokes([placement])
 
-        call_kwargs = mock_inference.generate.call_args
-        assert call_kwargs.kwargs.get("reference_strokes") is None
+        mock_inference.generate.assert_not_called()
+        assert len(strokes) == 1
+        assert strokes[0].shape == (5, 2)
 
     def test_load_reference_strokes(self, tmp_path):
         """_load_reference_strokesがKanjiVG JSONからNDArrayリストを返す。"""

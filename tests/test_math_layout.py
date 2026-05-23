@@ -170,11 +170,9 @@ class TestLatexSymbolMap:
         elements = MathParser.parse(r"\Sigma")
         assert elements[0].content == "Σ"
 
-    def test_unknown_command_fallback(self):
+    def test_unknown_command_is_ignored(self):
         elements = MathParser.parse(r"\unknowncmd")
-        # 未知コマンドはそのまま文字列で残る（content="unknowncmd"）
-        assert elements[0].type == "symbol"
-        assert elements[0].content == "unknowncmd"
+        assert elements == []
 
     def test_quad_becomes_space(self):
         elements = MathParser.parse(r"x \quad y")
@@ -226,6 +224,49 @@ class TestLatexSymbolMap:
         assert "θ" in contents
         assert "≈" in contents
 
+    def test_missing_greek_letters_to_unicode(self):
+        elements = MathParser.parse(r"\xi")
+        assert elements[0].type == "symbol"
+        assert elements[0].content == "ξ"
+
+    def test_operator_command(self):
+        elements = MathParser.parse(r"\cos")
+        assert elements[0].type == "operator"
+        assert elements[0].content == "cos"
+
+    def test_left_right_emit_delimiters(self):
+        elements = MathParser.parse(r"\left(\frac{1}{2}\right)")
+        assert [e.type for e in elements] == ["text", "frac", "text"]
+        assert elements[0].content == "("
+        assert elements[2].content == ")"
+
+    def test_left_right_dot_emit_nothing(self):
+        elements = MathParser.parse(r"\left. x \right.")
+        contents = [e.content for e in elements if hasattr(e, "content")]
+        assert "left" not in contents
+        assert "right" not in contents
+        assert "." not in contents
+
+    def test_mathrm_group_passthrough(self):
+        elements = MathParser.parse(r"\mathrm{abc}")
+        assert len(elements) == 1
+        assert elements[0].type == "group"
+        assert elements[0].children[0].type == "text"
+        assert elements[0].children[0].content == "abc"
+
+    def test_bar_parses_as_accent(self):
+        elements = MathParser.parse(r"\bar{x}")
+        assert len(elements) == 1
+        assert elements[0].type == "accent"
+        assert elements[0].content == "bar"
+        assert elements[0].children[0].content == "x"
+
+    def test_linebreak_followed_by_newline_does_not_leak_into_text(self):
+        elements = MathParser.parse("y = a \\\\\n y = b")
+        text_contents = [e.content for e in elements if e.type == "text"]
+        for content in text_contents:
+            assert "\n" not in content, f"newline leaked into text: {content!r}"
+
 
 class TestMathLineSegments:
     def test_fraction_emits_bar_segment(self):
@@ -257,3 +298,19 @@ class TestMathLineSegments:
         box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=8.0)
         bars = [p for p in box.placements if p.role == "frac_bar"]
         assert len(bars) == 2
+
+    def test_operator_layout_uses_single_placement(self):
+        elements = MathParser.parse(r"\cos")
+        box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=8.0)
+        assert len(box.placements) == 1
+        assert box.placements[0].text == "cos"
+        assert box.placements[0].role == "operator"
+
+    def test_bar_emits_accent_segment(self):
+        elements = MathParser.parse(r"\bar{x}")
+        box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=8.0)
+        texts = [p.text for p in box.placements]
+        accents = [p for p in box.placements if p.role == "accent_bar"]
+        assert "x" in texts
+        assert len(accents) == 1
+        assert accents[0].line_segment is not None

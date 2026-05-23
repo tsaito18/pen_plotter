@@ -209,6 +209,26 @@ class StrokeRenderer:
             cov.geometric.append(original_char)
             return self._position_strokes(ascii_math, placement)
 
+        paren_strokes = self._simple_paren_strokes(original_char, placement)
+        if paren_strokes is not None:
+            cov.geometric.append(original_char)
+            return self._position_strokes(paren_strokes, placement)
+
+        math_strokes = self._math_symbol_strokes(lookup_char)
+        if math_strokes is not None:
+            cov.geometric.append(original_char)
+            return self._position_strokes(math_strokes, placement)
+
+        word_strokes = self._math_word_strokes(lookup_char, placement)
+        if word_strokes is not None:
+            cov.geometric.append(original_char)
+            return word_strokes
+
+        letter_strokes = self._ascii_letter_strokes(lookup_char)
+        if letter_strokes is not None:
+            cov.geometric.append(original_char)
+            return self._position_strokes(letter_strokes, placement)
+
         direct = self._direct_stroke(placement.char)
         if direct is not None:
             cov.user_strokes.append(original_char)
@@ -217,7 +237,7 @@ class StrokeRenderer:
 
         reference = self._load_reference_strokes(placement.char)
 
-        if self._inference is not None:
+        if self._inference is not None and reference is not None:
             try:
                 raw = self._inference.generate(
                     self._style_sample,
@@ -230,16 +250,6 @@ class StrokeRenderer:
                 return positioned if is_smooth else self._apply_distortion(positioned)
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
-
-        paren_strokes = self._simple_paren_strokes(original_char, placement)
-        if paren_strokes is not None:
-            cov.geometric.append(original_char)
-            return self._position_strokes(paren_strokes, placement)
-
-        math_strokes = self._math_symbol_strokes(lookup_char)
-        if math_strokes is not None:
-            cov.geometric.append(original_char)
-            return self._position_strokes(math_strokes, placement)
 
         if self._kanjivg_dir is not None:
             char_strokes = self._load_kanjivg_json(placement)
@@ -640,6 +650,366 @@ class StrokeRenderer:
                 y = 0.1 + 0.8 * t
                 points.append([x, y])
             return [np.array(points)]
+        elif char == "\u300c":
+            return [
+                np.array([[0.8, 0.15], [0.25, 0.15]], dtype=np.float64),
+                np.array([[0.25, 0.15], [0.25, 0.45]], dtype=np.float64),
+            ]
+        elif char == "\u300d":
+            return [
+                np.array([[0.75, 0.55], [0.75, 0.85]], dtype=np.float64),
+                np.array([[0.75, 0.85], [0.2, 0.85]], dtype=np.float64),
+            ]
+        elif char == "\u300e":
+            return [
+                np.array([[0.8, 0.15], [0.25, 0.15], [0.25, 0.45]], dtype=np.float64),
+                np.array([[0.65, 0.25], [0.35, 0.25], [0.35, 0.45]], dtype=np.float64),
+            ]
+        elif char == "\u300f":
+            return [
+                np.array([[0.75, 0.55], [0.75, 0.85], [0.2, 0.85]], dtype=np.float64),
+                np.array([[0.65, 0.55], [0.65, 0.75], [0.35, 0.75]], dtype=np.float64),
+            ]
+        return None
+
+    def _math_word_strokes(self, word: str, placement: CharPlacement) -> list[Stroke] | None:
+        supported = {"cos", "sin", "tan", "log", "ln", "exp", "lim", "dx", "dy", "dt"}
+        if word not in supported:
+            return None
+
+        strokes: list[Stroke] = []
+        advance = placement.font_size * 0.55
+        for i, ch in enumerate(word):
+            glyph = self._ascii_letter_strokes(ch)
+            if glyph is None:
+                return None
+            char_placement = CharPlacement(
+                char=ch,
+                x=placement.x + i * advance,
+                y=placement.y,
+                font_size=placement.font_size,
+                page=placement.page,
+            )
+            strokes.extend(self._position_strokes(glyph, char_placement))
+        return strokes
+
+    def _ascii_letter_strokes(self, char: str) -> list[Stroke] | None:
+        if char == "c":
+            t = np.linspace(0.25 * np.pi, 1.75 * np.pi, 24)
+            return [
+                np.stack(
+                    [0.55 + 0.32 * np.cos(t), 0.5 + 0.32 * np.sin(t)],
+                    axis=1,
+                ).astype(np.float64)
+            ]
+        if char == "o":
+            t = np.linspace(0, 2 * np.pi, 28)
+            return [
+                np.stack(
+                    [0.5 + 0.3 * np.cos(t), 0.5 + 0.3 * np.sin(t)],
+                    axis=1,
+                ).astype(np.float64)
+            ]
+        if char == "s":
+            t = np.linspace(0, 1, 30)
+            x = 0.5 + 0.28 * np.sin(2 * np.pi * t)
+            y = 0.85 - 0.7 * t
+            return [np.stack([x, y], axis=1).astype(np.float64)]
+        if char == "i":
+            stem = np.array([[0.5, 0.25], [0.5, 0.7]], dtype=np.float64)
+            return [stem, self._small_dot(0.5, 0.88)]
+        if char == "n":
+            left = np.array([[0.2, 0.2], [0.2, 0.75]], dtype=np.float64)
+            arch = np.array([[0.2, 0.75], [0.5, 0.2], [0.8, 0.75]], dtype=np.float64)
+            return [left, arch]
+        if char == "t":
+            stem = np.array([[0.5, 0.15], [0.5, 0.85]], dtype=np.float64)
+            cross = np.array([[0.25, 0.35], [0.75, 0.35]], dtype=np.float64)
+            return [stem, cross]
+        if char == "a":
+            t = np.linspace(0, 2 * np.pi, 24)
+            body = np.stack(
+                [0.45 + 0.25 * np.cos(t), 0.45 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            tail = np.array([[0.7, 0.2], [0.7, 0.7]], dtype=np.float64)
+            return [body, tail]
+        if char == "l":
+            return [np.array([[0.45, 0.15], [0.45, 0.85]], dtype=np.float64)]
+        if char == "g":
+            t = np.linspace(0, 2 * np.pi, 24)
+            body = np.stack(
+                [0.48 + 0.25 * np.cos(t), 0.45 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            tail = np.array([[0.65, 0.45], [0.6, 0.0], [0.35, 0.05]], dtype=np.float64)
+            return [body, tail]
+        if char == "e":
+            t = np.linspace(0.2 * np.pi, 1.8 * np.pi, 24)
+            body = np.stack(
+                [0.52 + 0.28 * np.cos(t), 0.5 + 0.28 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            bar = np.array([[0.25, 0.5], [0.75, 0.5]], dtype=np.float64)
+            return [body, bar]
+        if char == "x":
+            a = np.array([[0.25, 0.2], [0.75, 0.8]], dtype=np.float64)
+            b = np.array([[0.75, 0.2], [0.25, 0.8]], dtype=np.float64)
+            return [a, b]
+        if char == "p":
+            stem = np.array([[0.25, 0.0], [0.25, 0.85]], dtype=np.float64)
+            t = np.linspace(-np.pi / 2, np.pi / 2, 18)
+            loop = np.stack(
+                [0.25 + 0.45 * np.cos(t), 0.6 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            return [stem, loop]
+        if char == "m":
+            return [
+                np.array(
+                    [[0.15, 0.2], [0.15, 0.75], [0.38, 0.35], [0.6, 0.75], [0.85, 0.2]],
+                    dtype=np.float64,
+                )
+            ]
+        if char == "d":
+            stem = np.array([[0.75, 0.1], [0.75, 0.9]], dtype=np.float64)
+            t = np.linspace(0, 2 * np.pi, 24)
+            body = np.stack(
+                [0.48 + 0.25 * np.cos(t), 0.45 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            return [stem, body]
+        if char == "y":
+            return [
+                np.array([[0.2, 0.75], [0.48, 0.4], [0.75, 0.75]], dtype=np.float64),
+                np.array([[0.48, 0.4], [0.35, 0.0]], dtype=np.float64),
+            ]
+        if char == "b":
+            stem = np.array([[0.25, 0.0], [0.25, 0.95]], dtype=np.float64)
+            t = np.linspace(0, 2 * np.pi, 24)
+            body = np.stack(
+                [0.48 + 0.25 * np.cos(t), 0.25 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            return [stem, body]
+        if char == "f":
+            t = np.linspace(0, np.pi / 2, 12)
+            hook = np.stack(
+                [0.45 + 0.25 * np.sin(t), 0.7 + 0.2 * (1 - np.cos(t))],
+                axis=1,
+            ).astype(np.float64)
+            stem = np.array([[0.45, 0.7], [0.45, 0.0]], dtype=np.float64)
+            cross = np.array([[0.25, 0.5], [0.6, 0.5]], dtype=np.float64)
+            return [hook, stem, cross]
+        if char == "h":
+            stem = np.array([[0.25, 0.0], [0.25, 0.95]], dtype=np.float64)
+            arch = np.array([[0.25, 0.5], [0.5, 0.7], [0.75, 0.5], [0.75, 0.0]], dtype=np.float64)
+            return [stem, arch]
+        if char == "j":
+            stem = np.array([[0.55, 0.7], [0.55, -0.05], [0.4, -0.15]], dtype=np.float64)
+            return [stem, self._small_dot(0.55, 0.88)]
+        if char == "k":
+            stem = np.array([[0.25, 0.0], [0.25, 0.95]], dtype=np.float64)
+            upper = np.array([[0.25, 0.35], [0.7, 0.7]], dtype=np.float64)
+            lower = np.array([[0.4, 0.45], [0.75, 0.0]], dtype=np.float64)
+            return [stem, upper, lower]
+        if char == "q":
+            t = np.linspace(0, 2 * np.pi, 24)
+            body = np.stack(
+                [0.45 + 0.25 * np.cos(t), 0.45 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            tail = np.array([[0.7, 0.45], [0.7, -0.05]], dtype=np.float64)
+            return [body, tail]
+        if char == "r":
+            stem = np.array([[0.3, 0.0], [0.3, 0.7]], dtype=np.float64)
+            hook = np.array([[0.3, 0.55], [0.5, 0.7], [0.7, 0.55]], dtype=np.float64)
+            return [stem, hook]
+        if char == "u":
+            t = np.linspace(np.pi, 2 * np.pi, 16)
+            cup = np.stack(
+                [0.5 + 0.3 * np.cos(t), 0.3 + 0.3 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            right = np.array([[0.8, 0.3], [0.8, 0.0]], dtype=np.float64)
+            top_left = np.array([[0.2, 0.7], [0.2, 0.3]], dtype=np.float64)
+            return [top_left, cup, right]
+        if char == "v":
+            return [np.array([[0.2, 0.7], [0.5, 0.0], [0.8, 0.7]], dtype=np.float64)]
+        if char == "w":
+            return [
+                np.array(
+                    [[0.1, 0.7], [0.3, 0.0], [0.5, 0.45], [0.7, 0.0], [0.9, 0.7]],
+                    dtype=np.float64,
+                )
+            ]
+        if char == "z":
+            return [
+                np.array([[0.2, 0.7], [0.8, 0.7], [0.2, 0.05], [0.8, 0.05]], dtype=np.float64)
+            ]
+        if char == "A":
+            left = np.array([[0.2, 0.0], [0.5, 0.95]], dtype=np.float64)
+            right = np.array([[0.5, 0.95], [0.8, 0.0]], dtype=np.float64)
+            cross = np.array([[0.3, 0.35], [0.7, 0.35]], dtype=np.float64)
+            return [left, right, cross]
+        if char == "B":
+            stem = np.array([[0.2, 0.0], [0.2, 0.95]], dtype=np.float64)
+            t = np.linspace(-np.pi / 2, np.pi / 2, 14)
+            upper = np.stack(
+                [0.2 + 0.4 * np.cos(t), 0.7 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            lower = np.stack(
+                [0.2 + 0.45 * np.cos(t), 0.225 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            return [stem, upper, lower]
+        if char == "C":
+            t = np.linspace(0.25 * np.pi, 1.75 * np.pi, 28)
+            return [
+                np.stack(
+                    [0.55 + 0.38 * np.cos(t), 0.5 + 0.45 * np.sin(t)],
+                    axis=1,
+                ).astype(np.float64)
+            ]
+        if char == "D":
+            stem = np.array([[0.2, 0.0], [0.2, 0.95]], dtype=np.float64)
+            t = np.linspace(-np.pi / 2, np.pi / 2, 20)
+            arc = np.stack(
+                [0.2 + 0.55 * np.cos(t), 0.475 + 0.475 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            return [stem, arc]
+        if char == "E":
+            stem = np.array([[0.2, 0.0], [0.2, 0.95]], dtype=np.float64)
+            top = np.array([[0.2, 0.95], [0.8, 0.95]], dtype=np.float64)
+            mid = np.array([[0.2, 0.5], [0.7, 0.5]], dtype=np.float64)
+            bot = np.array([[0.2, 0.0], [0.8, 0.0]], dtype=np.float64)
+            return [stem, top, mid, bot]
+        if char == "F":
+            stem = np.array([[0.2, 0.0], [0.2, 0.95]], dtype=np.float64)
+            top = np.array([[0.2, 0.95], [0.8, 0.95]], dtype=np.float64)
+            mid = np.array([[0.2, 0.5], [0.7, 0.5]], dtype=np.float64)
+            return [stem, top, mid]
+        if char == "G":
+            t = np.linspace(0.25 * np.pi, 1.75 * np.pi, 28)
+            arc = np.stack(
+                [0.55 + 0.38 * np.cos(t), 0.5 + 0.45 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            inner = np.array([[0.55, 0.5], [0.85, 0.5], [0.85, 0.1]], dtype=np.float64)
+            return [arc, inner]
+        if char == "H":
+            left = np.array([[0.2, 0.0], [0.2, 0.95]], dtype=np.float64)
+            right = np.array([[0.8, 0.0], [0.8, 0.95]], dtype=np.float64)
+            cross = np.array([[0.2, 0.5], [0.8, 0.5]], dtype=np.float64)
+            return [left, right, cross]
+        if char == "I":
+            stem = np.array([[0.5, 0.0], [0.5, 0.95]], dtype=np.float64)
+            top = np.array([[0.3, 0.95], [0.7, 0.95]], dtype=np.float64)
+            bot = np.array([[0.3, 0.0], [0.7, 0.0]], dtype=np.float64)
+            return [stem, top, bot]
+        if char == "J":
+            stem = np.array([[0.65, 0.95], [0.65, 0.2]], dtype=np.float64)
+            t = np.linspace(0, np.pi, 14)
+            curl = np.stack(
+                [0.45 + 0.2 * np.cos(t), 0.2 - 0.15 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            return [stem, curl]
+        if char == "K":
+            stem = np.array([[0.2, 0.0], [0.2, 0.95]], dtype=np.float64)
+            upper = np.array([[0.2, 0.5], [0.8, 0.95]], dtype=np.float64)
+            lower = np.array([[0.4, 0.6], [0.85, 0.0]], dtype=np.float64)
+            return [stem, upper, lower]
+        if char == "L":
+            stem = np.array([[0.2, 0.95], [0.2, 0.0]], dtype=np.float64)
+            bot = np.array([[0.2, 0.0], [0.8, 0.0]], dtype=np.float64)
+            return [stem, bot]
+        if char == "M":
+            return [
+                np.array(
+                    [[0.15, 0.0], [0.15, 0.95], [0.5, 0.3], [0.85, 0.95], [0.85, 0.0]],
+                    dtype=np.float64,
+                )
+            ]
+        if char == "N":
+            left = np.array([[0.2, 0.0], [0.2, 0.95]], dtype=np.float64)
+            diag = np.array([[0.2, 0.95], [0.8, 0.0]], dtype=np.float64)
+            right = np.array([[0.8, 0.0], [0.8, 0.95]], dtype=np.float64)
+            return [left, diag, right]
+        if char == "O":
+            t = np.linspace(0, 2 * np.pi, 32)
+            return [
+                np.stack(
+                    [0.5 + 0.35 * np.cos(t), 0.5 + 0.45 * np.sin(t)],
+                    axis=1,
+                ).astype(np.float64)
+            ]
+        if char == "P":
+            stem = np.array([[0.2, 0.0], [0.2, 0.95]], dtype=np.float64)
+            t = np.linspace(-np.pi / 2, np.pi / 2, 14)
+            loop = np.stack(
+                [0.2 + 0.45 * np.cos(t), 0.7 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            return [stem, loop]
+        if char == "Q":
+            t = np.linspace(0, 2 * np.pi, 32)
+            body = np.stack(
+                [0.5 + 0.35 * np.cos(t), 0.5 + 0.45 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            tail = np.array([[0.55, 0.2], [0.85, -0.05]], dtype=np.float64)
+            return [body, tail]
+        if char == "R":
+            stem = np.array([[0.2, 0.0], [0.2, 0.95]], dtype=np.float64)
+            t = np.linspace(-np.pi / 2, np.pi / 2, 14)
+            loop = np.stack(
+                [0.2 + 0.45 * np.cos(t), 0.7 + 0.25 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            leg = np.array([[0.4, 0.45], [0.85, 0.0]], dtype=np.float64)
+            return [stem, loop, leg]
+        if char == "S":
+            t = np.linspace(0, 1, 32)
+            x = 0.5 + 0.32 * np.sin(2 * np.pi * t)
+            y = 0.95 - 0.9 * t
+            return [np.stack([x, y], axis=1).astype(np.float64)]
+        if char == "T":
+            top = np.array([[0.15, 0.95], [0.85, 0.95]], dtype=np.float64)
+            stem = np.array([[0.5, 0.95], [0.5, 0.0]], dtype=np.float64)
+            return [top, stem]
+        if char == "U":
+            left = np.array([[0.2, 0.95], [0.2, 0.3]], dtype=np.float64)
+            t = np.linspace(np.pi, 2 * np.pi, 18)
+            cup = np.stack(
+                [0.5 + 0.3 * np.cos(t), 0.3 + 0.3 * np.sin(t)],
+                axis=1,
+            ).astype(np.float64)
+            right = np.array([[0.8, 0.3], [0.8, 0.95]], dtype=np.float64)
+            return [left, cup, right]
+        if char == "V":
+            return [np.array([[0.15, 0.95], [0.5, 0.0], [0.85, 0.95]], dtype=np.float64)]
+        if char == "W":
+            return [
+                np.array(
+                    [[0.1, 0.95], [0.3, 0.0], [0.5, 0.6], [0.7, 0.0], [0.9, 0.95]],
+                    dtype=np.float64,
+                )
+            ]
+        if char == "X":
+            d1 = np.array([[0.2, 0.0], [0.8, 0.95]], dtype=np.float64)
+            d2 = np.array([[0.8, 0.0], [0.2, 0.95]], dtype=np.float64)
+            return [d1, d2]
+        if char == "Y":
+            v = np.array([[0.2, 0.95], [0.5, 0.5], [0.8, 0.95]], dtype=np.float64)
+            stem = np.array([[0.5, 0.5], [0.5, 0.0]], dtype=np.float64)
+            return [v, stem]
+        if char == "Z":
+            return [
+                np.array([[0.2, 0.95], [0.8, 0.95], [0.2, 0.0], [0.8, 0.0]], dtype=np.float64)
+            ]
         return None
 
     def _load_reference_strokes(self, char: str) -> list[Stroke] | None:

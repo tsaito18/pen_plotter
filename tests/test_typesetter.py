@@ -884,6 +884,58 @@ class TestInlineMath:
         for pa, pp in zip(pages_aug[0], pages_plain[0]):
             assert pa.font_size == pp.font_size
 
+    def test_math_baseline_matches_augmented_text_line(self):
+        class FixedBaselineAugmenter:
+            def augment_char_placement(
+                self, x: float, y: float, font_size: float
+            ) -> tuple[float, float, float]:
+                return x, y + 2.5, font_size
+
+            def get_line_density_scale(self) -> float:
+                return 1.0
+
+            def get_char_density_scale(self) -> float:
+                return 1.0
+
+        ts = Typesetter(PageConfig(), font_size=7.0, augmenter=FixedBaselineAugmenter())
+        placements = ts.typeset(r"あ$x$い")[0]
+        y_by_char = {p.char: p.y for p in placements}
+
+        assert y_by_char["x"] == pytest.approx(y_by_char["あ"])
+        assert y_by_char["x"] == pytest.approx(y_by_char["い"])
+
+    def test_inline_operator_kept_as_word_placement(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset(r"$\cos 2x$")[0]
+
+        assert placements[0].char == "cos"
+        assert placements[0].role == "operator"
+        assert [p.char for p in placements[1:]] == [" ", "2", "x"]
+
+    def test_inline_math_wrap_uses_math_layout_width(self):
+        cfg = PageConfig(
+            paper_size=(42.0, 80.0),
+            margin_left=5.0,
+            margin_right=5.0,
+            margin_top=5.0,
+            margin_bottom=5.0,
+        )
+        ts = Typesetter(cfg, font_size=7.0)
+        placements = ts.typeset(r"ああ$\frac{1}{2}$あああ")[0]
+        lines: dict[float, list[str]] = {}
+        for p in placements:
+            if p.line_segment is not None:
+                continue
+            lines.setdefault(p.y, []).append(p.char)
+
+        baseline_line = max(
+            (chars for chars in lines.values() if "あ" in chars),
+            key=lambda chars: chars.count("あ"),
+        )
+        assert baseline_line.count("あ") == 4
+        assert any("1" in chars for chars in lines.values())
+        assert any("2" in chars for chars in lines.values())
+
     def test_multiple_inline_math(self):
         """複数のインライン数式が1行に含まれる場合。"""
         ts = Typesetter(PageConfig(), font_size=7.0)

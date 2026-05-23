@@ -98,6 +98,7 @@ _BLOCK_MATH_RE = re.compile(r'\$\$(.*?)\$\$', re.DOTALL)
 # ブロック数式を段落分割前に抽出するためのプレースホルダ（NULL文字で前後を囲み通常テキストと衝突しない形に）
 _BLOCK_MATH_PLACEHOLDER_PREFIX = "\x00BLK\x00"
 _BLOCK_MATH_PLACEHOLDER_SUFFIX = "\x00BLK\x00"
+_INLINE_MATH_PLACEHOLDER_BASE = 0xE000
 
 
 def _split_segments(text: str) -> list[tuple[str, str]]:
@@ -203,6 +204,19 @@ class Typesetter:
                 if ch != "\n"
             )
         return total
+
+    def _inline_math_break_text(self, text: str) -> tuple[str, dict[str, str]]:
+        placeholders: dict[str, str] = {}
+        parts: list[str] = []
+        last_end = 0
+        for idx, match in enumerate(_INLINE_MATH_RE.finditer(text)):
+            parts.append(text[last_end:match.start()])
+            placeholder = chr(_INLINE_MATH_PLACEHOLDER_BASE + idx)
+            placeholders[placeholder] = match.group(1)
+            parts.append(placeholder)
+            last_end = match.end()
+        parts.append(text[last_end:])
+        return "".join(parts), placeholders
 
     def typeset(self, text: str) -> list[list[CharPlacement]]:
         if not text:
@@ -372,9 +386,7 @@ class Typesetter:
                 else:
                     if not part:
                         continue
-                    stripped = _INLINE_MATH_RE.sub(
-                        lambda m: m.group(1).replace(' ', '\x00'), part
-                    )
+                    break_text, math_placeholders = self._inline_math_break_text(part)
                     is_heading = heading_level > 0
                     if is_heading:
                         line_x = _HEADING_X.get(heading_level, area.x)
@@ -382,17 +394,26 @@ class Typesetter:
                             self.font_size * _HEADING_FONT_SCALES[heading_level]
                         )
 
-                        def width_fn(_ch: str) -> float:
+                        def width_fn(ch: str) -> float:
+                            if ch in math_placeholders:
+                                return self._inline_math_width(math_placeholders[ch])
                             return line_font_size
                     else:
                         line_x = _BODY_X.get(current_body_level, area.x)
-                        width_fn = self._body_char_advance
+
+                        def width_fn(ch: str) -> float:
+                            if ch in math_placeholders:
+                                return self._inline_math_width(math_placeholders[ch])
+                            return self._body_char_advance(ch)
+
                     line_width = (
                         self._line_right_x(area, is_heading, current_body_level)
                         - line_x
                     )
-                    broken = break_paragraph_by_width(stripped, line_width, width_fn)
-                    result_lines = self._rebuild_lines_with_math(part, broken)
+                    broken = break_paragraph_by_width(break_text, line_width, width_fn)
+                    result_lines = self._rebuild_lines_with_math(
+                        part, broken, math_placeholders
+                    )
                     if heading_level > 0:
                         for i in range(len(result_lines)):
                             heading_lines[len(lines) + i] = heading_level
@@ -459,7 +480,7 @@ class Typesetter:
         for seg_type, seg_content in segments:
             if seg_type == "math":
                 math_x = x
-                x = self._place_math(seg_content, x, y, page_idx, output)
+                x = self._place_math(seg_content, x, line_y, page_idx, output)
                 neutral_remaining -= x - math_x
                 prev_halfwidth = False
             else:
@@ -671,7 +692,7 @@ class Typesetter:
                     font_size=mp.font_size, page=page_idx,
                     role=mp.role, line_segment=mp.line_segment,
                 ))
-            elif len(mp.text) == 1:
+            elif len(mp.text) == 1 or mp.role == "operator":
                 output.append(CharPlacement(
                     char=mp.text, x=mp.x, y=mp.y,
                     font_size=mp.font_size, page=page_idx,
@@ -693,13 +714,27 @@ class Typesetter:
 
     @staticmethod
     def _rebuild_lines_with_math(
-        original: str, broken_lines: list[str]
+        original: str,
+        broken_lines: list[str],
+        math_placeholders: dict[str, str] | None = None,
     ) -> list[str]:
         """break_paragraphの結果を元テキスト（$付き）に復元する。
 
         break_paragraphには$を除去・スペース→\\x00変換したテキストを渡している。
         broken_linesの各行の文字数を使って、元テキストから対応部分を切り出す。
         """
+        if math_placeholders is not None:
+            result: list[str] = []
+            for bline in broken_lines:
+                parts: list[str] = []
+                for ch in bline:
+                    if ch in math_placeholders:
+                        parts.append(f"${math_placeholders[ch]}$")
+                    else:
+                        parts.append(ch)
+                result.append("".join(parts))
+            return result if result else [""]
+
         segments = _split_segments(original)
         # 元テキストをフラットな文字列として、$なしの文字列を作る
         flat_no_dollar: list[str] = []

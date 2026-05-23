@@ -411,7 +411,7 @@ class StrokeInference:
         from src.model.finetune import OFFSET_CLAMP, smooth_offsets
 
         if reference_strokes is None or len(reference_strokes) == 0:
-            return [np.array([[0.0, 0.0], [1.0, 1.0]])]
+            raise ValueError("V3 inference requires reference_strokes")
 
         if self.norm_stats is not None:
             style_sample = normalize_deltas(style_sample, self.norm_stats)
@@ -431,7 +431,7 @@ class StrokeInference:
             batch_indices.append(i)
 
         if not batch_refs:
-            return [np.array([[0.0, 0.0], [1.0, 1.0]])]
+            raise ValueError("V3 inference requires at least one valid reference stroke")
 
         ref_batch = torch.tensor(np.stack(batch_refs), dtype=torch.float32, device=self.device)
         idx_batch = torch.tensor(batch_indices, device=self.device)

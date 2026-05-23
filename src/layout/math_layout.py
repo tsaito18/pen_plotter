@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
+logger = logging.getLogger(__name__)
 
 # LaTeX コマンド → Unicode 記号の変換マップ。
 # 旧実装ではコマンド名がそのまま symbol.content に入りプレビューで
@@ -18,24 +20,32 @@ _LATEX_SYMBOL_MAP: dict[str, str] = {
     "zeta": "ζ",
     "eta": "η",
     "theta": "θ",
+    "iota": "ι",
+    "kappa": "κ",
     "lambda": "λ",
     "mu": "μ",
     "nu": "ν",
+    "xi": "ξ",
     "pi": "π",
     "rho": "ρ",
     "sigma": "σ",
     "tau": "τ",
+    "upsilon": "υ",
     "phi": "φ",
     "chi": "χ",
     "psi": "ψ",
     "omega": "ω",
+    "varepsilon": "ε",
+    "varphi": "φ",
     # ギリシャ大文字
     "Gamma": "Γ",
     "Delta": "Δ",
     "Theta": "Θ",
     "Lambda": "Λ",
+    "Xi": "Ξ",
     "Pi": "Π",
     "Sigma": "Σ",
+    "Upsilon": "Υ",
     "Phi": "Φ",
     "Psi": "Ψ",
     "Omega": "Ω",
@@ -67,11 +77,31 @@ _LATEX_SYMBOL_MAP: dict[str, str] = {
 # `\,` `\;` `\:` のような 1 文字スペースコマンド。`_read_command` は
 # isalpha のみ拾うので、これらは別経路で処理する必要がある。
 _LATEX_SHORT_SPACES: set[str] = {",", ";", ":"}
+_LATEX_OPERATORS: dict[str, str] = {
+    "cos": "cos",
+    "sin": "sin",
+    "tan": "tan",
+    "log": "log",
+    "ln": "ln",
+    "exp": "exp",
+    "lim": "lim",
+}
+_LATEX_TEXT_COMMANDS: set[str] = {"mathrm", "text", "mathbf", "mathit"}
+_LATEX_ACCENTS: set[str] = {
+    "bar",
+    "overline",
+    "hat",
+    "widehat",
+    "tilde",
+    "vec",
+    "dot",
+    "ddot",
+}
 
 
 @dataclass
 class MathElement:
-    type: str  # "text", "frac", "sup", "sub", "sqrt", "symbol", "group"
+    type: str  # "text", "frac", "sup", "sub", "sqrt", "symbol", "group", "operator", "accent"
     content: str = ""
     numerator: Optional[MathElement] = None
     denominator: Optional[MathElement] = None
@@ -197,13 +227,40 @@ class _ParserState:
                 elif cmd == "tag":
                     tag_inner = self._read_braced()
                     elements.append(MathElement(type="tag", content=f"({tag_inner})"))
+                elif cmd in ("left", "right"):
+                    delimiter = self._peek()
+                    if delimiter is not None:
+                        self._advance()
+                        if delimiter != ".":
+                            elements.append(MathElement(type="text", content=delimiter))
+                elif cmd in _LATEX_TEXT_COMMANDS:
+                    if self._peek() == "{":
+                        inner_src = self._read_braced()
+                    else:
+                        logger.warning("LaTeX command \\%s missing braced argument", cmd)
+                        continue
+                    inner_children = _ParserState(inner_src).parse_elements()
+                    elements.append(MathElement(type="group", children=inner_children))
+                elif cmd in _LATEX_ACCENTS:
+                    inner_src = self._read_script_argument()
+                    inner_children = _ParserState(inner_src).parse_elements()
+                    elements.append(
+                        MathElement(
+                            type="accent",
+                            content=cmd,
+                            children=inner_children,
+                        )
+                    )
+                elif cmd in _LATEX_OPERATORS:
+                    elements.append(
+                        MathElement(type="operator", content=_LATEX_OPERATORS[cmd])
+                    )
                 elif cmd in _LATEX_SYMBOL_MAP:
                     elements.append(
                         MathElement(type="symbol", content=_LATEX_SYMBOL_MAP[cmd])
                     )
                 else:
-                    # 未知コマンドはコマンド名そのまま（フォールバック）
-                    elements.append(MathElement(type="symbol", content=cmd))
+                    logger.warning("Unsupported LaTeX command ignored: \\%s", cmd)
 
             elif ch == "^":
                 flush_text()
@@ -220,6 +277,9 @@ class _ParserState:
                 elements.append(MathElement(type="sub", children=sub_children))
 
             elif ch == "{" or ch == "}":
+                self._advance()
+
+            elif ch == "\n":
                 self._advance()
 
             else:
@@ -313,6 +373,24 @@ class MathLayoutEngine:
                 descent=font_size * 0.25,
             )
 
+        if elem.type == "operator":
+            text = elem.content
+            width = len(text) * font_size * _CHAR_WIDTH_RATIO
+            return MathBox(
+                placements=[
+                    MathPlacement(
+                        text=text,
+                        x=x,
+                        y=y,
+                        font_size=font_size,
+                        role="operator",
+                    )
+                ],
+                width=width,
+                ascent=font_size * 0.75,
+                descent=font_size * 0.25,
+            )
+
         if elem.type == "group":
             return MathLayoutEngine.layout(elem.children, x, y, font_size)
 
@@ -327,6 +405,9 @@ class MathLayoutEngine:
 
         if elem.type == "sqrt":
             return MathLayoutEngine._layout_sqrt(elem, x, y, font_size)
+
+        if elem.type == "accent":
+            return MathLayoutEngine._layout_accent(elem, x, y, font_size)
 
         return MathBox(placements=[], width=0.0, ascent=0.0, descent=0.0)
 
@@ -499,6 +580,60 @@ class MathLayoutEngine:
             placements=placements,
             width=prefix + child_box.width + suffix,
             ascent=child_box.ascent,
+            descent=child_box.descent,
+        )
+
+    @staticmethod
+    def _layout_accent(
+        elem: MathElement, x: float, y: float, font_size: float
+    ) -> MathBox:
+        child_box = MathLayoutEngine.layout(elem.children, x=x, y=y, font_size=font_size)
+        width = max(child_box.width, font_size * 0.5)
+        gap = font_size * 0.12
+        accent_y = y + child_box.ascent + gap
+        left = x
+        right = x + width
+        mid = (left + right) / 2
+        role = f"accent_{elem.content}"
+
+        placements = list(child_box.placements)
+
+        def add_segment(seg: tuple[float, float, float, float]) -> None:
+            placements.append(
+                MathPlacement(
+                    text="",
+                    x=seg[0],
+                    y=seg[1],
+                    font_size=font_size,
+                    role=role,
+                    line_segment=seg,
+                )
+            )
+
+        if elem.content in ("bar", "overline"):
+            add_segment((left, accent_y, right, accent_y))
+        elif elem.content in ("hat", "widehat"):
+            add_segment((left, accent_y - gap, mid, accent_y + gap))
+            add_segment((mid, accent_y + gap, right, accent_y - gap))
+        elif elem.content == "vec":
+            add_segment((left, accent_y, right, accent_y))
+            add_segment((right, accent_y, right - font_size * 0.18, accent_y + gap))
+            add_segment((right, accent_y, right - font_size * 0.18, accent_y - gap))
+        elif elem.content == "ddot":
+            dot_w = font_size * 0.08
+            add_segment((mid - font_size * 0.12, accent_y, mid - font_size * 0.12 + dot_w, accent_y))
+            add_segment((mid + font_size * 0.12, accent_y, mid + font_size * 0.12 + dot_w, accent_y))
+        elif elem.content == "dot":
+            dot_w = font_size * 0.08
+            add_segment((mid, accent_y, mid + dot_w, accent_y))
+        else:
+            add_segment((left, accent_y, right, accent_y))
+
+        ascent = max(child_box.ascent, accent_y + gap - y)
+        return MathBox(
+            placements=placements,
+            width=width,
+            ascent=ascent,
             descent=child_box.descent,
         )
 

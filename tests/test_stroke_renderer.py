@@ -4,6 +4,7 @@ import json
 import numpy as np
 import pytest
 
+from src.layout.typesetter import CharPlacement
 from src.ui.stroke_renderer import StrokeRenderer
 
 
@@ -150,13 +151,102 @@ class TestAsciiMathSymbols:
 
     def test_fullwidth_normalized_to_ascii(self):
         """全角プラスも幾何ルートで処理される（_CHAR_SUBSTITUTIONS 経由）。"""
-        from src.layout.typesetter import CharPlacement
-
         renderer = StrokeRenderer()
         placement = CharPlacement(char="＋", x=0.0, y=0.0, font_size=8.0, page=0)
         strokes = renderer.generate_char_strokes(placement)
         is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
         assert not is_rect_fallback
+
+
+class _FailingInference:
+    def __init__(self, exc: Exception | None = None) -> None:
+        self.exc = exc or AssertionError("ML inference should not be called")
+        self.calls = 0
+
+    def generate(self, *args, **kwargs):
+        self.calls += 1
+        raise self.exc
+
+
+class TestGeometricFallbackOrder:
+    """句読点・括弧は ML 推論より前に幾何描画する。"""
+
+    @pytest.mark.parametrize("char", ["「", "」", "『", "』", "（", "）", "(", ")", "."])
+    def test_brackets_and_punctuation_render_geometric_not_rect(self, char):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert len(strokes) > 0
+        is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
+        assert not is_rect_fallback, f"'{char}' fell back to rect"
+        assert renderer._last_coverage.geometric == [char]
+        assert renderer._last_coverage.rect_fallback == []
+
+    @pytest.mark.parametrize("char", ["「", "」", "『", "』", "（", "）", "(", ")"])
+    def test_geometric_brackets_do_not_call_ml_inference(self, char):
+        renderer = StrokeRenderer()
+        fake = _FailingInference()
+        renderer._inference = fake
+        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+
+        renderer.generate_char_strokes(placement)
+
+        assert fake.calls == 0
+        assert renderer._last_coverage.geometric == [char]
+
+    def test_inference_without_reference_is_skipped_and_falls_back_to_rect(self):
+        renderer = StrokeRenderer()
+        fake = _FailingInference(ValueError("missing reference"))
+        renderer._inference = fake
+        placement = CharPlacement(char="漢", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert fake.calls == 0
+        assert len(strokes) == 1
+        assert strokes[0].shape == (5, 2)
+        assert renderer._last_coverage.rect_fallback == ["漢"]
+
+    def test_lambda_without_reference_uses_geometric_before_ml(self):
+        renderer = StrokeRenderer()
+        fake = _FailingInference()
+        renderer._inference = fake
+        placement = CharPlacement(char="λ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert fake.calls == 0
+        assert len(strokes) > 0
+        assert renderer._last_coverage.geometric == ["λ"]
+        assert renderer._last_coverage.ml_inference == []
+        assert renderer._last_coverage.rect_fallback == []
+
+    @pytest.mark.parametrize("word", ["cos", "sin", "log", "dx"])
+    def test_math_words_render_geometric(self, word):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char=word, x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert len(strokes) >= len(word)
+        assert renderer._last_coverage.geometric == [word]
+        assert renderer._last_coverage.rect_fallback == []
+
+    @pytest.mark.parametrize(
+        "char",
+        list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+    )
+    def test_single_ascii_letter_renders_geometric(self, char):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert len(strokes) > 0
+        assert renderer._last_coverage.geometric == [char]
+        assert renderer._last_coverage.rect_fallback == []
 
 
 class TestExtendedMathSymbols:

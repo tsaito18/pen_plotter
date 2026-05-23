@@ -434,10 +434,15 @@ class TestStrokeInferenceV3:
             assert s.ndim == 2
             assert s.shape[1] == 2 and s.shape[0] >= 3
 
-    def test_v3_no_reference_returns_fallback(self, v3_engine):
+    def test_v3_no_reference_raises_value_error(self, v3_engine):
         style_sample = torch.randn(1, 10, 3)
-        strokes = v3_engine.generate(style_sample=style_sample, reference_strokes=None)
-        assert len(strokes) == 1
+        with pytest.raises(ValueError, match="requires reference_strokes"):
+            v3_engine.generate(style_sample=style_sample, reference_strokes=None)
+
+    def test_v3_empty_reference_raises_value_error(self, v3_engine):
+        style_sample = torch.randn(1, 10, 3)
+        with pytest.raises(ValueError, match="requires reference_strokes"):
+            v3_engine.generate(style_sample=style_sample, reference_strokes=[])
 
     def test_v3_output_finite(self, v3_engine):
         style_sample = torch.randn(1, 15, 3)
@@ -510,18 +515,17 @@ class TestStrokeInferenceV3:
             assert isinstance(s, np.ndarray)
             assert s.shape[1] == 2 and s.shape[0] >= 3
 
-    def test_v3_all_short_strokes_returns_fallback(self, v3_engine):
-        """If all strokes are too short, return fallback."""
+    def test_v3_all_short_strokes_raises_value_error(self, v3_engine):
+        """If all strokes are too short, inference reports missing usable references."""
         style_sample = torch.randn(1, 10, 3)
         reference = [
             np.array([[0.5, 0.5]], dtype=np.float64),
         ]
-        strokes = v3_engine.generate(
-            style_sample=style_sample,
-            reference_strokes=reference,
-        )
-        assert len(strokes) == 1
-        assert strokes[0].shape == (2, 2)
+        with pytest.raises(ValueError, match="valid reference stroke"):
+            v3_engine.generate(
+                style_sample=style_sample,
+                reference_strokes=reference,
+            )
 
 
 class TestStrokeInferenceV3Offset:
