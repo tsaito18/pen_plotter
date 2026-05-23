@@ -16,6 +16,8 @@ from src.model.train import TrainConfig
 
 logger = logging.getLogger(__name__)
 
+MAX_STYLE_POINTS = 4096
+
 
 @lru_cache(maxsize=1)
 def _cuda_is_usable() -> bool:
@@ -41,6 +43,22 @@ def _detect_device(device: str | torch.device | None = None) -> torch.device:
     if hasattr(torch, "xpu") and torch.xpu.is_available():
         return torch.device("xpu")
     return torch.device("cpu")
+
+
+def _limit_style_sample(
+    style_sample: torch.Tensor,
+    max_points: int = MAX_STYLE_POINTS,
+) -> torch.Tensor:
+    """Keep inference style sequences within GPU LSTM limits."""
+    if style_sample.ndim != 3 or style_sample.shape[1] <= max_points:
+        return style_sample.contiguous()
+    indices = torch.linspace(
+        0,
+        style_sample.shape[1] - 1,
+        max_points,
+        device=style_sample.device,
+    ).round().long()
+    return style_sample.index_select(1, indices).contiguous()
 
 
 class StrokeInference:
@@ -209,11 +227,11 @@ class StrokeInference:
         if self.version == 3:
             return self._generate_v3(style_sample, reference_strokes, noise_scale)
 
-        style_sample = style_sample.to(self.device)
         if self.norm_stats is not None:
             from src.model.data_utils import normalize_deltas
 
             style_sample = normalize_deltas(style_sample, self.norm_stats)
+        style_sample = _limit_style_sample(style_sample).to(self.device)
 
         style = self.style_encoder(style_sample)
 
@@ -398,7 +416,7 @@ class StrokeInference:
         if self.norm_stats is not None:
             style_sample = normalize_deltas(style_sample, self.norm_stats)
 
-        style_sample = style_sample.to(self.device)
+        style_sample = _limit_style_sample(style_sample).to(self.device)
         style = self.style_encoder(style_sample)
 
         batch_refs: list[NDArray[np.float32]] = []

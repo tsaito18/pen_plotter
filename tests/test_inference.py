@@ -4,9 +4,28 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from src.model.char_encoder import CharEncoder  # noqa: E402
-from src.model.inference import StrokeInference, _detect_device  # noqa: E402
+from src.model.inference import StrokeInference, _detect_device, _limit_style_sample  # noqa: E402
 from src.model.stroke_model import StrokeGenerator  # noqa: E402
 from src.model.style_encoder import StyleEncoder  # noqa: E402
+
+
+def test_limit_style_sample_keeps_short_sequence_contiguous():
+    style_sample = torch.randn(1, 20, 3).transpose(1, 2).transpose(1, 2)
+
+    result = _limit_style_sample(style_sample, max_points=32)
+
+    assert result.shape == (1, 20, 3)
+    assert result.is_contiguous()
+
+
+def test_limit_style_sample_downsamples_long_sequence():
+    style_sample = torch.arange(30, dtype=torch.float32).reshape(1, 10, 3)
+
+    result = _limit_style_sample(style_sample, max_points=4)
+
+    assert result.shape == (1, 4, 3)
+    assert result.is_contiguous()
+    assert torch.equal(result[0, :, 0], torch.tensor([0.0, 9.0, 18.0, 27.0]))
 
 
 class TestStrokeInference:

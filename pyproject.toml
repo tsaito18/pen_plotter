@@ -14,10 +14,23 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ml = ["torch", "torchvision", "scipy"]
+ml = ["torch==2.10.0", "torchvision==0.25.0", "scipy"]
 ui = ["gradio"]
 dev = ["pytest", "ruff"]
 build = ["pyinstaller"]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
 
 [tool.ruff]
 line-length = 100
