@@ -66,6 +66,22 @@ class TestParseSvgPath:
         assert points[-1][1] == pytest.approx(54.75, abs=0.1)
         assert points[:, 0].max() - points[:, 0].min() > 10
 
+    def test_parse_repeated_relative_cubic_groups(self):
+        points = parse_svg_path("M 0,0 c 10,0 10,10 20,10 10,0 10,10 20,10")
+
+        assert len(points) == 19
+        assert np.allclose(points[0], [0.0, 0.0])
+        assert np.allclose(points[-1], [40.0, 20.0])
+        assert points[:, 0].max() == pytest.approx(40.0)
+        assert points[:, 1].max() == pytest.approx(20.0)
+
+    def test_parse_repeated_smooth_cubic_groups_preserves_last_control(self):
+        points = parse_svg_path("M 0,0 C 5,0 10,0 10,10 S 20,20 30,10 40,0 50,10")
+
+        assert len(points) == 28
+        assert np.allclose(points[-1], [50.0, 10.0])
+        assert points[:, 0].max() == pytest.approx(50.0)
+
 
 class TestKanjiVGParser:
     def test_parse_svg_string(self):

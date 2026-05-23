@@ -38,6 +38,10 @@ def _tokenize_svg_path(d: str) -> list[str]:
     return re.findall(r"[MmLlCcSsZz]|[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", d)
 
 
+def _is_path_command(token: str) -> bool:
+    return bool(re.fullmatch(r"[MmLlCcSsZz]", token))
+
+
 def parse_svg_path(d: str) -> NDArray[np.float64]:
     """SVG pathのd属性文字列をパースして(N, 2)座標配列に変換。
 
@@ -51,66 +55,82 @@ def parse_svg_path(d: str) -> NDArray[np.float64]:
     current = (0.0, 0.0)
     last_control: tuple[float, float] | None = None
     i = 0
+    cmd: str | None = None
 
     while i < len(tokens):
-        cmd = tokens[i]
-        i += 1
+        if _is_path_command(tokens[i]):
+            cmd = tokens[i]
+            i += 1
+        elif cmd is None:
+            break
 
         if cmd in ("M", "m"):
-            x, y = float(tokens[i]), float(tokens[i + 1])
-            i += 2
-            if cmd == "m":
-                x += current[0]
-                y += current[1]
-            current = (x, y)
-            points.append(current)
+            is_relative = cmd == "m"
+            is_first_pair = True
+            while i + 1 < len(tokens) and not _is_path_command(tokens[i]):
+                x, y = float(tokens[i]), float(tokens[i + 1])
+                i += 2
+                if is_relative:
+                    x += current[0]
+                    y += current[1]
+                current = (x, y)
+                points.append(current)
+                if is_first_pair:
+                    is_first_pair = False
+                    last_control = None
+                    cmd = "l" if is_relative else "L"
+                    continue
+                last_control = None
             last_control = None
 
         elif cmd in ("L", "l"):
-            x, y = float(tokens[i]), float(tokens[i + 1])
-            i += 2
-            if cmd == "l":
-                x += current[0]
-                y += current[1]
-            current = (x, y)
-            points.append(current)
+            while i + 1 < len(tokens) and not _is_path_command(tokens[i]):
+                x, y = float(tokens[i]), float(tokens[i + 1])
+                i += 2
+                if cmd == "l":
+                    x += current[0]
+                    y += current[1]
+                current = (x, y)
+                points.append(current)
             last_control = None
 
         elif cmd in ("C", "c"):
-            x1, y1 = float(tokens[i]), float(tokens[i + 1])
-            x2, y2 = float(tokens[i + 2]), float(tokens[i + 3])
-            x3, y3 = float(tokens[i + 4]), float(tokens[i + 5])
-            i += 6
-            if cmd == "c":
-                x1 += current[0]
-                y1 += current[1]
-                x2 += current[0]
-                y2 += current[1]
-                x3 += current[0]
-                y3 += current[1]
-            sampled = _sample_cubic_bezier(current, (x1, y1), (x2, y2), (x3, y3))
-            points.extend(sampled[1:])
-            last_control = (x2, y2)
-            current = (x3, y3)
+            while i + 5 < len(tokens) and not _is_path_command(tokens[i]):
+                x1, y1 = float(tokens[i]), float(tokens[i + 1])
+                x2, y2 = float(tokens[i + 2]), float(tokens[i + 3])
+                x3, y3 = float(tokens[i + 4]), float(tokens[i + 5])
+                i += 6
+                if cmd == "c":
+                    x1 += current[0]
+                    y1 += current[1]
+                    x2 += current[0]
+                    y2 += current[1]
+                    x3 += current[0]
+                    y3 += current[1]
+                sampled = _sample_cubic_bezier(current, (x1, y1), (x2, y2), (x3, y3))
+                points.extend(sampled[1:])
+                last_control = (x2, y2)
+                current = (x3, y3)
 
         elif cmd in ("S", "s"):
-            x2, y2 = float(tokens[i]), float(tokens[i + 1])
-            x3, y3 = float(tokens[i + 2]), float(tokens[i + 3])
-            i += 4
-            if cmd == "s":
-                x2 += current[0]
-                y2 += current[1]
-                x3 += current[0]
-                y3 += current[1]
-            if last_control is not None:
-                x1 = 2 * current[0] - last_control[0]
-                y1 = 2 * current[1] - last_control[1]
-            else:
-                x1, y1 = current
-            sampled = _sample_cubic_bezier(current, (x1, y1), (x2, y2), (x3, y3))
-            points.extend(sampled[1:])
-            last_control = (x2, y2)
-            current = (x3, y3)
+            while i + 3 < len(tokens) and not _is_path_command(tokens[i]):
+                x2, y2 = float(tokens[i]), float(tokens[i + 1])
+                x3, y3 = float(tokens[i + 2]), float(tokens[i + 3])
+                i += 4
+                if cmd == "s":
+                    x2 += current[0]
+                    y2 += current[1]
+                    x3 += current[0]
+                    y3 += current[1]
+                if last_control is not None:
+                    x1 = 2 * current[0] - last_control[0]
+                    y1 = 2 * current[1] - last_control[1]
+                else:
+                    x1, y1 = current
+                sampled = _sample_cubic_bezier(current, (x1, y1), (x2, y2), (x3, y3))
+                points.extend(sampled[1:])
+                last_control = (x2, y2)
+                current = (x3, y3)
 
         elif cmd in ("Z", "z"):
             last_control = None
