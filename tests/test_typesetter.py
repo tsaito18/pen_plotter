@@ -66,6 +66,43 @@ class TestTypesetter:
         full_w = p2[1].x - p2[0].x
         assert half_w < full_w
 
+    def test_body_char_advance_tracks_size_scale(self):
+        ts = Typesetter(PageConfig(), font_size=10.0)
+        placements = ts.typeset("あ漢")[0]
+
+        width = placements[1].x - placements[0].x
+
+        assert width == pytest.approx(10.0 * (0.45 + 0.55 * 0.85))
+
+    def test_kanji_advance_adds_breathing_room(self):
+        ts = Typesetter(PageConfig(), font_size=10.0)
+        placements = ts.typeset("漢字")[0]
+
+        width = placements[1].x - placements[0].x
+
+        assert width == pytest.approx(10.0 * 1.08)
+
+    def test_kanji_wrap_keeps_dynamic_advance_inside_content_edge(self):
+        cfg = PageConfig()
+        ts = Typesetter(cfg, font_size=10.0)
+        area = PageLayout(cfg).content_area()
+
+        placements = ts.typeset("漢" * 18)[0]
+        lines: dict[float, list[CharPlacement]] = {}
+        for placement in placements:
+            lines.setdefault(placement.y, []).append(placement)
+
+        assert len(lines) == 2
+        for line in lines.values():
+            assert max(p.x + ts.font_size for p in line) <= area.x + area.width + 1e-9
+
+    def test_hiragana_wrap_uses_smaller_body_advance(self):
+        ts = Typesetter(PageConfig(), font_size=10.0)
+
+        placements = ts.typeset("あ" * 19)[0]
+
+        assert len({p.y for p in placements}) == 1
+
     def test_font_size_default(self):
         ts = Typesetter(PageConfig())
         # デフォルトのfont_sizeは行間隔(8mm)に合わせる
@@ -78,7 +115,7 @@ class TestTypesetter:
         layout = PageLayout(cfg)
         lines = layout.line_positions()
         area = layout.content_area()
-        char_advance = ts.font_size * 0.9
+        char_advance = ts.font_size * (0.45 + 0.55 * 0.85)
         chars_per_line = int(area.width / char_advance)
         # 1ページの行数 * 行あたり文字数 + α でオーバーフロー
         text = "あ" * (len(lines) * chars_per_line + 10)
@@ -185,6 +222,53 @@ class TestTypesetterAugmentation:
         assert len(set(avg_spacings)) > 1, (
             "Average spacing should differ across lines due to density variation"
         )
+
+    def test_char_density_combines_with_line_density(self):
+        class FixedDensityAugmenter:
+            def augment_char_placement(
+                self, x: float, y: float, font_size: float
+            ) -> tuple[float, float, float]:
+                return x + 2.0, y, font_size
+
+            def get_line_density_scale(self) -> float:
+                return 1.5
+
+            def get_char_density_scale(self) -> float:
+                return 0.5
+
+        cfg = PageConfig()
+        layout = PageLayout(cfg)
+        area = layout.content_area()
+        ts = Typesetter(cfg, font_size=10.0, augmenter=FixedDensityAugmenter())
+
+        placements = ts.typeset("漢字")[0]
+
+        assert placements[0].x == pytest.approx(area.x + 2.0 * 0.75)
+        assert placements[1].x - placements[0].x == pytest.approx(10.0 * 1.08 * 0.75)
+
+    def test_density_expansion_stays_inside_wrapped_body_width(self):
+        class ExpandingDensityAugmenter:
+            def augment_char_placement(
+                self, x: float, y: float, font_size: float
+            ) -> tuple[float, float, float]:
+                return x, y, font_size
+
+            def get_line_density_scale(self) -> float:
+                return 1.2
+
+            def get_char_density_scale(self) -> float:
+                return 1.0
+
+        cfg = PageConfig()
+        ts = Typesetter(cfg, font_size=10.0, augmenter=ExpandingDensityAugmenter())
+        area = PageLayout(cfg).content_area()
+
+        placements = ts.typeset("漢" * 16)[0]
+        last = max(placements, key=lambda p: p.x)
+
+        assert len({p.y for p in placements}) == 1
+        assert placements[1].x - placements[0].x > ts.font_size
+        assert last.x + ts.font_size <= area.x + area.width + 1e-9
 
     def test_no_augmenter_backward_compatible(self):
         """augmenter未指定時は従来通りの動作。"""

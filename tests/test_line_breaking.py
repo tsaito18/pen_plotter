@@ -1,4 +1,6 @@
 from src.layout.line_breaking import (
+    break_paragraph,
+    break_paragraph_by_width,
     break_lines,
     is_line_start_prohibited,
     is_line_end_prohibited,
@@ -43,7 +45,9 @@ class TestBreakLines:
         lines = break_lines(text, chars_per_line=5)
         for line in lines:
             if line:
-                assert not is_line_end_prohibited(line[-1]), f"Line '{line}' ends with prohibited char"
+                assert not is_line_end_prohibited(line[-1]), (
+                    f"Line '{line}' ends with prohibited char"
+                )
 
     def test_empty_text(self):
         lines = break_lines("", chars_per_line=10)
@@ -80,3 +84,38 @@ class TestBreakLines:
         """半角0.5幅なら、chars_per_line=2に半角5文字は溢れる。"""
         lines = break_lines("abcde", chars_per_line=2)
         assert lines == ["abcd", "e"]
+
+    def test_break_paragraph_keeps_legacy_halfwidth_widths(self):
+        lines = break_paragraph("abcde", chars_per_line=2)
+        assert lines == ["abcd", "e"]
+
+
+class TestWidthAwareBreaks:
+    def test_custom_widths_control_breaks(self):
+        widths = {"広": 2.0, "狭": 0.5}
+
+        lines = break_paragraph_by_width(
+            "広狭広",
+            max_width=2.5,
+            char_width=lambda ch: widths[ch],
+        )
+
+        assert lines == ["広狭", "広"]
+
+    def test_line_start_prohibition_with_custom_widths(self):
+        lines = break_paragraph_by_width(
+            "あいうえ。か",
+            max_width=4.0,
+            char_width=lambda _: 1.0,
+        )
+
+        assert lines == ["あいうえ。", "か"]
+
+    def test_line_end_prohibition_with_custom_widths(self):
+        lines = break_paragraph_by_width(
+            "あいうえ「か",
+            max_width=5.0,
+            char_width=lambda _: 1.0,
+        )
+
+        assert lines == ["あいうえ", "「か"]

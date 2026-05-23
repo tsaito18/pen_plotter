@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.layout.line_breaking import break_paragraph, is_halfwidth
+from src.layout.line_breaking import break_paragraph_by_width, is_halfwidth
 from src.layout.math_layout import (
     MathLayoutEngine,
     MathParser,
@@ -16,6 +16,10 @@ from src.layout.page_layout import PageConfig, PageLayout
 
 _SMALL_KANA = set('っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ')
 _SMALL_PUNCT = set('・、。，．')
+_HEADING_X: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
+_BODY_X: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
+_HEADING_FONT_SCALES: dict[int, float] = {1: 1.15, 2: 1.08, 3: 1.0}
+_KANJI_ADVANCE_SCALE = 1.08
 
 # 手書きバランス調整: 画数が少なく視覚的に軽い文字は小さめにする
 _KANA_SIZE_OVERRIDES: dict[str, float] = {
@@ -73,6 +77,19 @@ def _char_size_scale(ch: str) -> float:
     if is_halfwidth(ch):
         return 0.7
     return 1.0
+
+
+def _is_kanji(ch: str) -> bool:
+    cp = ord(ch)
+    return (
+        0x3400 <= cp <= 0x4DBF
+        or 0x4E00 <= cp <= 0x9FFF
+        or 0xF900 <= cp <= 0xFAFF
+        or 0x20000 <= cp <= 0x2A6DF
+        or 0x2A700 <= cp <= 0x2B73F
+        or 0x2B740 <= cp <= 0x2B81F
+        or 0x2B820 <= cp <= 0x2CEAF
+    )
 
 
 _INLINE_MATH_RE = re.compile(r'(?<!\$)\$(?!\$)(.*?)\$')
@@ -145,6 +162,48 @@ class Typesetter:
     def augmenter(self) -> HandwritingAugmenter | None:
         return self._augmenter
 
+    def _body_char_advance(self, ch: str) -> float:
+        if is_halfwidth(ch):
+            return self.font_size * 0.55
+        if _is_kanji(ch):
+            return self.font_size * _KANJI_ADVANCE_SCALE
+        return self.font_size * (0.45 + 0.55 * _char_size_scale(ch))
+
+    def _char_advance(self, ch: str, is_heading: bool, line_font_size: float) -> float:
+        if is_heading:
+            return line_font_size
+        return self._body_char_advance(ch)
+
+    def _line_right_x(self, area: object, is_heading: bool, body_level: int) -> float:
+        if is_heading or body_level > 0:
+            return self._config.paper_size[0] - 10.0
+        return area.x + area.width
+
+    def _inline_math_width(self, math_src: str) -> float:
+        elements = MathParser.parse(math_src)
+        elements = [e for e in elements if e.type != "tag"]
+        return MathLayoutEngine.layout(
+            elements, x=0.0, y=0.0, font_size=self.font_size
+        ).width
+
+    def _line_neutral_width(
+        self,
+        segments: list[tuple[str, str]],
+        is_heading: bool,
+        line_font_size: float,
+    ) -> float:
+        total = 0.0
+        for seg_type, seg_content in segments:
+            if seg_type == "math":
+                total += self._inline_math_width(seg_content)
+                continue
+            total += sum(
+                self._char_advance(ch, is_heading, line_font_size)
+                for ch in seg_content
+                if ch != "\n"
+            )
+        return total
+
     def typeset(self, text: str) -> list[list[CharPlacement]]:
         if not text:
             return [[]]
@@ -152,10 +211,6 @@ class Typesetter:
         area = self._layout.content_area()
         line_positions = self._layout.line_positions()
         doc = self._parse_paragraphs(text, area)
-
-        heading_x: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
-        body_x: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
-        heading_font_scales = {1: 1.15, 2: 1.08, 3: 1.0}
 
         pages: list[list[CharPlacement]] = []
         current_page: list[CharPlacement] = []
@@ -213,9 +268,9 @@ class Typesetter:
                 is_para_start=is_para_start,
                 is_page_first=is_page_first,
                 prev_is_heading=prev_is_heading,
-                heading_x=heading_x,
-                body_x=body_x,
-                heading_font_scales=heading_font_scales,
+                heading_x=_HEADING_X,
+                body_x=_BODY_X,
+                heading_font_scales=_HEADING_FONT_SCALES,
             )
             current_page.extend(placements)
             line_idx += 1
@@ -225,12 +280,6 @@ class Typesetter:
 
     def _parse_paragraphs(self, text: str, area: object) -> ParsedDocument:
         """第1パス: テキストを段落解析し、行リストと各行のメタ情報を返す。"""
-        page_config = self._config
-        pw = page_config.paper_size[0]
-        heading_x: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
-        body_x: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
-        right_x: float = pw - 10.0
-
         # 改行を含むブロック数式 $$\n...\n$$ は通常 paragraph 分割（\n split）でばらけてしまうため、
         # 先に DOTALL マッチで全体から抽出してプレースホルダ独立段落に置換しておく。
         # これにより 1 行 $$...$$ も複数行 $$...\n...$$ も同じ後段処理で扱える。
@@ -326,14 +375,23 @@ class Typesetter:
                     stripped = _INLINE_MATH_RE.sub(
                         lambda m: m.group(1).replace(' ', '\x00'), part
                     )
-                    if heading_level > 0:
-                        line_width = right_x - heading_x.get(heading_level, area.x)
-                    elif current_body_level > 0:
-                        line_width = right_x - body_x.get(current_body_level, area.x)
+                    is_heading = heading_level > 0
+                    if is_heading:
+                        line_x = _HEADING_X.get(heading_level, area.x)
+                        line_font_size = (
+                            self.font_size * _HEADING_FONT_SCALES[heading_level]
+                        )
+
+                        def width_fn(_ch: str) -> float:
+                            return line_font_size
                     else:
-                        line_width = area.width
-                    cpl = int(line_width / (self.font_size * 0.95))
-                    broken = break_paragraph(stripped, cpl)
+                        line_x = _BODY_X.get(current_body_level, area.x)
+                        width_fn = self._body_char_advance
+                    line_width = (
+                        self._line_right_x(area, is_heading, current_body_level)
+                        - line_x
+                    )
+                    broken = break_paragraph_by_width(stripped, line_width, width_fn)
                     result_lines = self._rebuild_lines_with_math(part, broken)
                     if heading_level > 0:
                         for i in range(len(result_lines)):
@@ -392,11 +450,17 @@ class Typesetter:
             density_scale = 1.0
 
         segments = _split_segments(line_text)
+        neutral_remaining = self._line_neutral_width(
+            segments, is_heading, line_font_size
+        )
+        line_right_x = self._line_right_x(area, is_heading, body_level)
 
         prev_halfwidth = False
         for seg_type, seg_content in segments:
             if seg_type == "math":
+                math_x = x
                 x = self._place_math(seg_content, x, y, page_idx, output)
+                neutral_remaining -= x - math_x
                 prev_halfwidth = False
             else:
                 for ch in seg_content:
@@ -407,25 +471,30 @@ class Typesetter:
                     size_scale = _char_size_scale(ch)
                     if is_heading:
                         char_font_size = line_font_size
-                        char_advance = line_font_size
                     else:
                         char_font_size = self.font_size * size_scale
-                        if cur_halfwidth:
-                            char_advance = self.font_size * 0.55
-                        elif ch in _SMALL_KANA or ch in _SMALL_PUNCT:
-                            char_advance = char_font_size
-                        else:
-                            char_advance = self.font_size * 0.95
+                    char_advance = self._char_advance(
+                        ch, is_heading, line_font_size
+                    )
+                    neutral_remaining -= char_advance
 
                     if self._augmenter is not None:
                         aug_x, _, aug_size = self._augmenter.augment_char_placement(
                             x, y, char_font_size
                         )
-                        spacing_factor = density_scale
+                        char_density_scale = self._augmenter.get_char_density_scale()
+                        density_factor = density_scale * char_density_scale
+                        spacing_factor = density_factor
                         if prev_halfwidth and cur_halfwidth:
                             spacing_factor *= 0.5
                         aug_x = x + (aug_x - x) * spacing_factor
-                        char_width = char_advance * density_scale
+                        char_width = char_advance * density_factor
+                        if density_factor > 1.0:
+                            density_width_cap = max(
+                                char_advance,
+                                line_right_x - x - neutral_remaining,
+                            )
+                            char_width = min(char_width, density_width_cap)
                         output.append(CharPlacement(
                             char=ch, x=aug_x, y=line_y, font_size=aug_size, page=page_idx,
                         ))

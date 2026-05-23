@@ -18,6 +18,7 @@ class AugmentConfig:
     jitter_amplitude: float = 0.03
     spacing_variation: float = 0.05
     line_density_variation: float = 0.05
+    char_density_variation: float = 0.02
     enabled: bool = True
 
 
@@ -40,6 +41,15 @@ class HandwritingAugmenter:
         cfg = self._config
         return 1.0 + self._rng.uniform(
             -cfg.line_density_variation, cfg.line_density_variation
+        )
+
+    def get_char_density_scale(self) -> float:
+        """文字ごとの密度スケールを返す。"""
+        if not self._config.enabled:
+            return 1.0
+        cfg = self._config
+        return 1.0 + self._rng.uniform(
+            -cfg.char_density_variation, cfg.char_density_variation
         )
 
     def augment_char_placement(

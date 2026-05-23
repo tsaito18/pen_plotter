@@ -25,6 +25,7 @@ class TestAugmentConfig:
         assert cfg.slant_variation == 0.02
         assert cfg.jitter_amplitude == 0.03
         assert cfg.spacing_variation == 0.05
+        assert cfg.char_density_variation == 0.02
         assert cfg.enabled is True
 
 
@@ -159,6 +160,38 @@ class TestLineDensityScale:
         cfg = AugmentConfig(enabled=False)
         aug = HandwritingAugmenter(config=cfg, seed=42)
         result = aug.get_line_density_scale()
+        assert result == 1.0
+
+
+class TestCharDensityScale:
+    def test_get_char_density_scale_returns_float(self):
+        aug = HandwritingAugmenter(seed=42)
+        result = aug.get_char_density_scale()
+        assert isinstance(result, float)
+
+    def test_get_char_density_scale_varies(self):
+        aug = HandwritingAugmenter(seed=42)
+        values = [aug.get_char_density_scale() for _ in range(20)]
+        assert len(set(values)) >= 2, "Expected at least 2 distinct values in 20 calls"
+
+    def test_get_char_density_scale_range(self):
+        aug = HandwritingAugmenter(seed=42)
+        for _ in range(100):
+            scale = aug.get_char_density_scale()
+            assert 0.98 <= scale <= 1.02, (
+                f"Scale {scale} outside expected range [0.98, 1.02]"
+            )
+
+    def test_get_char_density_scale_uses_char_variation(self):
+        cfg = AugmentConfig(line_density_variation=0.0, char_density_variation=0.02)
+        aug = HandwritingAugmenter(config=cfg, seed=42)
+        values = [aug.get_char_density_scale() for _ in range(20)]
+        assert len(set(values)) >= 2, "Char density should not use line variation"
+
+    def test_get_char_density_scale_disabled(self):
+        cfg = AugmentConfig(enabled=False)
+        aug = HandwritingAugmenter(config=cfg, seed=42)
+        result = aug.get_char_density_scale()
         assert result == 1.0
 
 

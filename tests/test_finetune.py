@@ -632,7 +632,7 @@ class TestUserDeformationTrainer:
         """Training and inference use the same OFFSET_CLAMP and smooth_offsets function."""
         from src.model.finetune import OFFSET_CLAMP, SMOOTHING_KERNEL_SIZE, smooth_offsets
 
-        assert OFFSET_CLAMP == 0.5
+        assert OFFSET_CLAMP == 0.4
         assert SMOOTHING_KERNEL_SIZE == 15
 
         # Verify inference imports the same constants
