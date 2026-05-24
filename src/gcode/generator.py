@@ -28,12 +28,14 @@ class GCodeGenerator:
             "G4 P1",
             f"G92 X0 Y{self.config.paper_height:.0f} Z0",
             "G90",
+            self.config.pen_up_command,
         ]
         return [line for line in lines if line]
 
     def _footer(self) -> list[str]:
         """ホーム付近に移動"""
         return [
+            self.config.pen_up_command,
             f"G0 X5 Y{self.config.paper_height - 5:.0f} F{self.config.travel_speed:.0f}",
         ]
 
@@ -50,10 +52,12 @@ class GCodeGenerator:
             return []
 
         lines: list[str] = []
+        lines.append(self.config.pen_up_command)
         x0, y0 = stroke[0]
         lines.append(
             f"G0 X{self._format_coord(x0)} Y{self._format_coord(y0)} F{self.config.travel_speed:.0f}"
         )
+        lines.append(self.config.pen_down_command)
 
         n_draw_points = len(stroke) - 1
         for i, point in enumerate(stroke[1:]):
