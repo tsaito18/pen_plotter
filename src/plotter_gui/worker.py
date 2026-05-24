@@ -296,13 +296,9 @@ class PlotterWorker:
     def _do_stream(self, gcode_lines: list[str]) -> None:
         """ストリーム送信。Started/Finished も自前で発行する。
 
-        cancel_event のクリアは行わない:
-          - emergency_stop で set される直前/直後に新規 stream を呼ぶ運用は無い
-          - 「呼び出し前に既に set 済みなら即キャンセル扱い」を保ちたい
-            (テストでこの挙動を活用)
-        実運用では新規ストリーム開始前に GUI 側が `_cancel_event.clear()` を
-        呼ぶのではなく、worker 側に `clear_cancel()` を別途用意する余地あり。
-        現状は emergency_stop 後はそのまま再接続/再起動が前提。
+        前回の emergency_stop で残った cancel flag は、新規 stream 開始時に
+        stale な状態として破棄する。進行中 stream への停止は stream 開始後に
+        emergency_stop() が再度 set する。
         """
         try:
             sender = self._require_sender()
@@ -311,6 +307,7 @@ class PlotterWorker:
             # Started/Finished は出さない (まだ Started を出していない)。
             raise exc
 
+        self._cancel_event.clear()
         self._emit(JobStarted(kind="stream"))
 
         def progress_cb(idx: int, total: int, line: str, _resp: Any) -> None:

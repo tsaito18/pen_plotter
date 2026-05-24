@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import queue
 import time
+from typing import Any
 
 import pytest
+from src.comm.serial_sender import GrblResponse, StreamCancelled
 from src.gcode.config import PlotterConfig
 from src.plotter_gui.events import (
     Connected,
@@ -129,16 +131,23 @@ class TestStream:
         assert progress_events[2].line == "G0 X10"
 
     def test_stream_cancelled_emits_finished_with_cancelled(self) -> None:
+        class CancellingSender:
+            def stream(
+                self,
+                gcode_lines: list[str],
+                progress_callback: Any = None,
+                cancel_event: Any = None,
+            ) -> None:
+                if progress_callback is not None:
+                    progress_callback(1, len(gcode_lines), gcode_lines[0], GrblResponse.parse("ok"))
+                if cancel_event is not None:
+                    cancel_event.set()
+                raise StreamCancelled("cancelled at line 2/2")
+
         mock = MockSerial()
-        # 1 行目だけ応答、2 行目以降に到達する前にキャンセル発火
-        mock.queue_response("ok")
-        mock.queue_response("ok")
         worker, eq = _make_worker(mock)
         worker._do_connect("COM_FAKE")
-
-        # callback で 1 行目進捗到達時に cancel を立てる代わりに、
-        # 事前に cancel_event をセットしておけば 1 行目送信前に StreamCancelled。
-        worker._cancel_event.set()
+        worker._sender = CancellingSender()  # type: ignore[assignment]
         worker._do_stream(["G90", "G21"])
 
         events = _drain(eq)
@@ -146,6 +155,24 @@ class TestStream:
         assert any(
             f.kind == "stream" and not f.success and f.error == "cancelled" for f in finished
         )
+
+    def test_stream_can_start_after_emergency_stop_cancel_flag(self) -> None:
+        mock = MockSerial()
+        mock.queue_response("ok")
+        worker, eq = _make_worker(mock)
+        worker._do_connect("COM_FAKE")
+
+        worker.emergency_stop()
+        _drain(eq)
+
+        worker._do_stream(["G90"])
+
+        events = _drain(eq)
+        assert any(isinstance(e, Progress) and e.idx == 1 and e.line == "G90" for e in events)
+        assert any(
+            isinstance(e, JobFinished) and e.kind == "stream" and e.success for e in events
+        )
+        assert mock.written[-1] == b"G90\n"
 
     def test_stream_emits_started_and_finished_on_success(self) -> None:
         mock = MockSerial()
