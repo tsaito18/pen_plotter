@@ -78,3 +78,31 @@ class TestStrokeSample:
         assert len(restored.strokes) == 3
         assert len(restored.strokes[0]) == 5
         assert len(restored.strokes[1]) == 3
+
+    def test_default_stroke_types_empty(self):
+        sample = StrokeSample(
+            character="あ", strokes=[[StrokePoint(x=0, y=0), StrokePoint(x=1, y=1)]]
+        )
+        assert sample.stroke_types == []
+
+    def test_stroke_types_roundtrip(self):
+        sample = StrokeSample(
+            character="一",
+            strokes=[[StrokePoint(x=0, y=0), StrokePoint(x=10, y=0)]],
+            stroke_types=["㇐"],  # ㇐ 横画
+        )
+        json_str = sample.to_json()
+        restored = StrokeSample.from_json(json_str)
+        assert restored.stroke_types == ["㇐"]
+
+    def test_load_legacy_json_without_stroke_types(self):
+        # stroke_types キーを持たない旧フォーマットJSONでも後方互換で読める
+        legacy = (
+            '{"character": "二", "strokes": '
+            '[[{"x": 0, "y": 0, "pressure": 1.0, "timestamp": 0.0}, '
+            '{"x": 5, "y": 0, "pressure": 1.0, "timestamp": 0.0}]], '
+            '"metadata": {"source": "kanjivg"}}'
+        )
+        restored = StrokeSample.from_json(legacy)
+        assert restored.stroke_types == []
+        assert restored.metadata["source"] == "kanjivg"

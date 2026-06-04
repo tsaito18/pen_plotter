@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -138,33 +137,61 @@ def parse_svg_path(d: str) -> NDArray[np.float64]:
     return np.array(points, dtype=np.float64) if points else np.empty((0, 2), dtype=np.float64)
 
 
+# <path> タグから d / kvg:type 属性を抽出する正規表現。
+# KanjiVG SVG は xmlns:kvg を宣言しない場合があるため、ET ではなく正規表現で
+# d と kvg:type を同時抽出し、ストローク列と筆画タイプ列の順序・フィルタを
+# 完全に一致させる。
+_PATH_TAG_RE = re.compile(r"<path\b[^>]*>", re.DOTALL)
+_D_ATTR_RE = re.compile(r'\bd="([^"]*)"')
+_KVG_TYPE_RE = re.compile(r'\bkvg:type="([^"]*)"')
+
+
 class KanjiVGParser:
     """KanjiVG形式のSVGからストローク座標列を抽出する。"""
 
-    SVG_NS = "http://www.w3.org/2000/svg"
+    def parse_svg_with_types(
+        self, svg_string: str
+    ) -> tuple[list[NDArray[np.float64]], list[str]]:
+        """SVG文字列からストロークと筆画タイプ(kvg:type)を抽出。
 
-    @staticmethod
-    def _strip_kvg_namespace(svg_string: str) -> str:
-        """KanjiVG固有の未宣言kvg:プレフィックスを除去してパース可能にする。"""
-        return re.sub(r'\bkvg:\w+="[^"]*"', "", svg_string)
+        Args:
+            svg_string: KanjiVG形式のSVG文字列。
+
+        Returns:
+            (strokes, stroke_types) のタプル。両リストは index が対応し長さが
+            等しい。stroke_types は各ストロークの raw kvg:type 文字列で、属性が
+            無い path は空文字列。座標が空の path はどちらからも除外される。
+        """
+        strokes: list[NDArray[np.float64]] = []
+        stroke_types: list[str] = []
+        for tag in _PATH_TAG_RE.findall(svg_string):
+            d_match = _D_ATTR_RE.search(tag)
+            if d_match is None:
+                continue
+            points = parse_svg_path(d_match.group(1))
+            if len(points) == 0:
+                continue
+            type_match = _KVG_TYPE_RE.search(tag)
+            strokes.append(points)
+            stroke_types.append(type_match.group(1) if type_match else "")
+        return strokes, stroke_types
+
+    def parse_file_with_types(
+        self, path: Path | str
+    ) -> tuple[list[NDArray[np.float64]], list[str]]:
+        """SVGファイルからストロークと筆画タイプを抽出。"""
+        svg_text = Path(path).read_text(encoding="utf-8")
+        return self.parse_svg_with_types(svg_text)
 
     def parse_svg(self, svg_string: str) -> list[NDArray[np.float64]]:
         """SVG文字列からストロークリストを抽出。"""
-        cleaned = self._strip_kvg_namespace(svg_string)
-        root = ET.fromstring(cleaned)
-        paths = root.findall(f".//{{{self.SVG_NS}}}path")
-        strokes = []
-        for path in paths:
-            d = path.get("d", "")
-            points = parse_svg_path(d)
-            if len(points) > 0:
-                strokes.append(points)
+        strokes, _ = self.parse_svg_with_types(svg_string)
         return strokes
 
     def parse_file(self, path: Path | str) -> list[NDArray[np.float64]]:
         """SVGファイルからストロークリストを抽出。"""
-        svg_text = Path(path).read_text(encoding="utf-8")
-        return self.parse_svg(svg_text)
+        strokes, _ = self.parse_file_with_types(path)
+        return strokes
 
     def normalize(
         self, strokes: list[NDArray[np.float64]], target_size: float = 1.0

@@ -291,6 +291,102 @@ class TestConvertXml:
         assert "x" in data["strokes"][0][0]
 
 
+class TestStrokeTypes:
+    """kvg:type 属性が stroke_types として保存されることを確認。"""
+
+    # ルートに xmlns:kvg 宣言済み。s1 に kvg:type、s2 は type 無し（→ ""）。
+    XML_WITH_TYPES = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<kanjivg xmlns:kvg='http://kanjivg.tagaini.net'>
+<kanji id="kvg:kanji_04e8c">
+<g id="kvg:04e8c" kvg:element="二">
+  <path id="kvg:04e8c-s1" kvg:type="㇐" d="M 20,30 L 80,30"/>
+  <path id="kvg:04e8c-s2" d="M 10,70 L 90,70"/>
+</g>
+</kanji>
+</kanjivg>"""
+
+    # s2 の座標は単一点のみ（parse 後 len<2 でスキップされる）。
+    # スキップ後も stroke_types が strokes と index 対応することを確認する。
+    XML_WITH_SKIPPED_STROKE = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<kanjivg xmlns:kvg='http://kanjivg.tagaini.net'>
+<kanji id="kvg:kanji_04e8c">
+<g id="kvg:04e8c" kvg:element="二">
+  <path id="kvg:04e8c-s1" kvg:type="㇐" d="M 20,30 L 80,30"/>
+  <path id="kvg:04e8c-s2" kvg:type="㇒" d="M 50,50"/>
+  <path id="kvg:04e8c-s3" kvg:type="㇏" d="M 10,70 L 90,70"/>
+</g>
+</kanji>
+</kanjivg>"""
+
+    SVG_WITH_TYPES = """<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:kvg="http://kanjivg.tagaini.net" width="109" height="109" viewBox="0 0 109 109">
+  <g id="kvg:StrokePaths_04e00">
+    <g id="kvg:04e00" kvg:element="一">
+      <path id="kvg:04e00-s1" kvg:type="㇐" d="M 30,20 L 30,90"/>
+      <path id="kvg:04e00-s2" d="M 70,20 L 70,90"/>
+    </g>
+  </g>
+</svg>"""
+
+    def test_xml_stroke_types_saved(self, tmp_path: Path):
+        from scripts.prepare_kanjivg import convert_xml_to_samples
+
+        xml_file = tmp_path / "kanjivg.xml"
+        xml_file.write_text(self.XML_WITH_TYPES, encoding="utf-8")
+        output_dir = tmp_path / "output"
+
+        convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
+
+        sample = StrokeSample.load(list((output_dir / "二").glob("*.json"))[0])
+        assert sample.stroke_types == ["㇐", ""]
+        assert len(sample.stroke_types) == len(sample.strokes)
+
+    def test_xml_stroke_types_in_json(self, tmp_path: Path):
+        from scripts.prepare_kanjivg import convert_xml_to_samples
+
+        xml_file = tmp_path / "kanjivg.xml"
+        xml_file.write_text(self.XML_WITH_TYPES, encoding="utf-8")
+        output_dir = tmp_path / "output"
+
+        convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
+
+        json_file = list((output_dir / "二").glob("*.json"))[0]
+        data = json.loads(json_file.read_text(encoding="utf-8"))
+        assert data["stroke_types"] == ["㇐", ""]
+        assert len(data["stroke_types"]) == len(data["strokes"])
+
+    def test_xml_types_aligned_after_skip(self, tmp_path: Path):
+        from scripts.prepare_kanjivg import convert_xml_to_samples
+
+        xml_file = tmp_path / "kanjivg.xml"
+        xml_file.write_text(self.XML_WITH_SKIPPED_STROKE, encoding="utf-8")
+        output_dir = tmp_path / "output"
+
+        convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
+
+        sample = StrokeSample.load(list((output_dir / "二").glob("*.json"))[0])
+        # s2 (㇒) は単一点で len<2 → スキップされ、座標もタイプも落ちる。
+        assert len(sample.strokes) == 2
+        assert sample.stroke_types == ["㇐", "㇏"]
+        assert len(sample.stroke_types) == len(sample.strokes)
+
+    def test_svg_stroke_types_saved(self, tmp_path: Path):
+        from scripts.prepare_kanjivg import convert_single_svg
+
+        svg_file = tmp_path / "04e00.svg"
+        svg_file.write_text(self.SVG_WITH_TYPES, encoding="utf-8")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        sample = convert_single_svg(svg_file, output_dir, target_size=10.0, num_points=8)
+
+        assert sample is not None
+        assert sample.stroke_types == ["㇐", ""]
+        assert len(sample.stroke_types) == len(sample.strokes)
+
+
 class TestMetadata:
     def test_metadata_contains_source(self, tmp_path: Path):
         from scripts.prepare_kanjivg import convert_single_svg

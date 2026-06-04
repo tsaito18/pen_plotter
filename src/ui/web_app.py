@@ -144,10 +144,14 @@ class PlotterPipeline:
         return self._stroke_renderer._simple_paren_strokes(char, placement)
 
     def _load_reference_strokes(self, char: str) -> list[Stroke] | None:
-        return self._stroke_renderer._load_reference_strokes(char)
+        # renderer は (strokes, raw_types) を返すが、本シムは後方互換のため
+        # strokes だけを返す（既存呼び出し元・テストの契約を維持）。
+        strokes, _types = self._stroke_renderer._load_reference_strokes(char)
+        return strokes
 
     def _load_kanjivg_json(self, placement: CharPlacement) -> list[Stroke] | None:
-        return self._stroke_renderer._load_kanjivg_json(placement)
+        strokes, _types = self._stroke_renderer._load_kanjivg_json(placement)
+        return strokes
 
     def _position_strokes(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
         return self._stroke_renderer._position_strokes(strokes, placement)

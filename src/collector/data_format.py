@@ -35,6 +35,12 @@ class StrokeSample:
     character: str
     strokes: list[list[StrokePoint]]
     metadata: dict = field(default_factory=dict)
+    stroke_types: list[str] = field(default_factory=list)
+    """ストローク単位の筆画タイプ（KanjiVG の raw kvg:type 文字列）。
+
+    ``strokes`` と並走し、index が対応する。空リストの場合は筆画タイプ不明
+    （旧フォーマット・ユーザー収集データ等）として扱う。
+    """
 
     def to_json(self) -> str:
         return json.dumps(
@@ -42,6 +48,7 @@ class StrokeSample:
                 "character": self.character,
                 "strokes": [[pt.to_dict() for pt in stroke] for stroke in self.strokes],
                 "metadata": self.metadata,
+                "stroke_types": self.stroke_types,
             },
             ensure_ascii=False,
         )
@@ -53,6 +60,7 @@ class StrokeSample:
             character=data["character"],
             strokes=[[StrokePoint.from_dict(pt) for pt in stroke] for stroke in data["strokes"]],
             metadata=data.get("metadata", {}),
+            stroke_types=data.get("stroke_types", []),
         )
 
     def save(self, path: Path) -> None:

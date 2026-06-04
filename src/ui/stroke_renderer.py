@@ -11,6 +11,11 @@ from src.layout.line_breaking import is_halfwidth
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement
 from src.model.augmentation import HandwritingAugmenter
+from src.model.stroke_finishing import (
+    FinishingConfig,
+    apply_finishing,
+    classify_finishes,
+)
 from dataclasses import dataclass, field
 
 Stroke = npt.NDArray[np.float64]
@@ -68,10 +73,21 @@ class StrokeRenderer:
         user_strokes_dir: Path | str | None = None,
         augmenter: HandwritingAugmenter | None = None,
         page_config: PageConfig | None = None,
+        finishing_config: FinishingConfig | None = None,
+        enable_finishing: bool = True,
     ) -> None:
         self._page_config = page_config or PageConfig()
         self._temperature = temperature
         self._augmenter = augmenter
+
+        # KanjiVG 参照経路（ML 推論 / safety-net）の終端加工（とめ・はね・払い）。
+        # _direct_stroke（人の実筆跡）・幾何描画経路には適用しない。
+        if finishing_config is not None:
+            self._finishing_config = finishing_config
+        elif enable_finishing:
+            self._finishing_config = FinishingConfig()
+        else:
+            self._finishing_config = FinishingConfig(enabled=False)
 
         # 既存呼び出し元（pipeline.create_app() 等）が UI 構築時に環境引数を
         # 復元できるよう、入力時のパスを保持しておく
@@ -235,7 +251,7 @@ class StrokeRenderer:
             positioned = self._position_strokes(direct, placement)
             return positioned if is_smooth else self._apply_distortion(positioned)
 
-        reference = self._load_reference_strokes(placement.char)
+        reference, ref_types = self._load_reference_strokes(placement.char)
 
         if self._inference is not None and reference is not None:
             try:
@@ -247,15 +263,27 @@ class StrokeRenderer:
                 )
                 cov.ml_inference.append(original_char)
                 positioned = self._position_strokes(raw, placement)
+                positioned = apply_finishing(
+                    positioned,
+                    classify_finishes(ref_types),
+                    scale=placement.font_size,
+                    config=self._finishing_config,
+                )
                 return positioned if is_smooth else self._apply_distortion(positioned)
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
 
         if self._kanjivg_dir is not None:
-            char_strokes = self._load_kanjivg_json(placement)
+            char_strokes, char_types = self._load_kanjivg_json(placement)
             if char_strokes is not None:
                 cov.kanjivg.append(original_char)
                 positioned = self._position_strokes(char_strokes, placement)
+                positioned = apply_finishing(
+                    positioned,
+                    classify_finishes(char_types),
+                    scale=placement.font_size,
+                    config=self._finishing_config,
+                )
                 return positioned if is_smooth else self._apply_distortion(positioned)
 
         cov.rect_fallback.append(original_char)
@@ -1012,43 +1040,67 @@ class StrokeRenderer:
             ]
         return None
 
-    def _load_reference_strokes(self, char: str) -> list[Stroke] | None:
+    @staticmethod
+    def _strokes_and_types_from_sample(
+        sample: StrokeSample,
+    ) -> tuple[list[Stroke], list[str]]:
+        """``StrokeSample`` を ``len>=2`` 条件で strokes/types を同期フィルタする。
+
+        推論バッチ化（``inference.py``）は ``len>=2`` のストロークだけを同順で
+        返すため、筆画タイプ（``stroke_types``）も同じ条件・同じ順序で間引き、
+        ``positioned[j]`` と ``types[j]`` の 1 対 1 対応を保つ。
+
+        Args:
+            sample: 読み込んだ ``StrokeSample``。
+
+        Returns:
+            ``(strokes, types)``。``types`` は対応する ``stroke_types``（無い・
+            不足分は ``""`` で補完し、strokes と同数になる）。
+        """
+        raw_types = sample.stroke_types
+        strokes: list[Stroke] = []
+        types: list[str] = []
+        for i, stroke_points in enumerate(sample.strokes):
+            arr = np.array([[p.x, p.y] for p in stroke_points], dtype=np.float64)
+            if len(arr) >= 2:
+                strokes.append(arr)
+                types.append(raw_types[i] if i < len(raw_types) else "")
+        return strokes, types
+
+    def _load_reference_strokes(
+        self, char: str
+    ) -> tuple[list[Stroke] | None, list[str]]:
         if self._kanjivg_dir is None:
-            return None
+            return None, []
         char_dir = self._kanjivg_dir / char
         if not char_dir.is_dir():
-            return None
+            return None, []
         json_files = sorted(char_dir.glob(f"{char}_*.json"))
         if not json_files:
-            return None
+            return None, []
         try:
             sample = StrokeSample.load(json_files[0])
-            return [
-                np.array([[p.x, p.y] for p in stroke], dtype=np.float64)
-                for stroke in sample.strokes
-                if len(stroke) >= 2
-            ]
+            strokes, types = self._strokes_and_types_from_sample(sample)
+            return (strokes if strokes else None), types
         except Exception:
-            return None
+            return None, []
 
-    def _load_kanjivg_json(self, placement: CharPlacement) -> list[Stroke] | None:
+    def _load_kanjivg_json(
+        self, placement: CharPlacement
+    ) -> tuple[list[Stroke] | None, list[str]]:
         char_dir = self._kanjivg_dir / placement.char
         if not char_dir.is_dir():
-            return None
+            return None, []
         json_files = sorted(char_dir.glob(f"{placement.char}_*.json"))
         if not json_files:
-            return None
+            return None, []
         try:
             sample = StrokeSample.load(json_files[0])
-            strokes = []
-            for stroke_points in sample.strokes:
-                arr = np.array([[p.x, p.y] for p in stroke_points], dtype=np.float64)
-                if len(arr) >= 2:
-                    strokes.append(arr)
-            return strokes if strokes else None
+            strokes, types = self._strokes_and_types_from_sample(sample)
+            return (strokes if strokes else None), types
         except Exception:
             logger.warning("KanjiVG JSON load failed for '%s'", placement.char, exc_info=True)
-            return None
+            return None, []
 
     def _char_scale_factor(self, char: str) -> float:
         cp = ord(char)

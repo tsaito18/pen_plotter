@@ -8,7 +8,7 @@ from src.layout.typesetter import CharPlacement
 from src.ui.stroke_renderer import StrokeRenderer
 
 
-def _create_user_stroke_json(base_dir, char, strokes, suffix="001"):
+def _create_user_stroke_json(base_dir, char, strokes, suffix="001", stroke_types=None):
     char_dir = base_dir / char
     char_dir.mkdir(parents=True, exist_ok=True)
     data = {
@@ -22,6 +22,8 @@ def _create_user_stroke_json(base_dir, char, strokes, suffix="001"):
         ],
         "metadata": {},
     }
+    if stroke_types is not None:
+        data["stroke_types"] = stroke_types
     (char_dir / f"{char}_{suffix}.json").write_text(json.dumps(data), encoding="utf-8")
 
 
@@ -272,3 +274,130 @@ class TestExtendedMathSymbols:
         for s in result:
             assert s.shape[1] == 2
             assert s.min() >= -0.05 and s.max() <= 1.05
+
+
+# 払い(㇒)を含む 2 ストローク漢字の KanjiVG fixture（Y-UP, 0..1 正規化済み）。
+# 第1画は横画(㇐=とめ), 第2画は左払い(㇒=harai)。各 5 点で len>=2 条件を満たす。
+_HARAI_STROKES = [
+    [[0.1, 0.5], [0.3, 0.5], [0.5, 0.5], [0.7, 0.5], [0.9, 0.5]],
+    [[0.5, 0.9], [0.45, 0.7], [0.4, 0.5], [0.3, 0.3], [0.15, 0.1]],
+]
+_HARAI_TYPES = ["㇐", "㇒"]
+
+
+class TestKanjiVGReferenceFinishing:
+    """KanjiVG 参照経路への終端加工配線（とめ・はね・払い）。"""
+
+    def test_load_reference_strokes_returns_strokes_and_types(self, tmp_path):
+        kanjivg_dir = tmp_path / "strokes"
+        _create_user_stroke_json(
+            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
+        )
+        renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
+
+        strokes, types = renderer._load_reference_strokes("ノ")
+
+        assert strokes is not None
+        assert len(strokes) == 2
+        assert types == _HARAI_TYPES
+
+    def test_load_reference_strokes_missing_char_returns_none(self, tmp_path):
+        kanjivg_dir = tmp_path / "strokes"
+        kanjivg_dir.mkdir()
+        renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
+
+        strokes, types = renderer._load_reference_strokes("ノ")
+
+        assert strokes is None
+        assert types == []
+
+    def test_load_reference_strokes_sync_filters_short_strokes(self, tmp_path):
+        # 1 点しかない第2画は len>=2 で除外され、types も同期して除外される
+        kanjivg_dir = tmp_path / "strokes"
+        strokes_in = [
+            [[0.1, 0.5], [0.9, 0.5]],
+            [[0.5, 0.5]],  # 1 点 → 除外
+            [[0.5, 0.9], [0.2, 0.1]],
+        ]
+        types_in = ["㇐", "㇔", "㇒"]
+        _create_user_stroke_json(kanjivg_dir, "X", strokes_in, stroke_types=types_in)
+        renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
+
+        strokes, types = renderer._load_reference_strokes("X")
+
+        assert len(strokes) == 2
+        # 除外された index 1 (㇔) を飛ばし、㇐ と ㇒ が残る（順序保持）
+        assert types == ["㇐", "㇒"]
+
+    def test_load_kanjivg_json_returns_strokes_and_types(self, tmp_path):
+        kanjivg_dir = tmp_path / "strokes"
+        _create_user_stroke_json(
+            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
+        )
+        renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
+        placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, types = renderer._load_kanjivg_json(placement)
+
+        assert strokes is not None
+        assert len(strokes) == 2
+        assert types == _HARAI_TYPES
+
+    def test_safety_net_finishing_changes_harai_terminal(self, tmp_path):
+        # inference=None・kanjivg_dir のみ → safety-net 経路 (_load_kanjivg_json)
+        kanjivg_dir = tmp_path / "strokes"
+        _create_user_stroke_json(
+            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
+        )
+        placement = CharPlacement(char="ノ", x=10.0, y=20.0, font_size=8.0, page=0)
+
+        renderer_on = StrokeRenderer(kanjivg_dir=kanjivg_dir, enable_finishing=True)
+        renderer_off = StrokeRenderer(kanjivg_dir=kanjivg_dir, enable_finishing=False)
+
+        on = renderer_on.generate_char_strokes(placement)
+        off = renderer_off.generate_char_strokes(placement)
+
+        assert renderer_on._last_coverage.kanjivg == ["ノ"]
+        assert renderer_off._last_coverage.kanjivg == ["ノ"]
+        # 払い(㇒)の第2画は終端へ点が延長され座標が変わる
+        harai_on = on[1]
+        harai_off = off[1]
+        assert harai_on.shape[0] > harai_off.shape[0]
+        # 加工なし版の終端点と加工あり版の末尾点は別位置
+        assert not np.allclose(harai_on[-1], harai_off[-1])
+
+    def test_finishing_disabled_leaves_strokes_identical(self, tmp_path):
+        kanjivg_dir = tmp_path / "strokes"
+        _create_user_stroke_json(
+            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
+        )
+        placement = CharPlacement(char="ノ", x=10.0, y=20.0, font_size=8.0, page=0)
+        renderer_off = StrokeRenderer(kanjivg_dir=kanjivg_dir, enable_finishing=False)
+
+        off = renderer_off.generate_char_strokes(placement)
+
+        # 加工なしならどのストロークも点数が増えていない（元 5 点のまま）
+        for s in off:
+            assert s.shape[0] == 5
+
+    def test_direct_stroke_path_not_finished(self, tmp_path):
+        # user_strokes 登録字は _direct_stroke 経路で加工が掛からない
+        user_dir = tmp_path / "user_strokes"
+        kanjivg_dir = tmp_path / "strokes"
+        _create_user_stroke_json(user_dir, "ノ", _HARAI_STROKES)
+        # KanjiVG にも同字を置くが direct が優先されるので使われない
+        _create_user_stroke_json(
+            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
+        )
+        placement = CharPlacement(char="ノ", x=10.0, y=20.0, font_size=8.0, page=0)
+        renderer = StrokeRenderer(
+            user_strokes_dir=user_dir, kanjivg_dir=kanjivg_dir, enable_finishing=True
+        )
+
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert renderer._last_coverage.user_strokes == ["ノ"]
+        assert renderer._last_coverage.kanjivg == []
+        # direct 経路は加工で点が増えていない（元の点数を維持）
+        for s in strokes:
+            assert s.shape[0] == 5

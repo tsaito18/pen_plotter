@@ -26,6 +26,10 @@ KANJIVG_URL = (
 
 _WINDOWS_FORBIDDEN = set(r'\/:*?"<>|')
 
+# ElementTree が xmlns:kvg 宣言を解決した後の kvg:type 属性の完全修飾名。
+# KanjiVG 統合 XML はルートに xmlns:kvg を宣言済み。
+_KVG_TYPE_ATTR = "{http://kanjivg.tagaini.net}type"
+
 
 def _is_valid_filename_char(character: str) -> bool:
     """Windowsファイルシステムで使用可能な文字かチェック。"""
@@ -65,17 +69,38 @@ def _strokes_to_sample(
     num_points: int,
     source_info: str,
     target_size: float = 10.0,
+    types: list[str] | None = None,
 ) -> StrokeSample | None:
     """パース済み・正規化済みストローク配列をStrokeSampleに変換。
 
     入力ストロークはKanjiVGParser.normalize()で全ストローク一括正規化済みを想定。
     SVG座標系（Y下向き）からプロッタ座標系（Y上向き）へのY軸反転も行う。
+
+    Args:
+        character: 対象文字。
+        raw_strokes: 正規化済みストローク配列のリスト。
+        recorder: リサンプリング用 StrokeRecorder。
+        num_points: ストロークあたりのリサンプリング点数。
+        source_info: メタデータに残す出自情報。
+        target_size: 正規化ターゲットサイズ（Y反転に使用）。
+        types: raw kvg:type 文字列のリスト。``raw_strokes`` と index 対応し、
+            無い場合は全ストローク ``""`` 扱い。``len<2`` でスキップされた
+            ストロークの type も同条件で除外され、strokes と stroke_types の
+            index 対応が厳密に保たれる。分類はレンダリング時に行うため、ここ
+            では raw 値をそのまま保存する。
+
+    Returns:
+        変換済み StrokeSample。有効ストロークが無ければ None。
     """
     if not raw_strokes:
         return None
 
+    if types is None:
+        types = [""] * len(raw_strokes)
+
     stroke_points_list: list[list[StrokePoint]] = []
-    for arr in raw_strokes:
+    stroke_types: list[str] = []
+    for idx, arr in enumerate(raw_strokes):
         if len(arr) < 2:
             continue
         points = [
@@ -86,6 +111,7 @@ def _strokes_to_sample(
         ]
         points = recorder.resample_points(points, num_points=num_points)
         stroke_points_list.append(points)
+        stroke_types.append(types[idx] if idx < len(types) else "")
 
     if not stroke_points_list:
         return None
@@ -94,6 +120,7 @@ def _strokes_to_sample(
         character=character,
         strokes=stroke_points_list,
         metadata={"source": "kanjivg", "origin": source_info},
+        stroke_types=stroke_types,
     )
 
 
@@ -117,11 +144,13 @@ def convert_single_svg(
         return None
 
     parser = KanjiVGParser()
-    raw_strokes = parser.parse_file(svg_path)
+    raw_strokes, raw_types = parser.parse_file_with_types(svg_path)
     normalized = parser.normalize(raw_strokes, target_size=target_size)
 
     recorder = StrokeRecorder(target_size=target_size, output_dir=output_dir)
-    sample = _strokes_to_sample(character, normalized, recorder, num_points, svg_path.name)
+    sample = _strokes_to_sample(
+        character, normalized, recorder, num_points, svg_path.name, types=raw_types
+    )
 
     if sample is None:
         return None
@@ -179,15 +208,19 @@ def convert_xml_to_samples(
             continue
 
         raw_strokes = []
+        raw_types: list[str] = []
         for path_elem in kanji_elem.iter("path"):
             d = path_elem.get("d", "")
             if d:
                 points = parse_svg_path(d)
                 if len(points) > 0:
                     raw_strokes.append(points)
+                    raw_types.append(path_elem.get(_KVG_TYPE_ATTR, ""))
 
         normalized = parser.normalize(raw_strokes, target_size=target_size)
-        sample = _strokes_to_sample(character, normalized, recorder, num_points, xml_path.name)
+        sample = _strokes_to_sample(
+            character, normalized, recorder, num_points, xml_path.name, types=raw_types
+        )
 
         if sample is None:
             continue

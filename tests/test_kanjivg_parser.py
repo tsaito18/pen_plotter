@@ -17,6 +17,20 @@ SAMPLE_SVG = """<?xml version="1.0" encoding="UTF-8"?>
 </svg>"""
 
 
+# kvg:type 付き（xmlns:kvg 未宣言）の最小サンプル。木: 横画→縦画→左払い→右払い
+SAMPLE_SVG_WITH_TYPES = """<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="109" height="109" viewBox="0 0 109 109">
+  <g id="kvg:StrokePaths_06728" style="fill:none;stroke:#000000;">
+    <g id="kvg:06728" kvg:element="木">
+      <path id="kvg:06728-s1" kvg:type="㇐" d="M 20,40 L 90,40"/>
+      <path id="kvg:06728-s2" kvg:type="㇑a" d="M 55,15 L 55,95"/>
+      <path id="kvg:06728-s3" kvg:type="㇒" d="M 50,45 C 40,60 30,75 18,85"/>
+      <path id="kvg:06728-s4" kvg:type="㇏" d="M 60,45 C 70,60 80,75 92,85"/>
+    </g>
+  </g>
+</svg>"""
+
+
 class TestParseSvgPath:
     def test_move_and_line(self):
         points = parse_svg_path("M 10,20 L 30,40")
@@ -113,3 +127,36 @@ class TestKanjiVGParser:
             assert stroke[:, 1].max() <= 10.0
             assert stroke[:, 0].min() >= 0.0
             assert stroke[:, 1].min() >= 0.0
+
+
+class TestParseSvgWithTypes:
+    def test_extracts_types_aligned_with_strokes(self):
+        parser = KanjiVGParser()
+        strokes, types = parser.parse_svg_with_types(SAMPLE_SVG_WITH_TYPES)
+        assert len(strokes) == 4
+        assert len(types) == len(strokes)
+        assert types == ["㇐", "㇑a", "㇒", "㇏"]
+
+    def test_missing_type_is_empty_string(self):
+        # kvg:type を持たない SAMPLE_SVG では各ストロークの type が "" になる
+        parser = KanjiVGParser()
+        strokes, types = parser.parse_svg_with_types(SAMPLE_SVG)
+        assert len(strokes) == 2
+        assert types == ["", ""]
+
+    def test_parse_svg_returns_strokes_only_regression(self):
+        # 既存 parse_svg は strokes のみを返す（型・本数が変わらない）
+        parser = KanjiVGParser()
+        strokes = parser.parse_svg(SAMPLE_SVG_WITH_TYPES)
+        assert len(strokes) == 4
+        for stroke in strokes:
+            assert isinstance(stroke, np.ndarray)
+            assert stroke.shape[1] == 2
+
+    def test_parse_file_with_types(self, tmp_path):
+        svg_file = tmp_path / "ki.svg"
+        svg_file.write_text(SAMPLE_SVG_WITH_TYPES, encoding="utf-8")
+        parser = KanjiVGParser()
+        strokes, types = parser.parse_file_with_types(svg_file)
+        assert len(strokes) == 4
+        assert types[0] == "㇐"
