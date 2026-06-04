@@ -78,3 +78,68 @@ class TestPreviewStrokesVaryWidth:
         preview_strokes([line_stroke], save_path=save_path, vary_width=True)
         assert save_path.exists()
         assert save_path.stat().st_size > 0
+
+
+class TestComputeStrokeWidthsFinish:
+    """筆画タイプ別の太さプロファイルのテスト。"""
+
+    def test_default_finish_matches_none(self):
+        """finish引数省略時は finish='none' と一致する（後方互換）。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        n = 8
+        assert compute_stroke_widths(n) == compute_stroke_widths(n, "none")
+
+    def test_zero_segments_returns_empty_all_finishes(self):
+        """n_segments<=0 はどの finish でも空リスト。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        for finish in ("none", "tome", "hane", "harai"):
+            assert compute_stroke_widths(0, finish) == []
+            assert compute_stroke_widths(-3, finish) == []
+
+    def test_single_segment_uses_midpoint_all_finishes(self):
+        """n_segments==1 は t=[0.5] で1要素を返す。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        for finish in ("none", "tome", "hane", "harai"):
+            widths = compute_stroke_widths(1, finish)
+            assert len(widths) == 1
+
+    def test_harai_thinner_at_end_than_none(self):
+        """払い: 終端が none より細い（強く細くなる）。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        n = 16
+        harai = compute_stroke_widths(n, "harai")
+        none = compute_stroke_widths(n, "none")
+        assert harai[-1] < none[-1]
+
+    def test_harai_end_less_than_start(self):
+        """払い: 末尾 < 始点。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        harai = compute_stroke_widths(16, "harai")
+        assert harai[-1] < harai[0]
+
+    def test_hane_end_less_than_start(self):
+        """はね: 末尾 < 始点（細め）。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        hane = compute_stroke_widths(16, "hane")
+        assert hane[-1] < hane[0]
+
+    def test_tome_constant(self):
+        """とめ: 全要素が一定値 0.9。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        tome = compute_stroke_widths(16, "tome")
+        assert len(tome) == 16
+        assert all(abs(w - 0.9) < 1e-9 for w in tome)
+
+    def test_unknown_finish_falls_back_to_none(self):
+        """未知の finish は none と同じプロファイル。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        n = 10
+        assert compute_stroke_widths(n, "bogus") == compute_stroke_widths(n, "none")

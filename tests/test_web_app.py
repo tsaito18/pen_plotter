@@ -940,6 +940,56 @@ class TestFractionLine:
             assert s.shape[0] != 2 or abs(s[1, 0] - s[0, 0]) < 0.5
 
 
+class TestPlacementsToStrokesWithFinishes:
+    """placements_to_strokes_with_finishes の配線テスト。"""
+
+    @pytest.fixture
+    def pipeline(self):
+        return PlotterPipeline()
+
+    def test_returns_strokes_and_finishes_len_match(self, pipeline):
+        """(strokes, finishes) を返し、長さが常に一致する。"""
+        placements = pipeline.text_to_placements("あい")
+        strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements[0])
+        assert isinstance(strokes, list)
+        assert isinstance(finishes, list)
+        assert len(strokes) == len(finishes)
+        for s in strokes:
+            assert isinstance(s, np.ndarray)
+            assert s.ndim == 2
+        for f in finishes:
+            assert isinstance(f, str)
+
+    def test_backward_compat_wrapper_returns_only_strokes(self, pipeline):
+        """placements_to_strokes は後方互換で strokes のみ返す。"""
+        placements = pipeline.text_to_placements("あい")
+        strokes = pipeline.placements_to_strokes(placements[0])
+        with_finishes, _ = pipeline.placements_to_strokes_with_finishes(placements[0])
+        assert isinstance(strokes, list)
+        assert len(strokes) == len(with_finishes)
+
+    def test_fraction_line_finish_is_none(self):
+        """分数線など補助ストロークの finish は 'none' で長さ整合する。"""
+        pipeline = PlotterPipeline()
+        placements = [
+            CharPlacement(char="1", x=10.0, y=15.0, font_size=4.0, role="numerator"),
+            CharPlacement(char="2", x=10.0, y=25.0, font_size=4.0, role="denominator"),
+        ]
+        strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements)
+        assert len(strokes) == len(finishes)
+        # 分数線（水平・2点）に対応する finish が "none" であること
+        for s, f in zip(strokes, finishes):
+            if s.shape[0] == 2 and abs(s[1, 0] - s[0, 0]) > 0.5 and abs(s[1, 1] - s[0, 1]) < 0.5:
+                assert f == "none"
+
+    def test_generate_preview_with_finishes_produces_png(self, pipeline, tmp_path):
+        """finishes 対応経路でプレビュー描画が落ちず PNG を生成する。"""
+        preview_path = tmp_path / "preview_finishes.png"
+        result = pipeline.generate_preview("テスト漢字", save_path=preview_path)
+        assert isinstance(result, list)
+        assert preview_path.exists()
+
+
 class TestMultiPagePreview:
     """マルチページプレビューのテスト。"""
 

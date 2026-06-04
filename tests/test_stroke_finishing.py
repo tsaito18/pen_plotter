@@ -27,6 +27,7 @@ class TestClassifyFinish:
         assert classify_finish("㇀") == HARAI  # T 提
         assert classify_finish("㇚") == HANE  # SG 縦はね
         assert classify_finish("㇆") == HANE  # HZG 横折钩
+        assert classify_finish("㇄") == TOME  # SW 竖弯（鉤なし折れ）
 
     def test_variant_slash_stripped(self):
         assert classify_finish("㇒/a") == HARAI

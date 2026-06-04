@@ -190,17 +190,45 @@ class StrokeRenderer:
         return torch.zeros(1, 10, 3)
 
     def generate_char_strokes(self, placement: CharPlacement) -> list[Stroke]:
-        """Tier 0-4 フォールバックでストローク生成。"""
+        """Tier 0-4 フォールバックでストローク生成（strokes のみ返す後方互換ラッパー）。
+
+        Args:
+            placement: 描画対象文字の配置情報。
+
+        Returns:
+            生成された各画のストローク列。
+        """
+        return self.generate_char_strokes_with_finishes(placement)[0]
+
+    def generate_char_strokes_with_finishes(
+        self, placement: CharPlacement
+    ) -> tuple[list[Stroke], list[str]]:
+        """Tier 0-4 フォールバックで strokes と並走する finishes を生成する。
+
+        各画の筆画タイプ（``finish``: ``"tome"``/``"hane"``/``"harai"``/
+        ``"none"``）を strokes と同じ本数の ``list[str]`` として返す。幾何描画・
+        人の実筆跡（``_direct_stroke``）経路には終端加工を入れない方針のため
+        ``"none"`` を並べるだけで、ML 推論・KanjiVG safety-net 経路のみ
+        ``classify_finishes`` で求めた筆画タイプを返す（``apply_finishing`` 後も
+        strokes 本数は不変なので len は一致する）。
+
+        Args:
+            placement: 描画対象文字の配置情報。
+
+        Returns:
+            ``(strokes, finishes)``。``len(strokes) == len(finishes)`` を満たす。
+            ``_SKIP_RENDER`` 該当字は ``([], [])``。
+        """
         cov = self._last_coverage
 
         # 分数線・根号の屋根線などの補助線分は文字ではなく単一ストロークとして描画する
         if placement.line_segment is not None:
             x1, y1, x2, y2 = placement.line_segment
-            return [np.array([[x1, y1], [x2, y2]], dtype=np.float64)]
+            return [np.array([[x1, y1], [x2, y2]], dtype=np.float64)], ["none"]
 
         if placement.char in self._SKIP_RENDER:
             cov.skipped.append(placement.char)
-            return []
+            return [], []
 
         original_char = placement.char
         lookup_char = self._CHAR_SUBSTITUTIONS.get(original_char, original_char)
@@ -218,38 +246,44 @@ class StrokeRenderer:
         punct_strokes = self._simple_punct_strokes(lookup_char)
         if punct_strokes is not None:
             cov.geometric.append(original_char)
-            return self._position_strokes(punct_strokes, placement)
+            positioned = self._position_strokes(punct_strokes, placement)
+            return positioned, ["none"] * len(positioned)
 
         ascii_math = self._ascii_math_strokes(lookup_char)
         if ascii_math is not None:
             cov.geometric.append(original_char)
-            return self._position_strokes(ascii_math, placement)
+            positioned = self._position_strokes(ascii_math, placement)
+            return positioned, ["none"] * len(positioned)
 
         paren_strokes = self._simple_paren_strokes(original_char, placement)
         if paren_strokes is not None:
             cov.geometric.append(original_char)
-            return self._position_strokes(paren_strokes, placement)
+            positioned = self._position_strokes(paren_strokes, placement)
+            return positioned, ["none"] * len(positioned)
 
         math_strokes = self._math_symbol_strokes(lookup_char)
         if math_strokes is not None:
             cov.geometric.append(original_char)
-            return self._position_strokes(math_strokes, placement)
+            positioned = self._position_strokes(math_strokes, placement)
+            return positioned, ["none"] * len(positioned)
 
         word_strokes = self._math_word_strokes(lookup_char, placement)
         if word_strokes is not None:
             cov.geometric.append(original_char)
-            return word_strokes
+            return word_strokes, ["none"] * len(word_strokes)
 
         letter_strokes = self._ascii_letter_strokes(lookup_char)
         if letter_strokes is not None:
             cov.geometric.append(original_char)
-            return self._position_strokes(letter_strokes, placement)
+            positioned = self._position_strokes(letter_strokes, placement)
+            return positioned, ["none"] * len(positioned)
 
         direct = self._direct_stroke(placement.char)
         if direct is not None:
             cov.user_strokes.append(original_char)
             positioned = self._position_strokes(direct, placement)
-            return positioned if is_smooth else self._apply_distortion(positioned)
+            positioned = positioned if is_smooth else self._apply_distortion(positioned)
+            return positioned, ["none"] * len(positioned)
 
         reference, ref_types = self._load_reference_strokes(placement.char)
 
@@ -263,13 +297,15 @@ class StrokeRenderer:
                 )
                 cov.ml_inference.append(original_char)
                 positioned = self._position_strokes(raw, placement)
+                finishes = classify_finishes(ref_types)
                 positioned = apply_finishing(
                     positioned,
-                    classify_finishes(ref_types),
+                    finishes,
                     scale=placement.font_size,
                     config=self._finishing_config,
                 )
-                return positioned if is_smooth else self._apply_distortion(positioned)
+                positioned = positioned if is_smooth else self._apply_distortion(positioned)
+                return positioned, finishes
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
 
@@ -278,16 +314,19 @@ class StrokeRenderer:
             if char_strokes is not None:
                 cov.kanjivg.append(original_char)
                 positioned = self._position_strokes(char_strokes, placement)
+                finishes = classify_finishes(char_types)
                 positioned = apply_finishing(
                     positioned,
-                    classify_finishes(char_types),
+                    finishes,
                     scale=placement.font_size,
                     config=self._finishing_config,
                 )
-                return positioned if is_smooth else self._apply_distortion(positioned)
+                positioned = positioned if is_smooth else self._apply_distortion(positioned)
+                return positioned, finishes
 
         cov.rect_fallback.append(original_char)
-        return self._rect_fallback(placement)
+        rect = self._rect_fallback(placement)
+        return rect, ["none"] * len(rect)
 
     def _apply_distortion(self, strokes: list[Stroke]) -> list[Stroke]:
         aug = self._augmenter
@@ -388,49 +427,39 @@ class StrokeRenderer:
         elif char == "\u03b2":  # \u03b2: \u7e26\u68d2 + \u4e0a\u4e0b\u306e\u30eb\u30fc\u30d7
             stem = np.array([[0.25, 0.05], [0.25, 0.95]], dtype=np.float64)
             t = np.linspace(0, 1, 30)
-            upper = np.stack(
-                [0.25 + 0.45 * np.sin(np.pi * t), 0.5 + 0.4 * (1 - t)], axis=1
-            )
-            lower = np.stack(
-                [0.25 + 0.5 * np.sin(np.pi * t), 0.5 - 0.45 * t], axis=1
-            )
+            upper = np.stack([0.25 + 0.45 * np.sin(np.pi * t), 0.5 + 0.4 * (1 - t)], axis=1)
+            lower = np.stack([0.25 + 0.5 * np.sin(np.pi * t), 0.5 - 0.45 * t], axis=1)
             return [stem, upper, lower]
         elif char == "\u03b3":  # \u03b3: \u4e0a\u958b\u304d\u306e y \u5b57
             left = np.array([[0.15, 0.85], [0.5, 0.4]], dtype=np.float64)
             right = np.array([[0.85, 0.85], [0.4, 0.05]], dtype=np.float64)
             return [left, right]
-        elif char == "\u03b4":  # \u03b4: \u4e0a\u958b\u304d\u306e\u5186 + \u4e0a\u306b\u3057\u3063\u307d
+        elif (
+            char == "\u03b4"
+        ):  # \u03b4: \u4e0a\u958b\u304d\u306e\u5186 + \u4e0a\u306b\u3057\u3063\u307d
             t = np.linspace(0.2 * np.pi, 1.8 * np.pi, 30)
-            body = np.stack(
-                [0.5 + 0.3 * np.cos(t), 0.4 + 0.3 * np.sin(t)], axis=1
-            )
+            body = np.stack([0.5 + 0.3 * np.cos(t), 0.4 + 0.3 * np.sin(t)], axis=1)
             tail = np.array([[0.7, 0.85], [0.55, 0.95]], dtype=np.float64)
             return [body, tail]
         elif char == "\u03b5":  # \u03b5: \u6a2a\u5411\u304d\u306e 3 \u5b57
             t = np.linspace(0.5 * np.pi, 1.5 * np.pi, 16)
-            top = np.stack(
-                [0.55 - 0.3 * np.sin(t), 0.7 + 0.18 * np.cos(t)], axis=1
-            )
-            bot = np.stack(
-                [0.55 - 0.3 * np.sin(t), 0.3 + 0.18 * np.cos(t)], axis=1
-            )
+            top = np.stack([0.55 - 0.3 * np.sin(t), 0.7 + 0.18 * np.cos(t)], axis=1)
+            bot = np.stack([0.55 - 0.3 * np.sin(t), 0.3 + 0.18 * np.cos(t)], axis=1)
             mid = np.array([[0.3, 0.5], [0.55, 0.5]], dtype=np.float64)
             return [top, mid, bot]
-        elif char == "\u03b6":  # \u03b6: \u3072\u3063\u304b\u304d\u306e z + \u4e0b\u306b\u30eb\u30fc\u30d7
-            top = np.array(
-                [[0.2, 0.9], [0.8, 0.9], [0.3, 0.4]], dtype=np.float64
-            )
+        elif (
+            char == "\u03b6"
+        ):  # \u03b6: \u3072\u3063\u304b\u304d\u306e z + \u4e0b\u306b\u30eb\u30fc\u30d7
+            top = np.array([[0.2, 0.9], [0.8, 0.9], [0.3, 0.4]], dtype=np.float64)
             t = np.linspace(0, np.pi, 16)
-            tail = np.stack(
-                [0.5 + 0.25 * np.sin(t), 0.2 - 0.18 * (1 - np.cos(t))], axis=1
-            )
+            tail = np.stack([0.5 + 0.25 * np.sin(t), 0.2 - 0.18 * (1 - np.cos(t))], axis=1)
             return [top, tail]
-        elif char == "\u03b7":  # \u03b7: n \u5b57 + \u53f3\u811a\u3092\u4e0b\u306b\u4f38\u3070\u3059
+        elif (
+            char == "\u03b7"
+        ):  # \u03b7: n \u5b57 + \u53f3\u811a\u3092\u4e0b\u306b\u4f38\u3070\u3059
             stem_left = np.array([[0.2, 0.7], [0.2, 0.05]], dtype=np.float64)
             t = np.linspace(np.pi, 0, 16)
-            arch = np.stack(
-                [0.5 + 0.3 * np.cos(t), 0.55 + 0.15 * np.sin(t)], axis=1
-            )
+            arch = np.stack([0.5 + 0.3 * np.cos(t), 0.55 + 0.15 * np.sin(t)], axis=1)
             stem_right = np.array([[0.8, 0.7], [0.8, 0.2]], dtype=np.float64)
             return [stem_left, arch, stem_right]
         elif char == "\u03bb":  # \u03bb: \u659c\u3081\u306e\u00d7 \uff08/ + \u77ed\u3044 \\uff09
@@ -440,9 +469,7 @@ class StrokeRenderer:
         elif char == "\u03bc":  # \u03bc: \u4e0b\u306b\u9577\u3044\u68d2 + n \u5b57
             left_stem = np.array([[0.2, 0.7], [0.2, 0.0]], dtype=np.float64)
             t = np.linspace(np.pi, 0, 16)
-            arch = np.stack(
-                [0.5 + 0.3 * np.cos(t), 0.4 + 0.3 * np.sin(t)], axis=1
-            )
+            arch = np.stack([0.5 + 0.3 * np.cos(t), 0.4 + 0.3 * np.sin(t)], axis=1)
             right_stem = np.array([[0.8, 0.7], [0.8, 0.15]], dtype=np.float64)
             return [left_stem, arch, right_stem]
         elif char == "\u03bd":  # \u03bd: V \u5b57
@@ -450,45 +477,37 @@ class StrokeRenderer:
         elif char == "\u03c1":  # \u03c1: \u7e26\u68d2 + \u5186
             stem = np.array([[0.3, 0.5], [0.3, 0.0]], dtype=np.float64)
             t = np.linspace(0, 2 * np.pi, 24)
-            circle = np.stack(
-                [0.5 + 0.25 * np.cos(t), 0.55 + 0.25 * np.sin(t)], axis=1
-            )
+            circle = np.stack([0.5 + 0.25 * np.cos(t), 0.55 + 0.25 * np.sin(t)], axis=1)
             return [stem, circle]
         elif char == "\u03c3":  # \u03c3: \u5186 + \u4e0a\u306e\u6a2a\u68d2
             t = np.linspace(0, 2 * np.pi, 24)
-            circle = np.stack(
-                [0.4 + 0.25 * np.cos(t), 0.4 + 0.25 * np.sin(t)], axis=1
-            )
+            circle = np.stack([0.4 + 0.25 * np.cos(t), 0.4 + 0.25 * np.sin(t)], axis=1)
             top = np.array([[0.4, 0.7], [0.85, 0.7]], dtype=np.float64)
             return [circle, top]
         elif char == "\u03c4":  # \u03c4: \u4e0a\u6a2a\u68d2 + \u4e0b\u306b\u66f2\u304c\u308b\u811a
             top = np.array([[0.1, 0.75], [0.9, 0.75]], dtype=np.float64)
             t = np.linspace(0, np.pi / 2, 16)
-            stem = np.stack(
-                [0.5 + 0.2 * np.sin(t), 0.75 - 0.7 * t / (np.pi / 2)], axis=1
-            )
+            stem = np.stack([0.5 + 0.2 * np.sin(t), 0.75 - 0.7 * t / (np.pi / 2)], axis=1)
             return [top, stem]
         elif char == "\u03c7":  # \u03c7: \u5927\u304d\u306a \u00d7
             d1 = np.array([[0.15, 0.1], [0.85, 0.85]], dtype=np.float64)
             d2 = np.array([[0.85, 0.1], [0.15, 0.85]], dtype=np.float64)
             return [d1, d2]
         elif char == "\u03c8":  # \u03c8: V + \u7e26\u68d2
-            v = np.array(
-                [[0.15, 0.75], [0.5, 0.35], [0.85, 0.75]], dtype=np.float64
-            )
+            v = np.array([[0.15, 0.75], [0.5, 0.35], [0.85, 0.75]], dtype=np.float64)
             stem = np.array([[0.5, 0.95], [0.5, 0.05]], dtype=np.float64)
             return [v, stem]
         elif char == "\u0393":  # \u0393: \u4e0a\u6a2a\u68d2 + \u5de6\u7e26\u68d2
             top = np.array([[0.15, 0.9], [0.85, 0.9]], dtype=np.float64)
             left = np.array([[0.15, 0.9], [0.15, 0.1]], dtype=np.float64)
             return [top, left]
-        elif char == "\u039b":  # \u039b: \u4e09\u89d2\u306e\u4e0a (\u0394 \u304b\u3089\u5e95\u8fba\u306a\u3057)
+        elif (
+            char == "\u039b"
+        ):  # \u039b: \u4e09\u89d2\u306e\u4e0a (\u0394 \u304b\u3089\u5e95\u8fba\u306a\u3057)
             return [np.array([[0.1, 0.1], [0.5, 0.9], [0.9, 0.1]], dtype=np.float64)]
         elif char == "\u0398":  # \u0398: \u6955\u5186 + \u4e2d\u592e\u6a2a\u68d2
             t = np.linspace(0, 2 * np.pi, 30)
-            ellipse = np.stack(
-                [0.5 + 0.35 * np.cos(t), 0.5 + 0.4 * np.sin(t)], axis=1
-            )
+            ellipse = np.stack([0.5 + 0.35 * np.cos(t), 0.5 + 0.4 * np.sin(t)], axis=1)
             bar = np.array([[0.3, 0.5], [0.7, 0.5]], dtype=np.float64)
             return [ellipse, bar]
         elif char == "\u03a0":  # \u03a0: \u4e0a\u6a2a\u68d2 + \u5de6\u53f3\u7e26\u68d2
@@ -504,24 +523,18 @@ class StrokeRenderer:
             return [top, diag1, diag2, bot]
         elif char == "\u03a6":  # \u03a6: \u5186 + \u7e26\u68d2
             t = np.linspace(0, 2 * np.pi, 24)
-            circle = np.stack(
-                [0.5 + 0.3 * np.cos(t), 0.5 + 0.3 * np.sin(t)], axis=1
-            )
+            circle = np.stack([0.5 + 0.3 * np.cos(t), 0.5 + 0.3 * np.sin(t)], axis=1)
             stem = np.array([[0.5, 0.95], [0.5, 0.05]], dtype=np.float64)
             return [circle, stem]
         elif char == "\u03a8":  # \u03a8: U + \u7e26\u68d2
             t = np.linspace(np.pi, 2 * np.pi, 16)
-            cup = np.stack(
-                [0.5 + 0.35 * np.cos(t), 0.55 + 0.25 * np.sin(t)], axis=1
-            )
+            cup = np.stack([0.5 + 0.35 * np.cos(t), 0.55 + 0.25 * np.sin(t)], axis=1)
             stem = np.array([[0.5, 0.95], [0.5, 0.05]], dtype=np.float64)
             base = np.array([[0.25, 0.05], [0.75, 0.05]], dtype=np.float64)
             return [cup, stem, base]
         elif char == "\u03a9":  # \u03a9: U\u5b57 + \u4e0b\u306b\u811a
             t = np.linspace(np.pi, 2 * np.pi, 24)
-            arch = np.stack(
-                [0.5 + 0.35 * np.cos(t), 0.4 + 0.45 * np.sin(t)], axis=1
-            )
+            arch = np.stack([0.5 + 0.35 * np.cos(t), 0.4 + 0.45 * np.sin(t)], axis=1)
             left_foot = np.array([[0.15, 0.4], [0.05, 0.1]], dtype=np.float64)
             right_foot = np.array([[0.85, 0.4], [0.95, 0.1]], dtype=np.float64)
             base_l = np.array([[0.05, 0.1], [0.25, 0.1]], dtype=np.float64)
@@ -569,9 +582,7 @@ class StrokeRenderer:
             return [top, bot, head_top, head_bot]
         elif char == "\u2202":  # \u2202: 6 \u3092\u53cd\u8ee2\u3057\u305f\u5f62\uff08curly d\uff09
             t = np.linspace(0, 2 * np.pi, 30)
-            body = np.stack(
-                [0.5 + 0.3 * np.cos(t), 0.4 + 0.35 * np.sin(t)], axis=1
-            )
+            body = np.stack([0.5 + 0.3 * np.cos(t), 0.4 + 0.35 * np.sin(t)], axis=1)
             tail = np.array([[0.55, 0.75], [0.85, 0.95]], dtype=np.float64)
             return [body, tail]
         elif char == "\u2207":  # \u2207: \u4e0b\u5411\u304d\u4e09\u89d2
@@ -608,9 +619,9 @@ class StrokeRenderer:
     def _small_dot(cx: float, cy: float, r: float = 0.06) -> Stroke:
         """単位正方形内の小円（句点・コロン用）。"""
         angles = np.linspace(0, 2 * np.pi, 12)
-        return np.stack(
-            [cx + r * np.cos(angles), cy + r * np.sin(angles)], axis=1
-        ).astype(np.float64)
+        return np.stack([cx + r * np.cos(angles), cy + r * np.sin(angles)], axis=1).astype(
+            np.float64
+        )
 
     def _ascii_math_strokes(self, char: str) -> list[Stroke] | None:
         """ASCII の数式記号・句読点を単位正方形 (0,0)-(1,1) で幾何描画する。
@@ -638,9 +649,7 @@ class StrokeRenderer:
             for k in range(3):
                 ang = np.pi * k / 3.0
                 dx, dy = r * np.cos(ang), r * np.sin(ang)
-                arms.append(
-                    np.array([[cx - dx, cy - dy], [cx + dx, cy + dy]], dtype=np.float64)
-                )
+                arms.append(np.array([[cx - dx, cy - dy], [cx + dx, cy + dy]], dtype=np.float64))
             return arms
         elif char == "/":
             return [np.array([[0.2, 0.2], [0.8, 0.8]], dtype=np.float64)]
@@ -663,18 +672,20 @@ class StrokeRenderer:
 
     def _simple_paren_strokes(self, char: str, placement: CharPlacement) -> list[Stroke] | None:
         if char in ("(", "\uff08"):
+            # \u300c(\u300d\u306f\u5de6\u5bc4\u308a\u3067\u4e2d\u592e\u304c\u5de6\u306b\u51f8\uff08\u958b\u53e3\u306f\u53f3\u5411\u304d\uff09
             points = []
             for i in range(20):
                 t = i / 19
-                x = 0.15 + 0.25 * np.cos(np.pi * (t - 0.5))
+                x = 0.40 - 0.25 * np.cos(np.pi * (t - 0.5))
                 y = 0.1 + 0.8 * t
                 points.append([x, y])
             return [np.array(points)]
         elif char in (")", "\uff09"):
+            # \u300c)\u300d\u306f\u53f3\u5bc4\u308a\u3067\u4e2d\u592e\u304c\u53f3\u306b\u51f8\uff08\u958b\u53e3\u306f\u5de6\u5411\u304d\uff09
             points = []
             for i in range(20):
                 t = i / 19
-                x = 0.85 - 0.25 * np.cos(np.pi * (t - 0.5))
+                x = 0.60 + 0.25 * np.cos(np.pi * (t - 0.5))
                 y = 0.1 + 0.8 * t
                 points.append([x, y])
             return [np.array(points)]
@@ -872,9 +883,7 @@ class StrokeRenderer:
                 )
             ]
         if char == "z":
-            return [
-                np.array([[0.2, 0.7], [0.8, 0.7], [0.2, 0.05], [0.8, 0.05]], dtype=np.float64)
-            ]
+            return [np.array([[0.2, 0.7], [0.8, 0.7], [0.2, 0.05], [0.8, 0.05]], dtype=np.float64)]
         if char == "A":
             left = np.array([[0.2, 0.0], [0.5, 0.95]], dtype=np.float64)
             right = np.array([[0.5, 0.95], [0.8, 0.0]], dtype=np.float64)
@@ -1035,9 +1044,7 @@ class StrokeRenderer:
             stem = np.array([[0.5, 0.5], [0.5, 0.0]], dtype=np.float64)
             return [v, stem]
         if char == "Z":
-            return [
-                np.array([[0.2, 0.95], [0.8, 0.95], [0.2, 0.0], [0.8, 0.0]], dtype=np.float64)
-            ]
+            return [np.array([[0.2, 0.95], [0.8, 0.95], [0.2, 0.0], [0.8, 0.0]], dtype=np.float64)]
         return None
 
     @staticmethod
@@ -1067,9 +1074,7 @@ class StrokeRenderer:
                 types.append(raw_types[i] if i < len(raw_types) else "")
         return strokes, types
 
-    def _load_reference_strokes(
-        self, char: str
-    ) -> tuple[list[Stroke] | None, list[str]]:
+    def _load_reference_strokes(self, char: str) -> tuple[list[Stroke] | None, list[str]]:
         if self._kanjivg_dir is None:
             return None, []
         char_dir = self._kanjivg_dir / char
@@ -1085,9 +1090,7 @@ class StrokeRenderer:
         except Exception:
             return None, []
 
-    def _load_kanjivg_json(
-        self, placement: CharPlacement
-    ) -> tuple[list[Stroke] | None, list[str]]:
+    def _load_kanjivg_json(self, placement: CharPlacement) -> tuple[list[Stroke] | None, list[str]]:
         char_dir = self._kanjivg_dir / placement.char
         if not char_dir.is_dir():
             return None, []

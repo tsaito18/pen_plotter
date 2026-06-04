@@ -11,14 +11,21 @@ from src.gcode.config import PlotterConfig
 Stroke = npt.NDArray[np.float64]
 
 
-def compute_stroke_widths(n_segments: int) -> list[float]:
+def compute_stroke_widths(n_segments: int, finish: str = "none") -> list[float]:
     """ストローク内の各セグメントの太さを計算する。
 
+    筆画タイプ（``finish``）ごとに終端の細りかたを変える。``t`` は始点 0、
+    終点 1 の正規化パラメータで、終端で線幅を細くすることで払い・はねの抜けを
+    表現する。
+
     Args:
-        n_segments: セグメント数
+        n_segments: セグメント数。
+        finish: 筆画タイプ（``"tome"`` / ``"hane"`` / ``"harai"`` / ``"none"``）。
+            未知の値は ``"none"`` と同じプロファイル。
 
     Returns:
-        各セグメントの linewidth リスト（始点で太く、終点で細い）
+        各セグメントの linewidth リスト（一般に始点で太く、終点で細い）。
+        ``n_segments<=0`` は空リスト、``n_segments==1`` は ``t=[0.5]`` で 1 要素。
     """
     if n_segments <= 0:
         return []
@@ -26,23 +33,35 @@ def compute_stroke_widths(n_segments: int) -> list[float]:
         t = np.array([0.5])
     else:
         t = np.linspace(0.0, 1.0, n_segments)
-    widths = 0.7 + 0.3 * np.exp(-2.0 * t)
+    if finish == "harai":
+        widths = 0.6 + 0.4 * np.exp(-4.0 * t)
+    elif finish == "hane":
+        widths = 0.5 + 0.35 * np.exp(-1.2 * t)
+    elif finish == "tome":
+        widths = np.full_like(t, 0.9)
+    else:
+        widths = 0.7 + 0.3 * np.exp(-2.0 * t)
     return widths.tolist()
 
 
 def _draw_stroke_with_width(
-    ax: plt.Axes, stroke: Stroke, color: str = "b"
+    ax: plt.Axes, stroke: Stroke, color: str = "b", finish: str = "none"
 ) -> None:
-    """LineCollectionを使ってストロークを太さ変調付きで描画"""
+    """LineCollectionを使ってストロークを太さ変調付きで描画
+
+    Args:
+        ax: 描画先の matplotlib Axes。
+        stroke: ``(N, 2)`` の点列。
+        color: 線色。
+        finish: 筆画タイプ。:func:`compute_stroke_widths` の太さ分岐に渡す。
+    """
     n_points = len(stroke)
     n_segments = n_points - 1
     if n_segments < 1:
         return
 
-    segments = [
-        [stroke[i].tolist(), stroke[i + 1].tolist()] for i in range(n_segments)
-    ]
-    widths = compute_stroke_widths(n_segments)
+    segments = [[stroke[i].tolist(), stroke[i + 1].tolist()] for i in range(n_segments)]
+    widths = compute_stroke_widths(n_segments, finish)
 
     lc = LineCollection(segments, linewidths=widths, colors=color)
     ax.add_collection(lc)

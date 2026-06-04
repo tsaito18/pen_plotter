@@ -75,6 +75,23 @@ class TestStrokeRendererMethods:
         result = renderer._simple_paren_strokes("(", p)
         assert result is not None
 
+    def test_paren_open_direction(self):
+        # 「(」は中央が左に凸（開口は右向き）、「)」は中央が右に凸（開口は左向き）。
+        # 単位セル(0..1)の生座標で膨らみの向きを検証する。
+        from src.layout.typesetter import CharPlacement
+
+        renderer = StrokeRenderer()
+        p = CharPlacement(char="(", x=0.0, y=0.0, font_size=5.0)
+
+        open_pts = renderer._simple_paren_strokes("（", p)[0]
+        close_pts = renderer._simple_paren_strokes("）", p)[0]
+        open_mid_x = open_pts[len(open_pts) // 2][0]
+        open_end_x = open_pts[0][0]
+        close_mid_x = close_pts[len(close_pts) // 2][0]
+        close_end_x = close_pts[0][0]
+        assert open_mid_x < open_end_x  # 「(」: 中央が端より左
+        assert close_mid_x > close_end_x  # 「)」: 中央が端より右
+
     def test_renders_line_segment(self):
         from src.layout.typesetter import CharPlacement
 
@@ -401,3 +418,107 @@ class TestKanjiVGReferenceFinishing:
         # direct 経路は加工で点が増えていない（元の点数を維持）
         for s in strokes:
             assert s.shape[0] == 5
+
+
+class TestGenerateCharStrokesWithFinishes:
+    """generate_char_strokes_with_finishes の (strokes, finishes) 並走契約。"""
+
+    def test_returns_strokes_and_finishes_len_match_geometric(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="+", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == len(finishes)
+        assert finishes == ["none"] * len(strokes)
+
+    def test_geometric_paths_all_none(self):
+        renderer = StrokeRenderer()
+        # 句読点 / ASCII数式 / 括弧 / 数式記号 / ASCIIレター / 数式ワード
+        for char in ("、", "=", "(", "×", "A", "α"):
+            placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+            strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+            assert len(strokes) == len(finishes), f"{char}: len mismatch"
+            assert set(finishes) <= {"none"}, f"{char}: non-none finish leaked"
+
+    def test_math_word_all_none(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="cos", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == len(finishes)
+        assert finishes == ["none"] * len(strokes)
+
+    def test_line_segment_returns_none_finish(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(
+            char="", x=0.0, y=0.0, font_size=8.0, page=0, line_segment=(0.0, 0.0, 1.0, 1.0)
+        )
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == 1
+        assert finishes == ["none"]
+
+    def test_skip_render_returns_empty_pair(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char=" ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert strokes == []
+        assert finishes == []
+
+    def test_rect_fallback_returns_none_finish(self):
+        # 参照なし・推論なし → 矩形フォールバック
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="漢", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == len(finishes)
+        assert finishes == ["none"] * len(strokes)
+
+    def test_direct_stroke_all_none(self, tmp_path):
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(user_dir, "ノ", _HARAI_STROKES)
+        renderer = StrokeRenderer(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert renderer._last_coverage.user_strokes == ["ノ"]
+        assert len(strokes) == len(finishes)
+        assert finishes == ["none"] * len(strokes)
+
+    def test_kanjivg_safety_net_emits_harai(self, tmp_path):
+        kanjivg_dir = tmp_path / "strokes"
+        _create_user_stroke_json(
+            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
+        )
+        renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
+        placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert renderer._last_coverage.kanjivg == ["ノ"]
+        assert len(strokes) == len(finishes)
+        # 第1画=横画(㇐)→tome, 第2画=左払い(㇒)→harai
+        assert finishes == ["tome", "harai"]
+
+    def test_backward_compat_generate_char_strokes_returns_strokes_only(self, tmp_path):
+        kanjivg_dir = tmp_path / "strokes"
+        _create_user_stroke_json(
+            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
+        )
+        renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
+        placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        result = renderer.generate_char_strokes(placement)
+
+        # ラッパーは strokes（list[Stroke]）のみ返す（タプルではない）
+        assert isinstance(result, list)
+        assert not isinstance(result, tuple)
+        strokes, _ = renderer.generate_char_strokes_with_finishes(placement)
+        assert len(result) == len(strokes)

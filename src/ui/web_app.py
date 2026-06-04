@@ -9,7 +9,10 @@ import numpy.typing as npt
 
 from src.gcode.config import PlotterConfig
 from src.gcode.generator import GCodeGenerator
-from src.gcode.optimizer import optimize_stroke_order
+from src.gcode.optimizer import (
+    optimize_stroke_order,
+    optimize_stroke_order_with_finishes,
+)
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement, Typesetter
 from src.model.augmentation import HandwritingAugmenter
@@ -193,6 +196,7 @@ class PlotterPipeline:
         save_path: str | Path,
         page_number: int | None = None,
         page_number_strokes: list[Stroke] | None = None,
+        finishes: list[str] | None = None,
     ) -> None:
         if self._REPORT_PAPER_BG:
             self._preview_renderer._report_bg_path = self._REPORT_PAPER_BG
@@ -202,6 +206,7 @@ class PlotterPipeline:
             save_path,
             page_number=page_number,
             page_number_strokes=page_number_strokes,
+            finishes=finishes,
         )
 
     # --- パイプライン本体 ---
@@ -214,9 +219,43 @@ class PlotterPipeline:
         placements: list[CharPlacement],
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> list[Stroke]:
+        """\u914d\u7f6e\u60c5\u5831\u304b\u3089\u30b9\u30c8\u30ed\u30fc\u30af\u5217\u3092\u751f\u6210\u3059\u308b\uff08\u5f8c\u65b9\u4e92\u63db\u30e9\u30c3\u30d1\u30fc\uff09\u3002
+
+        ``placements_to_strokes_with_finishes`` \u306e strokes \u90e8\u5206\u306e\u307f\u3092\u8fd4\u3059\u3002
+        G-code \u7d4c\u8def\u30fb\u65e2\u5b58\u30c6\u30b9\u30c8\u306f\u3053\u306e strokes \u3060\u3051\u3092\u4f7f\u3046\u3002
+
+        Args:
+            placements: 1\u30da\u30fc\u30b8\u5206\u306e\u6587\u5b57\u914d\u7f6e\u60c5\u5831\u3002
+            progress_callback: \u9032\u6357\u901a\u77e5\u30b3\u30fc\u30eb\u30d0\u30c3\u30af\u3002
+
+        Returns:
+            \u751f\u6210\u3055\u308c\u305f\u5168\u30b9\u30c8\u30ed\u30fc\u30af\u5217\uff08\u66f8\u304d\u9806\u3092\u4fdd\u6301\uff09\u3002
+        """
+        return self.placements_to_strokes_with_finishes(placements, progress_callback)[0]
+
+    def placements_to_strokes_with_finishes(
+        self,
+        placements: list[CharPlacement],
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> tuple[list[Stroke], list[str]]:
+        """\u914d\u7f6e\u60c5\u5831\u304b\u3089 strokes \u3068\u4e26\u8d70\u3059\u308b finishes \u3092\u751f\u6210\u3059\u308b\u3002
+
+        \u5404\u6587\u5b57\u3092 ``generate_char_strokes_with_finishes`` \u3067\u63cf\u753b\u3057\u3001strokes \u3068
+        \u7b46\u753b\u30bf\u30a4\u30d7\uff08``finish``\uff09\u3092\u9806\u5e8f\u4fdd\u6301\u3067\u4e26\u884c\u96c6\u7d04\u3059\u308b\u3002\u5206\u6570\u7dda\u306a\u3069\u5f8c\u304b\u3089
+        ``append`` \u3059\u308b\u88dc\u52a9\u30b9\u30c8\u30ed\u30fc\u30af\u306b\u306f ``"none"`` \u3092\u5bfe\u5fdc\u4ed8\u3051\u3001strokes \u3068
+        finishes \u306e\u9577\u3055\u3092\u5e38\u306b\u4e00\u81f4\u3055\u305b\u308b\u3002
+
+        Args:
+            placements: 1\u30da\u30fc\u30b8\u5206\u306e\u6587\u5b57\u914d\u7f6e\u60c5\u5831\u3002
+            progress_callback: \u9032\u6357\u901a\u77e5\u30b3\u30fc\u30eb\u30d0\u30c3\u30af\u3002
+
+        Returns:
+            ``(strokes, finishes)``\u3002``len(strokes) == len(finishes)`` \u3092\u6e80\u305f\u3059\u3002
+        """
         self._stroke_renderer._augmenter = self._typesetter.augmenter
         self._stroke_renderer._last_coverage = CharCoverageReport()
         strokes: list[Stroke] = []
+        finishes: list[str] = []
         prev_end_x: float | None = None
         augmenter = self._typesetter.augmenter
         has_real_renderer = self._inference is not None or self._kanjivg_dir is not None
@@ -228,7 +267,9 @@ class PlotterPipeline:
                     i / max(total, 1),
                     f"\u30b9\u30c8\u30ed\u30fc\u30af\u751f\u6210\u4e2d ({i + 1}/{total})",
                 )
-            char_strokes = self._stroke_renderer.generate_char_strokes(p)
+            char_strokes, char_finishes = self._stroke_renderer.generate_char_strokes_with_finishes(
+                p
+            )
 
             if (
                 prev_end_x is not None
@@ -244,6 +285,7 @@ class PlotterPipeline:
                 prev_end_x = last_stroke[-1, 0]
 
             strokes.extend(char_strokes)
+            finishes.extend(char_finishes)
 
             if getattr(p, "role", None) == "numerator":
                 next_denom = None
@@ -259,8 +301,9 @@ class PlotterPipeline:
                     )
                     line_y = (p.y + next_denom.y) / 2
                     strokes.append(np.array([[line_x0, line_y], [line_x1, line_y]]))
+                    finishes.append("none")
 
-        return strokes
+        return strokes, finishes
 
     def _generate_page_number_strokes(self, page_number: int) -> list[Stroke]:
         """ページ番号を手書きストロークで生成。用紙の「P.」印字の右横に配置。"""
@@ -344,7 +387,7 @@ class PlotterPipeline:
                     progress_callback(_base + frac * _span * 0.8, desc)
 
             page_path = save_path if n_pages == 1 else parent / f"{stem}_p{i}{suffix}"
-            strokes = self.placements_to_strokes(
+            strokes, finishes = self.placements_to_strokes_with_finishes(
                 page_placements, progress_callback=_page_stroke_progress
             )
             if progress_callback:
@@ -352,7 +395,7 @@ class PlotterPipeline:
                     page_base + page_span * 0.85,
                     f"ストローク最適化中 ({i}/{n_pages})...",
                 )
-            optimized = optimize_stroke_order(strokes)
+            optimized, optimized_finishes = optimize_stroke_order_with_finishes(strokes, finishes)
             if progress_callback:
                 progress_callback(
                     page_base + page_span * 0.9,
@@ -365,6 +408,7 @@ class PlotterPipeline:
                 page_path,
                 page_number=i,
                 page_number_strokes=page_num_strokes,
+                finishes=optimized_finishes,
             )
             result.append(page_path)
 

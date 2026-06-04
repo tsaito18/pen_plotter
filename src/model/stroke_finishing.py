@@ -59,6 +59,7 @@ KVG_TYPE_TO_FINISH: dict[str, str] = {
     "㇅": TOME,  # HZZ 横折折
     "㇍": TOME,  # HZW 横折弯
     "㇎": TOME,  # HZZZ 横折折折
+    "㇄": TOME,  # SW  竖弯（鉤なしの折れ。実データで頻出するため明示マップ）
     "㇘": TOME,  # SWZ 竖弯
     "㇞": TOME,  # SZZ 竖折折
     "㇛": TOME,  # PD  撇点（終端が点）
