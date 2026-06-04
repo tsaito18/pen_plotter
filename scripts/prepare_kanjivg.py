@@ -9,13 +9,12 @@ import re
 import shutil
 import sys
 import urllib.request
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.collector.data_format import StrokePoint, StrokeSample
-from src.collector.kanjivg_parser import KanjiVGParser, parse_svg_path
+from src.collector.kanjivg_parser import KanjiVGParser
 from src.collector.stroke_recorder import StrokeRecorder
 
 logger = logging.getLogger(__name__)
@@ -26,9 +25,11 @@ KANJIVG_URL = (
 
 _WINDOWS_FORBIDDEN = set(r'\/:*?"<>|')
 
-# ElementTree が xmlns:kvg 宣言を解決した後の kvg:type 属性の完全修飾名。
-# KanjiVG 統合 XML はルートに xmlns:kvg を宣言済み。
-_KVG_TYPE_ATTR = "{http://kanjivg.tagaini.net}type"
+# 統合 XML から <kanji>…</kanji> ブロックを切り出す正規表現。
+# ルートに xmlns:kvg が宣言されないため ElementTree は使えず、ブロック単位で
+# 正規表現パーサー（parse_svg_with_types）に委譲する。
+_KANJI_BLOCK_RE = re.compile(r"<kanji\b[^>]*>.*?</kanji>", re.DOTALL)
+_KANJI_ID_RE = re.compile(r"kanji_([0-9a-fA-F]+)")
 
 
 def _is_valid_filename_char(character: str) -> bool:
@@ -183,40 +184,47 @@ def convert_xml_to_samples(
     target_size: float = 10.0,
     num_points: int = 32,
 ) -> int:
-    """KanjiVG統合XMLを直接パースしてStrokeSample JSONに変換。"""
+    """KanjiVG統合XMLを直接パースしてStrokeSample JSONに変換。
+
+    実 KanjiVG 統合 XML はルートに xmlns:kvg を宣言せず kvg:type を多用する。
+    ElementTree は未宣言プレフィックスで unbound prefix エラーを起こすため、
+    ``<kanji>…</kanji>`` ブロック単位で切り出し、SVG 個別経路と同じ正規表現
+    パーサー（``KanjiVGParser.parse_svg_with_types``）で d 属性と kvg:type を
+    同期抽出する。これにより SVG 経路と XML 経路の挙動が一致し、筆画タイプが
+    名前空間宣言の有無に依存せず保存される。
+
+    Args:
+        xml_path: KanjiVG 統合 XML ファイルパス。
+        output_dir: StrokeSample JSON の出力先ディレクトリ。
+        target_size: 正規化ターゲットサイズ。
+        num_points: ストロークあたりのリサンプリング点数。
+
+    Returns:
+        変換に成功した文字数。
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
+    xml_text = Path(xml_path).read_text(encoding="utf-8")
 
     parser = KanjiVGParser()
     recorder = StrokeRecorder(target_size=target_size, output_dir=output_dir)
     count = 0
 
-    for kanji_elem in root.iter("kanji"):
-        kanji_id = kanji_elem.get("id", "")
-        match = re.search(r"kanji_([0-9a-fA-F]+)", kanji_id)
-        if not match:
+    for block in _KANJI_BLOCK_RE.finditer(xml_text):
+        block_text = block.group(0)
+        id_match = _KANJI_ID_RE.search(block_text)
+        if not id_match:
             continue
 
         try:
-            character = chr(int(match.group(1), 16))
+            character = chr(int(id_match.group(1), 16))
         except (ValueError, OverflowError):
             continue
 
         if not _is_valid_filename_char(character):
             continue
 
-        raw_strokes = []
-        raw_types: list[str] = []
-        for path_elem in kanji_elem.iter("path"):
-            d = path_elem.get("d", "")
-            if d:
-                points = parse_svg_path(d)
-                if len(points) > 0:
-                    raw_strokes.append(points)
-                    raw_types.append(path_elem.get(_KVG_TYPE_ATTR, ""))
-
+        raw_strokes, raw_types = parser.parse_svg_with_types(block_text)
         normalized = parser.normalize(raw_strokes, target_size=target_size)
         sample = _strokes_to_sample(
             character, normalized, recorder, num_points, xml_path.name, types=raw_types

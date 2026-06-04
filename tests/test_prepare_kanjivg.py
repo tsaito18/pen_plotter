@@ -306,6 +306,23 @@ class TestStrokeTypes:
 </kanji>
 </kanjivg>"""
 
+    # 実 KanjiVG 統合 XML と同じ落とし穴を再現する: ルートに xmlns:kvg を
+    # 宣言しないため、ElementTree は kvg:type プレフィックスを解決できず
+    # ParseError(unbound prefix) でクラッシュする。正規表現ベースの実装は
+    # 名前空間宣言の有無に依存せず kvg:type を抽出できることを保証する。
+    XML_NO_NS_DECL = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<kanjivg>
+<kanji id="kvg:kanji_06728">
+<g id="kvg:06728" kvg:element="木">
+  <path id="kvg:06728-s1" kvg:type="㇐" d="M 10,30 L 90,30"/>
+  <path id="kvg:06728-s2" kvg:type="㇑" d="M 50,10 L 50,90"/>
+  <path id="kvg:06728-s3" kvg:type="㇒" d="M 50,40 L 20,80"/>
+  <path id="kvg:06728-s4" kvg:type="㇏" d="M 50,40 L 80,80"/>
+</g>
+</kanji>
+</kanjivg>"""
+
     # s2 の座標は単一点のみ（parse 後 len<2 でスキップされる）。
     # スキップ後も stroke_types が strokes と index 対応することを確認する。
     XML_WITH_SKIPPED_STROKE = """\
@@ -341,6 +358,26 @@ class TestStrokeTypes:
 
         sample = StrokeSample.load(list((output_dir / "二").glob("*.json"))[0])
         assert sample.stroke_types == ["㇐", ""]
+        assert len(sample.stroke_types) == len(sample.strokes)
+
+    def test_xml_stroke_types_without_ns_declaration(self, tmp_path: Path):
+        """xmlns:kvg 未宣言の実 XML と同条件で kvg:type が抽出されること。
+
+        実 KanjiVG 統合 XML はルートに xmlns:kvg を宣言せず kvg:type を多用する。
+        ElementTree 経路では unbound prefix で失敗するため、正規表現ベースの
+        抽出で stroke_types が非空に埋まることを保証する回帰テスト。
+        """
+        from scripts.prepare_kanjivg import convert_xml_to_samples
+
+        xml_file = tmp_path / "kanjivg.xml"
+        xml_file.write_text(self.XML_NO_NS_DECL, encoding="utf-8")
+        output_dir = tmp_path / "output"
+
+        count = convert_xml_to_samples(xml_file, output_dir, target_size=10.0, num_points=8)
+
+        assert count == 1
+        sample = StrokeSample.load(list((output_dir / "木").glob("*.json"))[0])
+        assert sample.stroke_types == ["㇐", "㇑", "㇒", "㇏"]
         assert len(sample.stroke_types) == len(sample.strokes)
 
     def test_xml_stroke_types_in_json(self, tmp_path: Path):
