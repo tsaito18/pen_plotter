@@ -324,7 +324,9 @@ class PlotterPipeline:
             strokes.extend(char_strokes)
             finishes.extend(char_finishes)
 
-            if getattr(p, "role", None) == "numerator":
+            # $$ 数式は画像レンダリングに分数線が含まれるので、layout 側の分数線は引かない
+            is_math_rendered = getattr(p, "math_source", None) or getattr(p, "math_skip", False)
+            if getattr(p, "role", None) == "numerator" and not is_math_rendered:
                 next_denom = None
                 for j in range(i + 1, len(placements)):
                     if getattr(placements[j], "role", None) == "denominator":
