@@ -15,6 +15,7 @@ from src.model.stroke_finishing import (
     FinishingConfig,
     apply_finishing,
     classify_finishes,
+    infer_finishes,
 )
 from dataclasses import dataclass, field
 
@@ -200,6 +201,17 @@ class StrokeRenderer:
         """
         return self.generate_char_strokes_with_finishes(placement)[0]
 
+    def _resolve_finishes(self, raw_types: list[str], positioned: list[Stroke]) -> list[str]:
+        """筆画タイプを決める。kvg:type があれば分類、無ければ軌跡から推定。
+
+        漢字は KanjiVG の ``kvg:type`` を分類（正確）。かな等 ``kvg:type`` を持た
+        ない字（raw_types が全空 → 全 none）は軌跡形状から推定して筆遣いを与える。
+        """
+        finishes = classify_finishes(raw_types)
+        if all(f == "none" for f in finishes):
+            return infer_finishes(positioned)
+        return finishes
+
     def generate_char_strokes_with_finishes(
         self, placement: CharPlacement
     ) -> tuple[list[Stroke], list[str]]:
@@ -297,7 +309,7 @@ class StrokeRenderer:
                 )
                 cov.ml_inference.append(original_char)
                 positioned = self._position_strokes(raw, placement)
-                finishes = classify_finishes(ref_types)
+                finishes = self._resolve_finishes(ref_types, positioned)
                 positioned = apply_finishing(
                     positioned,
                     finishes,
@@ -314,7 +326,7 @@ class StrokeRenderer:
             if char_strokes is not None:
                 cov.kanjivg.append(original_char)
                 positioned = self._position_strokes(char_strokes, placement)
-                finishes = classify_finishes(char_types)
+                finishes = self._resolve_finishes(char_types, positioned)
                 positioned = apply_finishing(
                     positioned,
                     finishes,

@@ -194,13 +194,16 @@ class TestFallbackStrokes:
         for s in strokes:
             assert isinstance(s, np.ndarray)
             assert s.ndim == 2
-            assert s.shape[0] == 8
+            # かなは軌跡推定で finish が付き、払い/はねは終端が延長され点数が増える
+            assert s.shape[0] >= 8
 
         all_pts = np.concatenate(strokes, axis=0)
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
         rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
-        assert rendered_w <= placement.font_size + 0.01
-        assert rendered_h <= placement.font_size + 0.01
+        # 配置はセル内。ただし払い/はねの終端延長(≈harai_ext_ratio*font_size)分は超える
+        margin = placement.font_size * 0.3
+        assert rendered_w <= placement.font_size + margin
+        assert rendered_h <= placement.font_size + margin
 
     def test_pipeline_kanjivg_missing_char_falls_to_rect(self, tmp_path):
         """KanjiVGにファイルがない文字は矩形フォールバック。"""

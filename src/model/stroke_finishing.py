@@ -95,6 +95,60 @@ def classify_finishes(kvg_types: list[str]) -> list[str]:
     return [classify_finish(t) for t in kvg_types]
 
 
+# 軌跡からの筆法推定（かな等 kvg:type が無い字向け）の閾値。Y-UP 前提。
+_INFER_HANE_UP = 0.45  # 終端接線の上向き成分がこれ超で「跳ね上げ」=はね
+_INFER_HARAI_TURN_DEG = 35.0  # 終端の曲がりがこれ未満で「滑らか」
+_INFER_HARAI_DIAG = 0.40  # 斜め度(min/max成分比)がこれ超で「斜めに流れる」
+
+
+def _unit(v: np.ndarray) -> np.ndarray | None:
+    norm = float(np.linalg.norm(v))
+    return v / norm if norm > 1e-9 else None
+
+
+def infer_finish_from_stroke(stroke: np.ndarray) -> str:
+    """ストロークの軌跡形状から筆法（とめ/はね/払い）を推定する。
+
+    KanjiVG の ``kvg:type`` を持たない字（ひらがな・カタカナ）向けのロジック判定。
+    終端の接線・曲がり方から、跳ね上げ＝はね、斜めに滑らかに流れる＝払い、
+    それ以外＝とめ とみなす。Y-UP 座標前提（上が +Y）。
+
+    Args:
+        stroke: ``(N, 2)`` の点列（mm 座標、Y-UP）。
+
+    Returns:
+        :data:`HANE` / :data:`HARAI` / :data:`TOME` のいずれか。判定不能は TOME。
+    """
+    pts = np.asarray(stroke, dtype=float)
+    n = len(pts)
+    if n < 3:
+        return TOME
+    v_end = _unit(pts[-1] - pts[-3])
+    if v_end is None:
+        return TOME
+    # 終端より少し手前の進行方向（曲がり量の算出用）
+    back = min(6, n - 1)
+    v_pre = _unit(pts[-3] - pts[-1 - back])
+    if v_pre is None:
+        v_pre = v_end
+    cos_turn = float(np.clip(np.dot(v_pre, v_end), -1.0, 1.0))
+    turn_deg = float(np.degrees(np.arccos(cos_turn)))
+
+    # はね: 終端が上向きに跳ねる（縦画下端からの跳ね上げ等）
+    if v_end[1] > _INFER_HANE_UP:
+        return HANE
+    # 払い: 斜め下方向へ滑らかに流れて抜ける
+    diag = min(abs(v_end[0]), abs(v_end[1])) / max(abs(v_end[0]), abs(v_end[1]), 1e-9)
+    if turn_deg < _INFER_HARAI_TURN_DEG and v_end[1] < -0.1 and diag > _INFER_HARAI_DIAG:
+        return HARAI
+    return TOME
+
+
+def infer_finishes(strokes: list[np.ndarray]) -> list[str]:
+    """各ストロークの筆法を軌跡から推定する（かな等向け）。"""
+    return [infer_finish_from_stroke(s) for s in strokes]
+
+
 def arc_length_from_end(points: np.ndarray) -> np.ndarray:
     """各点の「終端までの弧長(mm)」配列を返す。
 

@@ -16,6 +16,8 @@ from src.model.stroke_finishing import (
     classify_finish,
     classify_finishes,
     contact_profile,
+    infer_finish_from_stroke,
+    infer_finishes,
 )
 
 
@@ -210,3 +212,42 @@ class TestContactProfile:
         prof = contact_profile(HARAI, np.array([0.0]), lift_length=5.0)
         assert len(prof) == 1
         assert np.allclose(prof, 1.0)
+
+
+class TestInferFinish:
+    """軌跡からの筆法推定（かな用、kvg:type が無い字向け）。Y-UP。"""
+
+    def test_vertical_hook_flicks_up_is_hane(self):
+        # 縦に下りてから左上へ跳ね上げる＝はね
+        stroke = np.array(
+            [[0, 4], [0, 3], [0, 2], [0, 1], [0, 0], [-0.5, 0.5], [-1.0, 1.0]],
+            dtype=float,
+        )
+        assert infer_finish_from_stroke(stroke) == HANE
+
+    def test_diagonal_smooth_sweep_is_harai(self):
+        # 右下へ滑らかに流れる長い斜め＝払い
+        stroke = np.array([[0, 5], [1, 4], [2, 3], [3, 2], [4, 1], [5, 0]], dtype=float)
+        assert infer_finish_from_stroke(stroke) == HARAI
+
+    def test_horizontal_is_tome(self):
+        stroke = np.array([[0, 0], [1, 0], [2, 0], [3, 0]], dtype=float)
+        assert infer_finish_from_stroke(stroke) == TOME
+
+    def test_vertical_straight_down_is_tome(self):
+        # 跳ねずに真下で止まる縦画＝とめ
+        stroke = np.array([[0, 4], [0, 3], [0, 2], [0, 1], [0, 0]], dtype=float)
+        assert infer_finish_from_stroke(stroke) == TOME
+
+    def test_short_stroke_is_tome(self):
+        assert infer_finish_from_stroke(np.array([[0, 0], [1, 0]], dtype=float)) == TOME
+
+    def test_infer_finishes_list(self):
+        strokes = [
+            np.array([[0, 0], [1, 0], [2, 0], [3, 0]], dtype=float),  # tome
+            np.array([[0, 5], [1, 4], [2, 3], [3, 2], [4, 1], [5, 0]], dtype=float),  # harai
+        ]
+        assert infer_finishes(strokes) == [TOME, HARAI]
+
+    def test_infer_finishes_empty(self):
+        assert infer_finishes([]) == []
