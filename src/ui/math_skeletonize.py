@@ -24,6 +24,8 @@ _PAD_INCHES = 0.05
 _MIN_STROKE_PX = 2
 _MIN_STROKE_MM = 0.5  # 0.5mm 未満のストロークは除去
 _MIN_STROKE_UNIT = 0.02  # unit square の 2% 未満は除去（per-char 用）
+_MATH_LIFT_FRACTION = 0.12  # 数式を bbox 高さの何割上にずらすか（行内でやや上寄せ）
+_MATH_HEIGHT_STRETCH = 1.2  # 縦方向の引き伸ばし（matplotlib の分数が横に潰れて見えるのを補正）
 
 
 @lru_cache(maxsize=64)
@@ -84,14 +86,15 @@ def render_latex_to_strokes(
     aspect, unit_strokes = rendered
 
     x0, y0, w_mm, h_mm = bbox_mm
-    # 高さを信頼し、描画画像のアスペクト比から幅を算出して歪みを消す。
+    # 高さを信頼し、描画画像のアスペクト比から幅を算出する。
     # 高さ基準にするのは、文字サイズ（縦）を本文 font_size に揃えるため。
     # 幅基準にすると \qquad(番号) の空白がアスペクトを水増しし、数式全体が縦に潰れて小さくなる。
-    draw_h = h_mm
+    # x は等方（aspect 維持）、y は分数の潰れ補正として軽く引き伸ばす。
     draw_w = h_mm * aspect
-    # bbox の中心を保ったまま配置（縦横とも中央寄せ）
+    draw_h = h_mm * _MATH_HEIGHT_STRETCH
+    # bbox 中心からやや上寄せに配置（行内でベースライン上に乗る見た目に近づける）
     cx = x0 + w_mm / 2
-    cy = y0 + h_mm / 2
+    cy = y0 + h_mm / 2 + h_mm * _MATH_LIFT_FRACTION
     x_left = cx - draw_w / 2
     y_bottom = cy - draw_h / 2
 

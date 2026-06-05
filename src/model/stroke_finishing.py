@@ -213,6 +213,9 @@ def contact_profile(
     """
     arc = np.asarray(arc_from_end, dtype=float)
     contact = np.ones(len(arc), dtype=float)
+    if finish == CONNECT:
+        # 連綿のつなぎ画は全長一定の薄い接触（Z一定＝点線化しない）
+        return np.full(len(arc), CONNECT_CONTACT, dtype=float)
     if len(arc) < 2 or finish not in (HARAI, HANE) or lift_length <= 0:
         return contact
     # 実効リフト長: 全長の max_lift_fraction で頭打ち（短い画の全体かすれを防ぐ）
@@ -229,6 +232,57 @@ def contact_profile(
     else:  # HANE: 二乗イーズアウト（境界側から早く抜けて終端で跳ねる）
         contact = hane_min + (1.0 - hane_min) * t**2
     return contact
+
+
+def insert_connections(
+    strokes: list[np.ndarray],
+    finishes: list[str],
+    strength: float,
+    scale: float,
+    rng: np.random.Generator,
+) -> tuple[list[np.ndarray], list[str]]:
+    """同じ字の連続する画を、近さに応じた確率で薄いつなぎ画（連綿）で結ぶ。
+
+    前の画の終端と次の画の始端の距離 ``gap`` が ``max_gap = strength*0.6*scale``
+    以内のとき、``prob = strength*(1 - gap/max_gap)``（近いほど高い）で :data:`CONNECT`
+    画（2点）を間に挿入する。``rng`` で確率判定するので毎回揺れる（人の続け方の
+    ばらつき）。終端で抜ける画（:data:`HARAI`/:data:`HANE`）や既存のつなぎ画の
+    後ろには付けない。``strength<=0`` で何もしない。
+
+    Args:
+        strokes: 配置後の画（mm 座標）。1 文字分を想定。
+        finishes: 各画の筆法（``strokes`` と同数）。
+        strength: 連綿の強さ ∈[0,1]。0=なし。大きいほど遠い画もつなぎ高確率。
+        scale: 文字サイズ（mm）。``max_gap`` の基準。
+        rng: 乱数生成器（augmenter の RNG を共有）。
+
+    Returns:
+        ``(new_strokes, new_finishes)``。つなぎ画が間に挿入された新リスト。
+    """
+    if strength <= 0 or len(strokes) < 2:
+        return strokes, finishes
+    max_gap = strength * 0.6 * scale
+    if max_gap <= 0:
+        return strokes, finishes
+    out_s: list[np.ndarray] = []
+    out_f: list[str] = []
+    for i in range(len(strokes)):
+        out_s.append(strokes[i])
+        out_f.append(finishes[i])
+        if i + 1 >= len(strokes):
+            continue
+        if finishes[i] in (HARAI, HANE, CONNECT):
+            continue  # 抜ける画・つなぎ画の後ろには連綿しない
+        a = np.asarray(strokes[i], dtype=float)[-1]
+        b = np.asarray(strokes[i + 1], dtype=float)[0]
+        gap = float(np.hypot(b[0] - a[0], b[1] - a[1]))
+        if gap <= 1e-9 or gap > max_gap:
+            continue
+        prob = strength * (1.0 - gap / max_gap)  # 近いほど高確率
+        if rng.random() < prob:
+            out_s.append(np.array([a, b], dtype=float))
+            out_f.append(CONNECT)
+    return out_s, out_f
 
 
 def pressure_modulation(stroke: np.ndarray, amplitude: float) -> np.ndarray:

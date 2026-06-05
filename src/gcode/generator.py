@@ -68,23 +68,32 @@ class GCodeGenerator:
         return min(cfg.pen_down_z, max(cfg.finish_lift_z, z))
 
     def _stroke_to_gcode(
-        self, stroke: Stroke, finish: str = "none", vary_speed: bool = True
+        self,
+        stroke: Stroke,
+        finish: str = "none",
+        vary_speed: bool = True,
+        continue_from_prev: bool = False,
     ) -> list[str]:
         """単一ストロークをG-codeに変換。
 
         ``finish`` が払い/はねのときは終端区間で Z を漸減（芯を持ち上げ）し、
         速度も倍率調整する。とめ/none は従来どおり Z 一定で出力する。
+        ``continue_from_prev=True`` のときはペンを上げず（pen_up/G0/pen_down を出さず）
+        現在位置 ``stroke[0]`` から続けて描く（連綿のつなぎ画・その直後の画用）。
+        この場合は Z が前画から引き継がれるため、全点で Z を明示して復帰させる。
         """
         if len(stroke) < 2:
             return []
 
         lines: list[str] = []
-        lines.append(self.config.pen_up_command)
-        x0, y0 = stroke[0]
-        lines.append(
-            f"G0 X{self._format_coord(x0)} Y{self._format_coord(y0)} F{self.config.travel_speed:.0f}"
-        )
-        lines.append(self.config.pen_down_command)
+        if not continue_from_prev:
+            lines.append(self.config.pen_up_command)
+            x0, y0 = stroke[0]
+            lines.append(
+                f"G0 X{self._format_coord(x0)} Y{self._format_coord(y0)} "
+                f"F{self.config.travel_speed:.0f}"
+            )
+            lines.append(self.config.pen_down_command)
 
         arc = arc_length_from_end(stroke)
         contact = contact_profile(finish, arc, self.config.finish_lift_length_mm)
@@ -103,8 +112,10 @@ class GCodeGenerator:
             else:
                 feed = self.config.draw_speed
             c = float(contact[i + 1])
-            if c < 1.0 - 1e-9:
-                feed = int(feed * speed_factor)
+            # 連綿継続時は Z を引き継ぐので、接触一定の区間でも Z を明示して復帰させる
+            if c < 1.0 - 1e-9 or continue_from_prev:
+                if c < 1.0 - 1e-9:
+                    feed = int(feed * speed_factor)
                 z = self._lift_z(c)
                 lines.append(
                     f"G1 X{self._format_coord(x)} Y{self._format_coord(y)} "
@@ -131,9 +142,22 @@ class GCodeGenerator:
             vary_speed: S字フィードレート変調の有効化。
         """
         lines = self._header()
+
+        def _finish_at(idx: int) -> str:
+            return finishes[idx] if finishes is not None and idx < len(finishes) else "none"
+
         for i, stroke in enumerate(strokes):
-            finish = finishes[i] if finishes is not None and i < len(finishes) else "none"
-            lines.extend(self._stroke_to_gcode(stroke, finish=finish, vary_speed=vary_speed))
+            finish = _finish_at(i)
+            # 連綿: つなぎ画、またはつなぎ画の直後の画は、ペンを上げず継続する
+            continue_from_prev = finish == "connect" or (i > 0 and _finish_at(i - 1) == "connect")
+            lines.extend(
+                self._stroke_to_gcode(
+                    stroke,
+                    finish=finish,
+                    vary_speed=vary_speed,
+                    continue_from_prev=continue_from_prev,
+                )
+            )
         lines.extend(self._footer())
         return lines
 

@@ -16,12 +16,70 @@ from src.model.stroke_finishing import (
     arc_length_from_end,
     classify_finish,
     classify_finishes,
+    CONNECT,
     contact_profile,
     entry_modulation,
     infer_finish_from_stroke,
     infer_finishes,
+    insert_connections,
     pressure_modulation,
 )
+
+
+class TestInsertConnections:
+    """連綿: 同字内・近い画を確率的に薄いつなぎ画で結ぶ（近いほど高確率）。"""
+
+    def _two(self, gap):
+        a = np.array([[0.0, 0.0], [1.0, 0.0]])
+        b = np.array([[1.0 + gap, 0.0], [2.0 + gap, 0.0]])
+        return [a, b], ["tome", "tome"]
+
+    def test_strength_zero_no_connection(self):
+        s, f = self._two(0.1)
+        rng = np.random.default_rng(0)
+        os, of = insert_connections(s, f, strength=0.0, scale=10.0, rng=rng)
+        assert of == ["tome", "tome"]
+        assert len(os) == 2
+
+    def test_close_strokes_connect(self):
+        # ごく近い画は高確率で CONNECT が挿入される
+        s, f = self._two(0.05)
+        rng = np.random.default_rng(0)
+        os, of = insert_connections(s, f, strength=1.0, scale=10.0, rng=rng)
+        assert CONNECT in of
+        # CONNECT 画は前画終端→次画始端の2点
+        ci = of.index(CONNECT)
+        assert np.allclose(os[ci][0], s[0][-1])
+        assert np.allclose(os[ci][-1], s[1][0])
+
+    def test_far_strokes_not_connected(self):
+        # スケールに対し遠い画は max_gap 超でつながない
+        s, f = self._two(gap=50.0)
+        rng = np.random.default_rng(0)
+        os, of = insert_connections(s, f, strength=1.0, scale=10.0, rng=rng)
+        assert CONNECT not in of
+
+    def test_closer_higher_probability(self):
+        # 近い方が連綿確率が高い（多数試行の平均で比較）
+        def rate(gap):
+            hits = 0
+            for seed in range(200):
+                s, f = self._two(gap)
+                os, of = insert_connections(
+                    s, f, strength=0.8, scale=10.0, rng=np.random.default_rng(seed)
+                )
+                hits += CONNECT in of
+            return hits / 200
+
+        assert rate(0.05) > rate(3.0)
+
+    def test_no_connection_after_harai(self):
+        # はらい/はねの後ろには連綿を付けない（終端で抜ける画）
+        s = [np.array([[0.0, 0.0], [1.0, 0.0]]), np.array([[1.05, 0.0], [2.0, 0.0]])]
+        f = [HARAI, "tome"]
+        rng = np.random.default_rng(0)
+        os, of = insert_connections(s, f, strength=1.0, scale=10.0, rng=rng)
+        assert CONNECT not in of
 
 
 class TestEntryModulation:

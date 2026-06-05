@@ -17,6 +17,7 @@ from src.gcode.optimizer import (
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement, Typesetter
 from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+from src.model.stroke_finishing import insert_connections
 from src.ui.stroke_renderer import CharCoverageReport  # noqa: F401 (re-export)
 
 Stroke = npt.NDArray[np.float64]
@@ -54,7 +55,9 @@ class PlotterPipeline:
         user_strokes_dir: Path | str | None = None,
         messiness: float = 1.0,
         instance_variation: float = 0.5,
+        connection_strength: float = 0.0,
     ) -> None:
+        self._connection_strength = connection_strength
         self._page_config = page_config or PageConfig(
             paper_size=(210.0, 297.0),
             margin_top=48.0,
@@ -303,6 +306,16 @@ class PlotterPipeline:
             ):
                 shift = augmenter.random_uniform(0, 0.1)
                 char_strokes = [s - np.array([shift, 0.0]) for s in char_strokes]
+
+            # 連綿: 同じ字の近い画を確率的に薄いつなぎ画で結ぶ（近いほど高確率＋乱数）
+            if self._connection_strength > 0 and augmenter is not None and len(char_strokes) > 1:
+                char_strokes, char_finishes = insert_connections(
+                    char_strokes,
+                    char_finishes,
+                    self._connection_strength,
+                    p.font_size,
+                    augmenter._rng,
+                )
 
             if char_strokes:
                 last_stroke = char_strokes[-1]
@@ -594,6 +607,7 @@ def build_pipeline(
         user_strokes_dir=user_strokes_dir,
         messiness=settings.messiness,
         instance_variation=settings.instance_variation,
+        connection_strength=settings.connection_strength,
     )
     # PlotterPipeline.__init__ は font_size=4.5 ハードコーディングのため、
     # UISettings.font_size を反映するため Typesetter を再構築する

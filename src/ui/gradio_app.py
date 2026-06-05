@@ -432,6 +432,14 @@ def create_app(
                     label="入筆",
                     info="始筆を軽く入れて立ち上げる筆の入り。実機は始筆がかすれ得るため0推奨",
                 )
+                connection_strength = gr.Slider(
+                    0.0,
+                    1.0,
+                    value=default_settings.connection_strength,
+                    step=0.05,
+                    label="連綿（続け字）",
+                    info="同じ字の近い画を薄い線で続ける。近いほど高確率＋乱数。Z一定で点線化しない",
+                )
 
                 reset_btn = gr.Button("デフォルトに戻す", size="sm")
                 validation_md = gr.HTML(value="", visible=False)
@@ -454,6 +462,7 @@ def create_app(
             pressure_variation,
             instance_variation,
             entry_taper,
+            connection_strength,
         ]
 
         # ===== コールバック =====
@@ -509,6 +518,7 @@ def create_app(
             pressure_variation: "pressure_variation",
             instance_variation: "instance_variation",
             entry_taper: "entry_taper",
+            connection_strength: "connection_strength",
         }
         for slider, field in slider_field_map.items():
             slider.change(
@@ -743,6 +753,7 @@ def create_app(
                 d.pressure_variation,
                 d.instance_variation,
                 d.entry_taper,
+                d.connection_strength,
                 d.to_dict(),  # ブラウザ永続化もデフォルトへ
             )
 
@@ -790,6 +801,7 @@ def create_app(
                 settings.pressure_variation,
                 settings.instance_variation,
                 settings.entry_taper,
+                settings.connection_strength,
                 gr.update(value=prof) if profile_options else gr.update(),
                 gr.update(value=_validation_status(errors), visible=has_err),
                 gr.update(interactive=not has_err),

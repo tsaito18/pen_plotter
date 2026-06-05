@@ -39,6 +39,9 @@ class UISettings:
             大=書くたびに微妙に違う（人が同じ字を書いても揺れる）。Z は動かさない。
         entry_taper: 入筆（始筆を軽く入れて立ち上げる）の強度 ∈[0,1]。0=なし。
             【実機注意】始筆で Z を動かすためかすれ得る。実機では 0 推奨。
+        connection_strength: 連綿（続け字）の強さ ∈[0,1]。0=なし。同じ字の近い画を、
+            近いほど高確率＋乱数で薄いつなぎ線で結ぶ（ペンを上げずに継続）。Z 一定の
+            つなぎなので点線化しない。
         paper_width: 用紙幅 (mm)。デフォルト A4。
         paper_height: 用紙高 (mm)。デフォルト A4。
     """
@@ -57,6 +60,7 @@ class UISettings:
     pressure_variation: float = 0.0
     instance_variation: float = 0.5
     entry_taper: float = 0.0
+    connection_strength: float = 0.0
     paper_width: float = 210.0
     paper_height: float = 297.0
 
@@ -83,6 +87,7 @@ class UISettings:
             pressure_variation=0.0,
             instance_variation=0.5,
             entry_taper=0.0,
+            connection_strength=0.0,
         )
 
     def validate(self) -> list[str]:

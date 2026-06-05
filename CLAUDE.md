@@ -158,7 +158,9 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - **人らしさ3スライダー（GUI）**: 定幅ペン感を消し「人が書いた」感を出す調整軸。すべて実機キャリブ前提でデフォルトは控えめ。
   - `pressure_variation`(筆圧変化, 既定0.35): 画内の濃淡を `stroke_finishing.pressure_modulation()` で変調（下ろし濃く・上げ薄く＋低周波揺らぎ）。contact に乗算するので preview線幅と実機Zが連動。0=均一(定幅ペン感)
   - `instance_variation`(字のばらつき, 既定0.5): 同一字の繰り返しで形を変える per-stroke ランダムaffine（`StrokeRenderer._apply_instance_variation`）。`augmenter.enabled` と多画字の `_waver_scale` に従う
-  - `entry_taper`(入筆, 既定0.3): 始筆を軽く入れて立ち上げる `stroke_finishing.entry_modulation()`。収筆(はらい/はね)と対。連綿(画を線でつなぐ)は誤ると不自然なので未実装
+  - `entry_taper`(入筆, 実機既定0): 始筆を軽く入れて立ち上げる `stroke_finishing.entry_modulation()`。収筆(はらい/はね)と対。**実機注意**: 始筆でZを動かすためかすれ得る→実機は0
+  - `connection_strength`(連綿, 既定0): 同字の近い画を確率的に薄いつなぎ画(`CONNECT`)で結ぶ `stroke_finishing.insert_connections()`。**近いほど高確率＋乱数**(`prob=strength*(1-gap/max_gap)`, `max_gap=strength*0.6*scale`)。generatorは`continue_from_prev`でペンを上げず継続=真の連綿。つなぎ画はZ一定(`CONNECT_CONTACT`)なので点線化しない。はらい/はねの後ろには付けない
+  - **実機の制約**: 単線シャーペンは描画中にZを上下に振るとペンがバウンドして点線化する。よって筆圧変化・入筆(描画中Z変動)は実機デフォルト0。連綿はZ一定なのでOK。終端リフト(はらい/はね)は単調変化なのでOK
 - ストローク太さ変化はプレビューのみ。実機は終端Zリフト（contact_profile, 距離mmベース）で払い・はねを表現
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 

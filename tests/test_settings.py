@@ -32,6 +32,7 @@ class TestUISettingsDefault:
         assert s.pressure_variation == 0.0
         assert s.instance_variation == 0.5
         assert s.entry_taper == 0.0
+        assert s.connection_strength == 0.0
 
     def test_default_paper_size_a4(self):
         """default() の用紙サイズは A4。"""
@@ -228,6 +229,7 @@ class TestUISettingsSerialization:
             "pressure_variation",
             "instance_variation",
             "entry_taper",
+            "connection_strength",
             "paper_width",
             "paper_height",
         ):

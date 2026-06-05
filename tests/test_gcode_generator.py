@@ -31,6 +31,35 @@ def _long_stroke() -> Stroke:
     return np.column_stack([xs, np.zeros_like(xs)])
 
 
+class TestConnectFinish:
+    """連綿(つなぎ画 finish='connect')はペンを上げず継続して描く。"""
+
+    def _pen_up_count(self, lines: list[str], cfg) -> int:
+        return sum(1 for line in lines if line == cfg.pen_up_command)
+
+    def test_connect_skips_pen_up_for_connection_and_next(self):
+        g = _finish_only_generator()
+        s0 = np.array([[0.0, 0.0], [5.0, 0.0]])
+        conn = np.array([[5.0, 0.0], [6.0, 1.0]])  # つなぎ画
+        s1 = np.array([[6.0, 1.0], [10.0, 1.0]])
+        connected = g.generate([s0, conn, s1], finishes=["tome", "connect", "tome"])
+        plain = g.generate([s0, conn, s1], finishes=["tome", "tome", "tome"])
+        # 連綿では つなぎ画＋直後の画 がペンを上げず継続 → pen_up が2回少ない
+        assert self._pen_up_count(connected, g.config) == self._pen_up_count(plain, g.config) - 2
+
+    def test_connect_emits_constant_faint_z(self):
+        g = _finish_only_generator()
+        s0 = np.array([[0.0, 0.0], [5.0, 0.0]])
+        conn = np.array([[5.0, 0.0], [6.0, 0.0]])
+        s1 = np.array([[6.0, 0.0], [10.0, 0.0]])
+        lines = g.generate([s0, conn, s1], finishes=["tome", "connect", "tome"])
+        # つなぎ画は接触 < 1 ＝ Z 付き（薄い）。Z は finish_lift_z〜pen_down_z 内
+        zs = _z_values(_g1_lines(lines))
+        assert len(zs) > 0
+        for z in zs:
+            assert g.config.finish_lift_z - 1e-6 <= z <= g.config.pen_down_z + 1e-6
+
+
 class TestGCodeGeneratorSquare:
     """四角形ストロークからのG-code生成テスト"""
 
