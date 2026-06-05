@@ -280,6 +280,8 @@ class ParsedDocument:
     block_math_lines: dict[int, str]  # global_line_idx → math source
     # global_line_idx → 表の行データ（先頭ヘッダ）。パイプ表ブロックの起点行に登録。
     table_blocks: dict[int, list[list[str]]] = field(default_factory=dict)
+    # global_line_idx → 表のキャプション（"" は無し）。表ブロック起点行に対応。
+    table_captions: dict[int, str] = field(default_factory=dict)
 
 
 class Typesetter:
@@ -408,8 +410,9 @@ class Typesetter:
 
             if global_line_idx in doc.table_blocks:
                 rows = doc.table_blocks[global_line_idx]
+                caption = doc.table_captions.get(global_line_idx, "")
                 consumed = self._place_table(
-                    rows, line_idx, line_positions, area, page_idx, current_page
+                    rows, caption, line_idx, line_positions, area, page_idx, current_page
                 )
                 if consumed == -1:
                     pages.append(current_page)
@@ -417,7 +420,7 @@ class Typesetter:
                     page_idx += 1
                     line_idx = 0
                     consumed = self._place_table(
-                        rows, 0, line_positions, area, page_idx, current_page
+                        rows, caption, 0, line_positions, area, page_idx, current_page
                     )
                     if consumed == -1:
                         consumed = 1  # 1ページに収まらない巨大表は無限ループ回避
@@ -497,21 +500,31 @@ class Typesetter:
             cleaned.append(p)
         paragraphs = cleaned
 
-        # パイプ表を検出して 1 プレースホルダ段落へ畳む（複数行表を後段で一括配置）
-        stashed_tables: list[list[list[str]]] = []
+        # パイプ表を検出して 1 プレースホルダ段落へ畳む（複数行表を後段で一括配置）。
+        # 表の直後の "「: タイトル」行" はキャプションとして取り込み下に中央寄せする。
+        stashed_tables: list[tuple[list[list[str]], str]] = []
         collapsed: list[str] = []
         ti = 0
         while ti < len(paragraphs):
             tbl = detect_pipe_table(paragraphs, ti)
             if tbl is not None:
                 rows, consumed = tbl
-                stashed_tables.append(rows)
+                ti += consumed
+                caption = ""
+                cap_m = (
+                    re.match(r"^:\s+(.+)$", paragraphs[ti].strip())
+                    if ti < len(paragraphs)
+                    else None
+                )
+                if cap_m is not None:
+                    caption = cap_m.group(1).strip()
+                    ti += 1  # キャプション行も消費
+                stashed_tables.append((rows, caption))
                 collapsed.append(
                     _TABLE_PLACEHOLDER_PREFIX
                     + str(len(stashed_tables) - 1)
                     + _TABLE_PLACEHOLDER_SUFFIX
                 )
-                ti += consumed
             else:
                 collapsed.append(paragraphs[ti])
                 ti += 1
@@ -524,6 +537,7 @@ class Typesetter:
         para_start_indices: set[int] = set()
         block_math_lines: dict[int, str] = {}
         table_blocks: dict[int, list[list[str]]] = {}
+        table_captions: dict[int, str] = {}
         heading_lines: dict[int, int] = {}
         line_body_level: dict[int, int] = {}
         current_body_level: int = 0
@@ -532,8 +546,11 @@ class Typesetter:
             # パイプ表プレースホルダ: 表ブロック起点行として登録
             table_match = table_placeholder_re.fullmatch(para.strip())
             if table_match is not None:
+                rows, caption = stashed_tables[int(table_match.group(1))]
                 para_start_indices.add(len(lines))
-                table_blocks[len(lines)] = stashed_tables[int(table_match.group(1))]
+                table_blocks[len(lines)] = rows
+                if caption:
+                    table_captions[len(lines)] = caption
                 line_body_level[len(lines)] = current_body_level
                 lines.append("")
                 continue
@@ -618,6 +635,7 @@ class Typesetter:
             para_start_indices=para_start_indices,
             block_math_lines=block_math_lines,
             table_blocks=table_blocks,
+            table_captions=table_captions,
         )
 
     def _place_line(
@@ -780,6 +798,7 @@ class Typesetter:
     def _place_table(
         self,
         rows: list[list[str]],
+        caption: str,
         line_idx: int,
         line_positions: list[float],
         area: object,
@@ -789,18 +808,20 @@ class Typesetter:
         """パイプ表を罫線(line_segment)＋セル文字として配置する。
 
         1 表行 = line_positions の 1 行を占有する。列幅は各列の最大文字数から決め、
-        合計が本文幅を超える場合は一律縮小して収める。残り行が足りなければ -1
-        （呼び出し側で次ページ送り）。
+        合計が本文幅を超える場合は一律縮小して収める。表は本文幅の中央寄せ。
+        ``caption`` があれば表の真下の行に中央寄せで描画し +1 行消費する。残り行が
+        足りなければ -1（呼び出し側で次ページ送り）。
 
         Returns:
-            消費した行数（= 表の行数）。残り行不足なら -1。
+            消費した行数（表の行数 + キャプション行）。残り行不足なら -1。
         """
         n_rows = len(rows)
         if n_rows == 0:
             return 1
         n_cols = max(len(r) for r in rows)
+        cap_rows = 1 if caption else 0
         remaining = len(line_positions) - line_idx
-        if remaining < n_rows:
+        if remaining < n_rows + cap_rows:
             return -1
 
         fs = self.font_size
@@ -819,20 +840,23 @@ class Typesetter:
         # 境界 y: 先頭行の上罫線(L[idx]+row_h) → 各行の下罫線 L[idx+r]。
         ys = [line_positions[line_idx] + row_h]
         ys += [line_positions[line_idx + r] for r in range(n_rows)]
-        xs = [area.x]
+        # 表は本文幅の中央に寄せる（幅いっぱいのときは left=area.x）。
+        table_w = sum(col_w)
+        x_start = area.x + max(0.0, (area.width - table_w) / 2)
+        xs = [x_start]
         for w in col_w:
             xs.append(xs[-1] + w)
 
-        # 横罫線（用紙の罫線に重なる）
+        # 横罫線（左端=表の左端 xs[0]、右端=xs[-1]）
         for y in ys:
             output.append(
                 CharPlacement(
                     char="",
-                    x=area.x,
+                    x=xs[0],
                     y=y,
                     font_size=fs,
                     page=page_idx,
-                    line_segment=(area.x, y, xs[-1], y),
+                    line_segment=(xs[0], y, xs[-1], y),
                 )
             )
         # 縦罫線（列境界）。表の上端〜下端まで。
@@ -865,7 +889,21 @@ class Typesetter:
                             )
                         )
                     cx += self._body_char_advance(ch) * scale
-        return n_rows
+
+        # キャプション: 表の真下の行に中央寄せ（表幅の中央に合わせる）。
+        if caption:
+            cap_baseline = line_positions[line_idx + n_rows]
+            cap_w = sum(self._body_char_advance(ch) for ch in caption)
+            table_center = (xs[0] + xs[-1]) / 2
+            cx = table_center - cap_w / 2
+            for ch in caption:
+                if ch != " ":
+                    output.append(
+                        CharPlacement(char=ch, x=cx, y=cap_baseline, font_size=fs, page=page_idx)
+                    )
+                cx += self._body_char_advance(ch)
+
+        return n_rows + cap_rows
 
     def _place_block_math(
         self,

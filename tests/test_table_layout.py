@@ -74,6 +74,31 @@ class TestTypesetterTableIntegration:
         ph = pages[0]
         assert [p for p in ph if p.line_segment is not None] == []
 
+    def test_caption_below_table(self):
+        # 表の直後の「: タイトル」が下に中央寄せで描かれる
+        text = "| a | b |\n|---|---|\n| 1 | 2 |\n: 表1 サンプル"
+        pages = self._ts().typeset(text)
+        chars = [p for p in pages[0] if p.char and p.line_segment is None]
+        for ch in "表1サンプル":
+            assert ch in [c.char for c in chars]
+        # キャプションは表の最下罫線より下にある
+        segs = [p for p in pages[0] if p.line_segment is not None]
+        min_border_y = min(p.line_segment[1] for p in segs)
+        cap_chars = [c for c in chars if c.char in "サンプル"]
+        assert all(c.y < min_border_y for c in cap_chars)
+
+    def test_table_horizontally_centered(self):
+        # 列が少ない表は本文中央へ寄る（左端が area.x より右）
+        from src.layout.page_layout import PageConfig
+        from src.layout.typesetter import Typesetter
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        area = ts._layout.content_area()
+        pages = ts.typeset("| a | b |\n|---|---|\n| 1 | 2 |")
+        segs = [p for p in pages[0] if p.line_segment is not None]
+        left = min(min(p.line_segment[0], p.line_segment[2]) for p in segs)
+        assert left > area.x + 1.0
+
 
 class TestTableConfig:
     def test_defaults(self):
