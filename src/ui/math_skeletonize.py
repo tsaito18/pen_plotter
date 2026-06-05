@@ -80,15 +80,39 @@ def formula_draw_width_mm(math_src: str, h_mm: float) -> float:
     return h_mm * aspect
 
 
+@lru_cache(maxsize=128)
+def _baseline_frac_from_top(math_src: str) -> float:
+    """数式画像で、ベースラインが上端から何割の位置かを返す（TextPath の baseline=0 基準）。
+
+    F→≈1.0（ベースラインに座る）、A_0→≈0.8（0 が下付きで下に出る）、分数→≈0.6。
+    """
+    from matplotlib.textpath import TextPath
+
+    safe = re.sub(r"(?<!\\)%", r"\\%", math_src)
+    try:
+        with plt.rc_context({"mathtext.fontset": "cm"}):
+            tp = TextPath((0, 0), f"${safe}$", size=_FONT_SIZE_PT)
+        v = tp.vertices
+        ymin, ymax = float(v[:, 1].min()), float(v[:, 1].max())
+        span = ymax - ymin
+        return ymax / span if span > 0 else 0.5
+    except Exception:
+        return 0.5
+
+
 def render_latex_to_strokes(
     math_src: str,
     bbox_mm: tuple[float, float, float, float],
+    align: str = "center",
 ) -> list[Stroke]:
     """LaTeX 数式をレンダリング → スケルトン化 → mm 座標ストロークに変換。
 
     Args:
         math_src: LaTeX ソース（$ なし。例: r'\\frac{F}{A_0}'）
-        bbox_mm: (x_left_mm, y_bottom_mm, width_mm, height_mm) — Y-UP
+        bbox_mm: (x_left_mm, y_bbox_mm, width_mm, height_mm) — Y-UP
+        align: "center"=bbox 中心に上寄せ配置（ブロック数式用）。
+            "baseline"=bbox_mm[1] を本文ベースライン y とみなし、数式のベースラインを
+            そこに揃える（インライン数式用。LIFT/STRETCH を無効化し歪みなし）。
 
     Returns:
         ストローク列（各要素は (N,2) float64, mm, Y-UP）
@@ -99,17 +123,22 @@ def render_latex_to_strokes(
     aspect, unit_strokes = rendered
 
     x0, y0, w_mm, h_mm = bbox_mm
-    # 高さを信頼し、描画画像のアスペクト比から幅を算出する。
-    # 高さ基準にするのは、文字サイズ（縦）を本文 font_size に揃えるため。
-    # 幅基準にすると \qquad(番号) の空白がアスペクトを水増しし、数式全体が縦に潰れて小さくなる。
-    # x は等方（aspect 維持）、y は分数の潰れ補正として軽く引き伸ばす。
-    draw_w = h_mm * aspect
-    draw_h = h_mm * _MATH_HEIGHT_STRETCH
-    # bbox 中心からやや上寄せに配置（行内でベースライン上に乗る見た目に近づける）
-    cx = x0 + w_mm / 2
-    cy = y0 + h_mm / 2 + h_mm * _MATH_LIFT_FRACTION
-    x_left = cx - draw_w / 2
-    y_bottom = cy - draw_h / 2
+    if align == "baseline":
+        # インライン: 等倍・歪みなしで、数式ベースラインを本文ベースライン(y0)へ揃える。
+        draw_w = h_mm * aspect
+        draw_h = h_mm
+        x_left = x0
+        bf = _baseline_frac_from_top(math_src)
+        y_bottom = y0 - (1.0 - bf) * draw_h  # baseline(Y-UP) = y_bottom + (1-bf)*draw_h = y0
+    else:
+        # ブロック: 高さを信頼し aspect から幅を算出（中心に上寄せ、分数の潰れを軽く補正）。
+        # 幅基準にすると \qquad(番号) の空白がアスペクトを水増しし数式が縦に潰れて小さくなる。
+        draw_w = h_mm * aspect
+        draw_h = h_mm * _MATH_HEIGHT_STRETCH
+        cx = x0 + w_mm / 2
+        cy = y0 + h_mm / 2 + h_mm * _MATH_LIFT_FRACTION
+        x_left = cx - draw_w / 2
+        y_bottom = cy - draw_h / 2
 
     result: list[Stroke] = []
     for s in unit_strokes:

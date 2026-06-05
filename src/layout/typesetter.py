@@ -266,6 +266,7 @@ class CharPlacement:
     math_source: str | None = None  # LaTeX ソース文字列
     math_bbox: tuple[float, float, float, float] | None = None  # (x, y, width_mm, height_mm)
     math_skip: bool = False  # True の文字はスキップ（先頭がまとめて描画済み）
+    math_align: str = "center"  # "center"=ブロック中央寄せ / "baseline"=インライン本文ベース揃え
 
 
 @dataclass
@@ -978,9 +979,13 @@ class Typesetter:
         # インライン数式中の \tag{} は配置しない（仕様: ブロック数式専用）
         elements = [e for e in elements if e.type != "tag"]
         box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
-        # skeletonize レンダリング用 bbox: (x_left, y_bottom, width, height) mm Y-UP
-        math_bbox = (x, y - box.descent, box.width, box.ascent + box.descent)
-        self._convert_math_placements(box.placements, page_idx, output, math_src, math_bbox)
+        # インライン: bbox[1] に本文ベースライン y を渡し、math_align="baseline" で
+        # 数式のベースラインを本文行に揃える（中心配置のズレを根本解消）。
+        # 高さ h は ascent+descent（数式画像の縦範囲スケールに使う）。
+        math_bbox = (x, y, box.width, box.ascent + box.descent)
+        self._convert_math_placements(
+            box.placements, page_idx, output, math_src, math_bbox, math_align="baseline"
+        )
         return x + box.width
 
     @staticmethod
@@ -990,6 +995,7 @@ class Typesetter:
         output: list[CharPlacement],
         math_source: str | None = None,
         math_bbox: tuple[float, float, float, float] | None = None,
+        math_align: str = "center",
     ) -> None:
         """MathPlacement リストを CharPlacement に変換して output に追加。
 
@@ -1005,6 +1011,7 @@ class Typesetter:
                 return CharPlacement(
                     math_source=math_source,
                     math_bbox=math_bbox,
+                    math_align=math_align,
                     **kwargs,  # type: ignore[arg-type]
                 )
             if math_source is not None:

@@ -265,7 +265,8 @@ class StrokeRenderer:
 
         # 数式ブロック: $$単位でレンダリング（math_source + math_bbox で直接 mm 座標を返す）
         if getattr(placement, "math_source", None) and getattr(placement, "math_bbox", None):
-            strokes = render_latex_to_strokes(placement.math_source, placement.math_bbox)
+            align = getattr(placement, "math_align", "center")
+            strokes = render_latex_to_strokes(placement.math_source, placement.math_bbox, align)
             if strokes:
                 cov.geometric.append(original_char)
                 # matplotlib フォントのままだと整いすぎるので手書き揺らぎを乗せる。
