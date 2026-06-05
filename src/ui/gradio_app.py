@@ -75,6 +75,20 @@ _EXAMPLE_ESSAY = """\
 社会全体で議論を深めていく必要があるだろう。
 """
 
+_EXAMPLE_TABLE = """\
+# 引張試験結果
+
+各供試材の機械的性質を表に示す。
+
+| 材料 | 降伏応力 | 引張強さ | 伸び |
+|---|---|---|---|
+| SS400 | 245 | 400 | 28 |
+| S35C | 305 | 510 | 23 |
+| SUS304 | 205 | 520 | 40 |
+
+降伏応力は SUS304 が最も低く、引張強さは S35C と SUS304 が高い。
+"""
+
 _HELP_MARKDOWN = """\
 ### 書式リファレンス
 
@@ -314,6 +328,7 @@ def create_app(
                         ex_report_btn = gr.Button("レポートヘッダー", size="sm")
                         ex_math_btn = gr.Button("数式レポート", size="sm")
                         ex_essay_btn = gr.Button("小論文", size="sm")
+                        ex_table_btn = gr.Button("表サンプル", size="sm")
 
             # ========== 中央カラム: プレビュー ==========
             with gr.Column(scale=3):
@@ -774,6 +789,7 @@ def create_app(
         ex_report_btn.click(lambda: _EXAMPLE_REPORT_HEADER, outputs=[text_input])
         ex_math_btn.click(lambda: _EXAMPLE_MATH_REPORT, outputs=[text_input])
         ex_essay_btn.click(lambda: _EXAMPLE_ESSAY, outputs=[text_input])
+        ex_table_btn.click(lambda: _EXAMPLE_TABLE, outputs=[text_input])
 
         # ページロード時にブラウザ localStorage から設定を復元する。
         # 永続値が無ければ UISettings.from_dict(None) が default() を返すため、
