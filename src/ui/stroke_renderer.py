@@ -391,10 +391,13 @@ class StrokeRenderer:
 
     def _math_symbol_strokes(self, char: str) -> list[Stroke] | None:
         if char == "\u03c9":
-            t = np.linspace(0, 1, 30)
-            x = t
-            y = 0.3 + 0.3 * np.abs(np.sin(2 * np.pi * t))
-            return [np.stack([x, y], axis=1)]
+            # \u03c9: \u5de6\u53f3\u306e\u534a\u5186\u3092\u5e95\u8fba\u3067\u3064\u306a\u3044\u3060\u5f62
+            t_left = np.linspace(np.pi, 2 * np.pi, 16)
+            left = np.stack([0.28 + 0.20 * np.cos(t_left), 0.45 + 0.30 * np.sin(t_left)], axis=1)
+            t_right = np.linspace(np.pi, 2 * np.pi, 16)
+            right = np.stack([0.72 + 0.20 * np.cos(t_right), 0.45 + 0.30 * np.sin(t_right)], axis=1)
+            bridge = np.array([[0.20, 0.45], [0.80, 0.45]], dtype=np.float64)
+            return [left, right, bridge]
         elif char == "\u03c6":
             angles = np.linspace(0, 2 * np.pi, 24)
             r = 0.3
@@ -402,9 +405,10 @@ class StrokeRenderer:
             stem = np.array([[0.5, 0.1], [0.5, 0.9]])
             return [circle, stem]
         elif char == "\u03c0":
-            top = np.array([[0.15, 0.25], [0.85, 0.25]])
-            left_leg = np.array([[0.35, 0.25], [0.30, 0.85]])
-            right_leg = np.array([[0.65, 0.25], [0.70, 0.85]])
+            # \u03c0: \u30d0\u30fc\u304c\u4e0a\u3001\u811a\u304c\u4e0b\uff08\u9006U\u578b\u3067\u306f\u306a\u304f\u03c0\u578b\uff09
+            top = np.array([[0.10, 0.80], [0.90, 0.80]], dtype=np.float64)
+            left_leg = np.array([[0.25, 0.80], [0.20, 0.05]], dtype=np.float64)
+            right_leg = np.array([[0.75, 0.80], [0.80, 0.05]], dtype=np.float64)
             return [top, left_leg, right_leg]
         elif char == "\u03b8":
             angles = np.linspace(0, 2 * np.pi, 24)
@@ -478,12 +482,12 @@ class StrokeRenderer:
             main = np.array([[0.15, 0.05], [0.85, 0.95]], dtype=np.float64)
             cross = np.array([[0.3, 0.55], [0.1, 0.95]], dtype=np.float64)
             return [main, cross]
-        elif char == "\u03bc":  # \u03bc: \u4e0b\u306b\u9577\u3044\u68d2 + n \u5b57
-            left_stem = np.array([[0.2, 0.7], [0.2, 0.0]], dtype=np.float64)
-            t = np.linspace(np.pi, 0, 16)
-            arch = np.stack([0.5 + 0.3 * np.cos(t), 0.4 + 0.3 * np.sin(t)], axis=1)
-            right_stem = np.array([[0.8, 0.7], [0.8, 0.15]], dtype=np.float64)
-            return [left_stem, arch, right_stem]
+        elif char == "\u03bc":  # \u03bc: u\u5b57\u578b + \u5de6\u811a\u304c\u30d9\u30fc\u30b9\u30e9\u30a4\u30f3\u4e0b\u307e\u3067\u5ef6\u3073\u308b
+            left_stem = np.array([[0.2, 0.85], [0.2, 0.0]], dtype=np.float64)
+            right_stem = np.array([[0.8, 0.85], [0.8, 0.48]], dtype=np.float64)
+            t = np.linspace(np.pi, 2 * np.pi, 16)
+            u_curve = np.stack([0.5 + 0.3 * np.cos(t), 0.48 + 0.28 * np.sin(t)], axis=1)
+            return [left_stem, u_curve, right_stem]
         elif char == "\u03bd":  # \u03bd: V \u5b57
             return [np.array([[0.15, 0.85], [0.5, 0.1], [0.85, 0.85]], dtype=np.float64)]
         elif char == "\u03c1":  # \u03c1: \u7e26\u68d2 + \u5186

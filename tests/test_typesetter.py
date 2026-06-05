@@ -1035,3 +1035,19 @@ class TestHeadings:
         assert len(heading_chars) == 1
         # h1見出しは15mmから開始
         assert heading_chars[0].x == pytest.approx(15.0)
+
+    def test_period_replaced_with_kuten(self):
+        """半角ピリオドは句点（。）に全置換される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("これはテストです。")
+        chars = [p.char for p in pages[0]]
+        assert "." not in chars
+        assert "。" in chars
+
+    def test_period_in_number_also_replaced(self):
+        """数値中のピリオドも句点に置換される（一律置換の仕様）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("0.2")
+        chars = [p.char for p in pages[0]]
+        assert "." not in chars
+        assert "。" in chars

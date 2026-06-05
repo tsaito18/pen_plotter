@@ -314,3 +314,21 @@ class TestMathLineSegments:
         assert "x" in texts
         assert len(accents) == 1
         assert accents[0].line_segment is not None
+
+    def test_simeq_parsed_as_symbol(self):
+        elements = MathParser.parse(r"\simeq")
+        assert len(elements) == 1
+        assert elements[0].type == "symbol"
+        assert elements[0].content == "≃"
+
+    def test_max_parsed_as_operator(self):
+        elements = MathParser.parse(r"\max")
+        assert len(elements) == 1
+        assert elements[0].type == "operator"
+        assert elements[0].content == "max"
+
+    def test_min_parsed_as_operator(self):
+        elements = MathParser.parse(r"\min")
+        assert len(elements) == 1
+        assert elements[0].type == "operator"
+        assert elements[0].content == "min"

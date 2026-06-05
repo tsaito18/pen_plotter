@@ -52,6 +52,7 @@ _LATEX_SYMBOL_MAP: dict[str, str] = {
     # 演算子・関係子
     "pm": "±",
     "approx": "≈",
+    "simeq": "≃",
     "infty": "∞",
     "times": "×",
     "div": "÷",
@@ -85,6 +86,8 @@ _LATEX_OPERATORS: dict[str, str] = {
     "ln": "ln",
     "exp": "exp",
     "lim": "lim",
+    "max": "max",
+    "min": "min",
 }
 _LATEX_TEXT_COMMANDS: set[str] = {"mathrm", "text", "mathbf", "mathit"}
 _LATEX_ACCENTS: set[str] = {

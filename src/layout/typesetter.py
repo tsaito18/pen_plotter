@@ -329,6 +329,8 @@ class Typesetter:
         if not text:
             return [[]]
 
+        text = text.replace(".", "。")
+
         area = self._layout.content_area()
         line_positions = self._layout.line_positions()
         doc = self._parse_paragraphs(text, area)
