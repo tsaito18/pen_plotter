@@ -40,10 +40,12 @@ class PlotterConfig:
     harai_speed_factor: float = 0.5
     hane_speed_factor: float = 1.3
     # 画内の筆圧（濃淡）変調の深さ ∈[0,1]。0=均一(定幅ペン感)、大=人の筆圧リズム。
-    # 下ろしを濃く・上げを薄くし、定幅プロット感を消す。preview線幅とZ補間が連動。
-    pressure_variation: float = 0.35
+    # 【実機注意】描画中に Z を上下に振るため、単線シャーペンではペンがバウンドして
+    # 線が点線化する。実機では 0 推奨（プレビュー上の濃淡表現のみ）。preview/Z連動。
+    pressure_variation: float = 0.0
     # 入筆: 始筆を軽く入れて満額へ立ち上げる強度 ∈[0,1] と、その区間長(mm)。
-    entry_taper: float = 0.3
+    # 【実機注意】始筆で Z を動かすため線がかすれ得る。実機では 0 推奨。
+    entry_taper: float = 0.0
     entry_length_mm: float = 0.7
     # Z軸移動のフィードレート (mm/min)。
     pen_z_feed: float = 5000.0

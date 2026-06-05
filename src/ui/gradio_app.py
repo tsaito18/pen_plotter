@@ -414,7 +414,7 @@ def create_app(
                     value=default_settings.pressure_variation,
                     step=0.05,
                     label="筆圧変化",
-                    info="画の中の濃淡。0=均一な定幅ペン感、大=下ろし濃く上げ薄く（人の筆圧）",
+                    info="画の中の濃淡（プレビュー演出用）。実機は描画中Zが振れて点線化するため0推奨",
                 )
                 instance_variation = gr.Slider(
                     0.0,
@@ -430,7 +430,7 @@ def create_app(
                     value=default_settings.entry_taper,
                     step=0.05,
                     label="入筆",
-                    info="始筆を軽く入れて立ち上げる筆の入り。0=なし",
+                    info="始筆を軽く入れて立ち上げる筆の入り。実機は始筆がかすれ得るため0推奨",
                 )
 
                 reset_btn = gr.Button("デフォルトに戻す", size="sm")

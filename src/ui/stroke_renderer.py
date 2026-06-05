@@ -237,6 +237,10 @@ class StrokeRenderer:
         """
         cov = self._last_coverage
 
+        # math_skip=True: 先頭の数式 CharPlacement がまとめて描画済みなのでスキップ
+        if getattr(placement, "math_skip", False):
+            return [], []
+
         # 分数線・根号の屋根線などの補助線分は文字ではなく単一ストロークとして描画する
         if placement.line_segment is not None:
             x1, y1, x2, y2 = placement.line_segment

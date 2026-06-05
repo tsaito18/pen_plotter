@@ -29,9 +29,9 @@ class TestUISettingsDefault:
         assert s.pen_delay == 0.0
         assert s.temperature == 1.0
         assert s.messiness == 1.0
-        assert s.pressure_variation == 0.35
+        assert s.pressure_variation == 0.0
         assert s.instance_variation == 0.5
-        assert s.entry_taper == 0.3
+        assert s.entry_taper == 0.0
 
     def test_default_paper_size_a4(self):
         """default() の用紙サイズは A4。"""

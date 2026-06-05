@@ -33,10 +33,12 @@ class UISettings:
             一括スケール。1.0=標準、0=整った字、2=大きく乱れる。temperature
             （字形の揺らぎ）とは別軸。
         pressure_variation: 画内の筆圧（濃淡）変調の深さ ∈[0,1]。0=均一な定幅
-            ペン感、大=人の筆圧リズム（下ろし濃く・上げ薄く）。
+            ペン感、大=人の筆圧リズム（下ろし濃く・上げ薄く）。【実機注意】描画中に
+            Z を振るため単線シャーペンでは点線化する。実機では 0、プレビュー演出用。
         instance_variation: 同一字の繰り返しで形を変える強度 ∈[0,1]。0=毎回同じ、
-            大=書くたびに微妙に違う（人が同じ字を書いても揺れる）。
+            大=書くたびに微妙に違う（人が同じ字を書いても揺れる）。Z は動かさない。
         entry_taper: 入筆（始筆を軽く入れて立ち上げる）の強度 ∈[0,1]。0=なし。
+            【実機注意】始筆で Z を動かすためかすれ得る。実機では 0 推奨。
         paper_width: 用紙幅 (mm)。デフォルト A4。
         paper_height: 用紙高 (mm)。デフォルト A4。
     """
@@ -52,9 +54,9 @@ class UISettings:
     pen_delay: float
     temperature: float
     messiness: float = 1.0
-    pressure_variation: float = 0.35
+    pressure_variation: float = 0.0
     instance_variation: float = 0.5
-    entry_taper: float = 0.3
+    entry_taper: float = 0.0
     paper_width: float = 210.0
     paper_height: float = 297.0
 
@@ -78,9 +80,9 @@ class UISettings:
             pen_delay=0.0,
             temperature=1.0,
             messiness=1.0,
-            pressure_variation=0.35,
+            pressure_variation=0.0,
             instance_variation=0.5,
-            entry_taper=0.3,
+            entry_taper=0.0,
         )
 
     def validate(self) -> list[str]:
