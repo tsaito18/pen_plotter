@@ -27,8 +27,15 @@ _MIN_STROKE_UNIT = 0.02  # unit square の 2% 未満は除去（per-char 用）
 
 
 @lru_cache(maxsize=64)
-def _render_formula_unit_strokes(math_src: str) -> tuple[np.ndarray, ...] | None:
-    """数式全体を unit square [0,1]×[0,1] Y-UP ストロークに変換（キャッシュ付き）。"""
+def _render_formula_unit_strokes(
+    math_src: str,
+) -> tuple[float, tuple[np.ndarray, ...]] | None:
+    """数式全体を unit square [0,1]×[0,1] Y-UP ストロークに変換（キャッシュ付き）。
+
+    Returns:
+        (aspect, strokes) — aspect = 描画画像の幅/高さ（mm 変換時の歪み補正用）。
+        墨が無い等で失敗したら None。
+    """
     gray = _render_to_gray(math_src)
     if gray is None:
         return None
@@ -42,6 +49,7 @@ def _render_formula_unit_strokes(math_src: str) -> tuple[np.ndarray, ...] | None
     pixel_strokes = _trace_skeleton(skeleton)
 
     h_px, w_px = skeleton.shape
+    aspect = w_px / max(h_px, 1)
     result: list[np.ndarray] = []
     for ps in pixel_strokes:
         if len(ps) < _MIN_STROKE_PX:
@@ -54,7 +62,7 @@ def _render_formula_unit_strokes(math_src: str) -> tuple[np.ndarray, ...] | None
         if length >= _MIN_STROKE_UNIT:
             result.append(stroke)
 
-    return tuple(result) if result else None
+    return (aspect, tuple(result)) if result else None
 
 
 def render_latex_to_strokes(
@@ -70,15 +78,29 @@ def render_latex_to_strokes(
     Returns:
         ストローク列（各要素は (N,2) float64, mm, Y-UP）
     """
-    unit_strokes = _render_formula_unit_strokes(math_src)
-    if not unit_strokes:
+    rendered = _render_formula_unit_strokes(math_src)
+    if not rendered:
         return []
+    aspect, unit_strokes = rendered
 
     x0, y0, w_mm, h_mm = bbox_mm
+    # 幅を信頼し、描画画像のアスペクト比から高さを再計算して歪みを消す。
+    # 算出した高さが bbox 範囲を超えるときは高さ基準に切り替える。
+    h_fit = w_mm / aspect if aspect > 0 else h_mm
+    if h_fit <= h_mm:
+        draw_w, draw_h = w_mm, h_fit
+    else:
+        draw_w, draw_h = h_mm * aspect, h_mm
+    # bbox の中心を保ったまま配置（縦横とも中央寄せ）
+    cx = x0 + w_mm / 2
+    cy = y0 + h_mm / 2
+    x_left = cx - draw_w / 2
+    y_bottom = cy - draw_h / 2
+
     result: list[Stroke] = []
     for s in unit_strokes:
-        x_out = x0 + s[:, 0] * w_mm
-        y_out = y0 + s[:, 1] * h_mm
+        x_out = x_left + s[:, 0] * draw_w
+        y_out = y_bottom + s[:, 1] * draw_h
         stroke = np.stack([x_out, y_out], axis=1).astype(np.float64)
         diffs = np.diff(stroke, axis=0)
         length = float(np.hypot(diffs[:, 0], diffs[:, 1]).sum())
@@ -207,6 +229,46 @@ def _trace_skeleton(skeleton: np.ndarray) -> list[np.ndarray]:
                 prev, cur = cur, nxt
 
             segments.append((s, cur, path))
+
+    # ---- 1b. 孤立ループ（specialノードに接続されていないdeg=2連結成分）を追加 ----
+    # %の丸など、閉じた輪だけの連結成分は special に含まれないのでここで補完する。
+    seg_pixels: set[tuple[int, int]] = {p for _, _, path in segments for p in path}
+    unvisited = pixel_set - seg_pixels
+    while unvisited:
+        loop_start = next(iter(unvisited))
+        # 連結成分を幅優先で収集
+        comp: set[tuple[int, int]] = set()
+        queue = [loop_start]
+        while queue:
+            p = queue.pop()
+            if p in comp:
+                continue
+            comp.add(p)
+            for n in nbrs(*p):
+                if n in unvisited and n not in comp:
+                    queue.append(n)
+        unvisited -= comp
+        # 1方向に辿ってループを閉じる
+        first_nb = nbrs(*loop_start)[0] if nbrs(*loop_start) else None
+        if first_nb is None:
+            continue
+        loop_path: list[tuple[int, int]] = [loop_start, first_nb]
+        loop_seen: set[tuple[int, int]] = {loop_start, first_nb}
+        prev_p, cur_p = loop_start, first_nb
+        while True:
+            candidates = [n for n in nbrs(*cur_p) if n != prev_p]
+            back = [n for n in candidates if n == loop_start and len(loop_path) > 2]
+            fresh = [n for n in candidates if n not in loop_seen]
+            if back:
+                loop_path.append(loop_start)
+                break
+            if not fresh:
+                break
+            nxt_p = fresh[0]
+            loop_path.append(nxt_p)
+            loop_seen.add(nxt_p)
+            prev_p, cur_p = cur_p, nxt_p
+        segments.append((loop_start, loop_start, loop_path))
 
     # ---- 2. ノードごとの隣接セグメントリストを構築 ----
     from collections import defaultdict
