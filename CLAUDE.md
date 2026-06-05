@@ -176,6 +176,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - 数式レイアウト統合: インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線, ^/_ブレースなし記法
 - **表（Markdownパイプ表）**: `| a | b |`＋区切り`|---|---|`＋データ行を `table_layout.detect_pipe_table()` で検出し、`typesetter._place_table()` が罫線(line_segment)＋手書きセル文字に組版（ブロック数式と同じ「複数行消費＋次ページ送り」方式、`ParsedDocument.table_blocks`）。列幅は中身の最大文字数から決め本文幅に収める。**本文幅の中央寄せ**。横罫線は用紙の罫線(line_positions)に一致。表の直後の `: タイトル` 行はキャプションとして表の下に中央寄せ描画（`table_captions`）
 - セクション見出し: #/##/### → 階層インデント（15/25/35/45/55mm）
+- **入力書式の総まとめ**: [docs/書式リファレンス.md](docs/書式リファレンス.md)（見出し・数式・表・キャプション・記号・スライダー）。アプリ内ヘルプ（`gradio_app._HELP_MARKDOWN`）とも同期
 - マルチページプレビュー + 手書きページ番号
 - レポート用紙背景プレビュー（data/report_paper.jpg自動ロード）
 - リファクタリング済み: HTML分離、StrokeRenderer/PreviewRenderer分割、BaseFinetuner
