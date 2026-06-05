@@ -84,13 +84,11 @@ def render_latex_to_strokes(
     aspect, unit_strokes = rendered
 
     x0, y0, w_mm, h_mm = bbox_mm
-    # 幅を信頼し、描画画像のアスペクト比から高さを再計算して歪みを消す。
-    # 算出した高さが bbox 範囲を超えるときは高さ基準に切り替える。
-    h_fit = w_mm / aspect if aspect > 0 else h_mm
-    if h_fit <= h_mm:
-        draw_w, draw_h = w_mm, h_fit
-    else:
-        draw_w, draw_h = h_mm * aspect, h_mm
+    # 高さを信頼し、描画画像のアスペクト比から幅を算出して歪みを消す。
+    # 高さ基準にするのは、文字サイズ（縦）を本文 font_size に揃えるため。
+    # 幅基準にすると \qquad(番号) の空白がアスペクトを水増しし、数式全体が縦に潰れて小さくなる。
+    draw_h = h_mm
+    draw_w = h_mm * aspect
     # bbox の中心を保ったまま配置（縦横とも中央寄せ）
     cx = x0 + w_mm / 2
     cy = y0 + h_mm / 2

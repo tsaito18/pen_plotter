@@ -20,6 +20,10 @@ TOME = "tome"
 HANE = "hane"
 HARAI = "harai"
 NONE = "none"
+# 連綿（続け字）のつなぎ画。一定の薄い接触で前後の画を結ぶ（Z一定＝点線化しない）。
+CONNECT = "connect"
+# つなぎ画の接触率（薄さ）。pen_down と finish_lift の間の一定値で、芯は触れたまま。
+CONNECT_CONTACT = 0.45
 
 # CJK Strokes (kvg:type) → 筆法。終筆の性質で分類する:
 #   鉤(hook)を含む          → はね
