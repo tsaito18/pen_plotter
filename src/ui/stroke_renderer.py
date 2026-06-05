@@ -268,6 +268,9 @@ class StrokeRenderer:
             strokes = render_latex_to_strokes(placement.math_source, placement.math_bbox)
             if strokes:
                 cov.geometric.append(original_char)
+                # matplotlib フォントのままだと整いすぎるので手書き揺らぎを乗せる。
+                # 数式ベースは完全な直線/整形なので本文より強め(6.0)にして手書き感を出す。
+                strokes = self._apply_distortion(strokes, waver_scale=6.0)
                 return strokes, ["none"] * len(strokes)
             return [], []
 
