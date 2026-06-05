@@ -155,6 +155,10 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - 局所曲率特徴追加でストロークの曲がり角に大きなオフセット許容
 - augmentation設定（baseline_drift=0.3, spacing=0.2, size=0.05）＋文字単位の傾き(slant_variation=0.02)有効 — 手書きの揺らぎ。slantはCharPlacement.slant経由で_position_strokesが文字中心回転
 - **汚さスライダー（GUI）**: `UISettings.messiness`（0=整った字, 1=標準=上記の素値, 2=大きく乱れる）で baseline_drift/字間/サイズ/傾きを一括スケール。`web_app._scaled_augment_config()` が単一ソース。GUIの「温度」（=ML per-point offsetの字形揺らぎ）とは別軸
+- **人らしさ3スライダー（GUI）**: 定幅ペン感を消し「人が書いた」感を出す調整軸。すべて実機キャリブ前提でデフォルトは控えめ。
+  - `pressure_variation`(筆圧変化, 既定0.35): 画内の濃淡を `stroke_finishing.pressure_modulation()` で変調（下ろし濃く・上げ薄く＋低周波揺らぎ）。contact に乗算するので preview線幅と実機Zが連動。0=均一(定幅ペン感)
+  - `instance_variation`(字のばらつき, 既定0.5): 同一字の繰り返しで形を変える per-stroke ランダムaffine（`StrokeRenderer._apply_instance_variation`）。`augmenter.enabled` と多画字の `_waver_scale` に従う
+  - `entry_taper`(入筆, 既定0.3): 始筆を軽く入れて立ち上げる `stroke_finishing.entry_modulation()`。収筆(はらい/はね)と対。連綿(画を線でつなぐ)は誤ると不自然なので未実装
 - ストローク太さ変化はプレビューのみ。実機は終端Zリフト（contact_profile, 距離mmベース）で払い・はねを表現
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 

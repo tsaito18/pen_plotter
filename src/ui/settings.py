@@ -32,6 +32,11 @@ class UISettings:
         messiness: レイアウトの汚さ倍率。baseline_drift/字間/サイズ/傾きを
             一括スケール。1.0=標準、0=整った字、2=大きく乱れる。temperature
             （字形の揺らぎ）とは別軸。
+        pressure_variation: 画内の筆圧（濃淡）変調の深さ ∈[0,1]。0=均一な定幅
+            ペン感、大=人の筆圧リズム（下ろし濃く・上げ薄く）。
+        instance_variation: 同一字の繰り返しで形を変える強度 ∈[0,1]。0=毎回同じ、
+            大=書くたびに微妙に違う（人が同じ字を書いても揺れる）。
+        entry_taper: 入筆（始筆を軽く入れて立ち上げる）の強度 ∈[0,1]。0=なし。
         paper_width: 用紙幅 (mm)。デフォルト A4。
         paper_height: 用紙高 (mm)。デフォルト A4。
     """
@@ -47,6 +52,9 @@ class UISettings:
     pen_delay: float
     temperature: float
     messiness: float = 1.0
+    pressure_variation: float = 0.35
+    instance_variation: float = 0.5
+    entry_taper: float = 0.3
     paper_width: float = 210.0
     paper_height: float = 297.0
 
@@ -70,6 +78,9 @@ class UISettings:
             pen_delay=0.0,
             temperature=1.0,
             messiness=1.0,
+            pressure_variation=0.35,
+            instance_variation=0.5,
+            entry_taper=0.3,
         )
 
     def validate(self) -> list[str]:

@@ -7,7 +7,15 @@ import numpy.typing as npt
 from matplotlib.collections import LineCollection
 
 from src.gcode.config import PlotterConfig
-from src.model.stroke_finishing import arc_length_from_end, contact_profile
+from src.model.stroke_finishing import (
+    arc_length_from_end,
+    contact_profile,
+    entry_modulation,
+    pressure_modulation,
+)
+
+# 入筆ランプ区間長(mm)。PlotterConfig.entry_length_mm と揃える。
+PREVIEW_ENTRY_LENGTH_MM = 0.7
 
 Stroke = npt.NDArray[np.float64]
 
@@ -20,19 +28,25 @@ PREVIEW_LIFT_LENGTH_MM = 2.5
 
 
 def compute_stroke_widths(
-    stroke: Stroke, finish: str = "none", lift_length: float = PREVIEW_LIFT_LENGTH_MM
+    stroke: Stroke,
+    finish: str = "none",
+    lift_length: float = PREVIEW_LIFT_LENGTH_MM,
+    pressure_variation: float = 0.0,
+    entry_taper: float = 0.0,
 ) -> list[float]:
     """ストローク各セグメントの太さ(linewidth)を計算する。
 
     実機の終端Zリフト（接触圧の抜き）と同一の :func:`contact_profile` から線幅を
     導く。終端からの距離(mm)ベースなので、文字サイズが変わっても抜けの見え方が
     実機と一致する（「見た目＝実機」）。``width = w_min + (w_max - w_min) * contact``。
-    とめ/none は接触一定＝幅一定。
+    とめ/none は接触一定＝幅一定。``pressure_variation > 0`` のときは画内の筆圧変調
+    （:func:`pressure_modulation`）を contact に掛け、G-code の Z 補間と一致させる。
 
     Args:
         stroke: ``(N, 2)`` の点列（mm 座標）。
         finish: 筆画タイプ（``"tome"`` / ``"hane"`` / ``"harai"`` / ``"none"``）。
         lift_length: 終端リフト区間長(mm)。
+        pressure_variation: 画内の筆圧変調の深さ ∈[0,1]。PlotterConfig と揃える。
 
     Returns:
         各セグメント（``N-1`` 本）の linewidth リスト。点数 2 未満は空リスト。
@@ -42,13 +56,20 @@ def compute_stroke_widths(
         return []
     arc = arc_length_from_end(pts)
     contact = contact_profile(finish, arc, lift_length)
+    contact = contact * pressure_modulation(pts, pressure_variation)
+    contact = contact * entry_modulation(pts, PREVIEW_ENTRY_LENGTH_MM, entry_taper)
     seg_contact = (contact[:-1] + contact[1:]) / 2.0  # セグメント太さ=両端の平均
     widths = PREVIEW_WIDTH_MIN + (PREVIEW_WIDTH_MAX - PREVIEW_WIDTH_MIN) * seg_contact
     return widths.tolist()
 
 
 def _draw_stroke_with_width(
-    ax: plt.Axes, stroke: Stroke, color: str = "b", finish: str = "none"
+    ax: plt.Axes,
+    stroke: Stroke,
+    color: str = "b",
+    finish: str = "none",
+    pressure_variation: float = 0.0,
+    entry_taper: float = 0.0,
 ) -> None:
     """LineCollectionを使ってストロークを太さ変調付きで描画
 
@@ -64,7 +85,9 @@ def _draw_stroke_with_width(
         return
 
     segments = [[stroke[i].tolist(), stroke[i + 1].tolist()] for i in range(n_segments)]
-    widths = compute_stroke_widths(stroke, finish)
+    widths = compute_stroke_widths(
+        stroke, finish, pressure_variation=pressure_variation, entry_taper=entry_taper
+    )
 
     lc = LineCollection(segments, linewidths=widths, colors=color)
     ax.add_collection(lc)

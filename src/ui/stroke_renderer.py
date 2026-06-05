@@ -77,10 +77,13 @@ class StrokeRenderer:
         page_config: PageConfig | None = None,
         finishing_config: FinishingConfig | None = None,
         enable_finishing: bool = True,
+        instance_variation: float = 0.5,
     ) -> None:
         self._page_config = page_config or PageConfig()
         self._temperature = temperature
         self._augmenter = augmenter
+        # 同一字の繰り返しで形を変える per-stroke ランダムaffineの強度（0=無効）
+        self._instance_variation = instance_variation
 
         # KanjiVG 参照経路（ML 推論 / safety-net）の終端加工（とめ・はね・払い）。
         # _direct_stroke（人の実筆跡）・幾何描画経路には適用しない。
@@ -234,19 +237,6 @@ class StrokeRenderer:
         """
         cov = self._last_coverage
 
-        # skeletonize レンダリング: 先頭文字が math_source を持つ場合
-        if getattr(placement, "math_source", None) is not None:
-            bbox = placement.math_bbox  # (x, y_bottom, width, height) mm
-            strokes = render_latex_to_strokes(placement.math_source, bbox)
-            if strokes:
-                cov.geometric.append(placement.char or "math")
-                return strokes, ["none"] * len(strokes)
-            # フォールバック: skeletonize 失敗時は既存パスで処理（math_source をクリア）
-
-        # skeletonize でスキップ済みの文字（先頭以外）
-        if getattr(placement, "math_skip", False):
-            return [], []
-
         # 分数線・根号の屋根線などの補助線分は文字ではなく単一ストロークとして描画する
         if placement.line_segment is not None:
             x1, y1, x2, y2 = placement.line_segment
@@ -268,6 +258,14 @@ class StrokeRenderer:
             )
 
         is_smooth = original_char in self._SMOOTH_CHARS or lookup_char in self._SMOOTH_CHARS
+
+        # 数式ブロック: $$単位でレンダリング（math_source + math_bbox で直接 mm 座標を返す）
+        if getattr(placement, "math_source", None) and getattr(placement, "math_bbox", None):
+            strokes = render_latex_to_strokes(placement.math_source, placement.math_bbox)
+            if strokes:
+                cov.geometric.append(original_char)
+                return strokes, ["none"] * len(strokes)
+            return [], []
 
         punct_strokes = self._simple_punct_strokes(lookup_char)
         if punct_strokes is not None:
@@ -337,6 +335,7 @@ class StrokeRenderer:
                     scale=placement.font_size,
                     config=self._finishing_config,
                 )
+                positioned = self._apply_instance_variation(positioned, waver)
                 positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
                 return positioned, finishes
             except Exception:
@@ -355,6 +354,7 @@ class StrokeRenderer:
                     config=self._finishing_config,
                 )
                 waver = self._waver_scale(len(char_strokes))
+                positioned = self._apply_instance_variation(positioned, waver)
                 positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
                 return positioned, finishes
 
@@ -383,6 +383,36 @@ class StrokeRenderer:
             return cls._WAVER_FLOOR
         frac = (n_strokes - lo) / (hi - lo)
         return 1.0 - frac * (1.0 - cls._WAVER_FLOOR)
+
+    def _apply_instance_variation(
+        self, strokes: list[Stroke], waver_scale: float = 1.0
+    ) -> list[Stroke]:
+        """同一字の繰り返しで形が変わるよう、画ごとに微小ランダムaffineを掛ける。
+
+        画中心まわりの微小回転・スケールと、字サイズ比のシフトを画ごとに与える。
+        強度は ``self._instance_variation`` ×（多画字で固まり防止のため）``waver_scale``。
+        毎回 RNG が進むので「同じ字を書いても毎回違う」を作る。``augmenter`` が無い
+        ／無効／強度 0 のときは恒等（クリーンモードでは変動なし）。
+        """
+        strength = self._instance_variation * waver_scale
+        aug = self._augmenter
+        if aug is None or not aug._config.enabled or strength <= 0 or not strokes:
+            return strokes
+        all_pts = np.concatenate(strokes, axis=0)
+        span = float((all_pts.max(axis=0) - all_pts.min(axis=0)).max())
+        if span < 1e-9:
+            return strokes
+        rng = aug._rng
+        out: list[Stroke] = []
+        for s in strokes:
+            c = s.mean(axis=0)
+            ang = rng.normal(0, strength * 0.04)
+            ca, sa = np.cos(ang), np.sin(ang)
+            sc = 1.0 + rng.normal(0, strength * 0.03)
+            shift = rng.normal(0, strength * 0.04, size=2) * span
+            r = (s - c) @ np.array([[ca, -sa], [sa, ca]]) * sc + c + shift
+            out.append(r)
+        return out
 
     def _apply_distortion(self, strokes: list[Stroke], waver_scale: float = 1.0) -> list[Stroke]:
         aug = self._augmenter
@@ -523,7 +553,9 @@ class StrokeRenderer:
             arch = np.stack([0.5 + 0.3 * np.cos(t), 0.55 + 0.15 * np.sin(t)], axis=1)
             stem_right = np.array([[0.8, 0.7], [0.8, 0.2]], dtype=np.float64)
             return [stem_left, arch, stem_right]
-        elif char == "\u03bb":  # \u03bb: \u9006V\u5b57\uff08\u5de6\u811a\u304c\u4e0a\u4e2d\u592e\u3078\u3001\u53f3\u811a\u304c\u53f3\u4e0b\u3078\uff09
+        elif (
+            char == "\u03bb"
+        ):  # \u03bb: \u9006V\u5b57\uff08\u5de6\u811a\u304c\u4e0a\u4e2d\u592e\u3078\u3001\u53f3\u811a\u304c\u53f3\u4e0b\u3078\uff09
             left_leg = np.array([[0.15, 0.05], [0.45, 0.90]], dtype=np.float64)
             right_leg = np.array([[0.45, 0.90], [0.85, 0.05]], dtype=np.float64)
             return [left_leg, right_leg]

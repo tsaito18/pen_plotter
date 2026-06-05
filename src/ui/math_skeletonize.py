@@ -1,8 +1,11 @@
 """LaTeX 数式 → matplotlib レンダリング → スケルトン化 → ストローク変換。"""
+
 from __future__ import annotations
 
 import io
 import logging
+import re
+from functools import lru_cache
 
 import matplotlib
 import numpy as np
@@ -20,6 +23,38 @@ _FONT_SIZE_PT = 28
 _PAD_INCHES = 0.05
 _MIN_STROKE_PX = 2
 _MIN_STROKE_MM = 0.5  # 0.5mm 未満のストロークは除去
+_MIN_STROKE_UNIT = 0.02  # unit square の 2% 未満は除去（per-char 用）
+
+
+@lru_cache(maxsize=64)
+def _render_formula_unit_strokes(math_src: str) -> tuple[np.ndarray, ...] | None:
+    """数式全体を unit square [0,1]×[0,1] Y-UP ストロークに変換（キャッシュ付き）。"""
+    gray = _render_to_gray(math_src)
+    if gray is None:
+        return None
+
+    binary = _binarize(gray)
+    if not binary.any():
+        return None
+
+    binary = _crop(binary)
+    skeleton = morphology.skeletonize(binary)
+    pixel_strokes = _trace_skeleton(skeleton)
+
+    h_px, w_px = skeleton.shape
+    result: list[np.ndarray] = []
+    for ps in pixel_strokes:
+        if len(ps) < _MIN_STROKE_PX:
+            continue
+        col = ps[:, 0] / max(w_px - 1, 1)
+        row = 1.0 - ps[:, 1] / max(h_px - 1, 1)  # Y-UP
+        stroke = np.stack([col, row], axis=1).astype(np.float64)
+        diffs = np.diff(stroke, axis=0)
+        length = float(np.hypot(diffs[:, 0], diffs[:, 1]).sum())
+        if length >= _MIN_STROKE_UNIT:
+            result.append(stroke)
+
+    return tuple(result) if result else None
 
 
 def render_latex_to_strokes(
@@ -35,34 +70,16 @@ def render_latex_to_strokes(
     Returns:
         ストローク列（各要素は (N,2) float64, mm, Y-UP）
     """
-    gray = _render_to_gray(math_src)
-    if gray is None:
+    unit_strokes = _render_formula_unit_strokes(math_src)
+    if not unit_strokes:
         return []
 
-    binary = _binarize(gray)
-    if not binary.any():
-        return []
-
-    binary = _crop(binary)
-    skeleton = morphology.skeletonize(binary)
-
-    pixel_strokes = _trace_skeleton(skeleton)
-
-    h_px, w_px = skeleton.shape
     x0, y0, w_mm, h_mm = bbox_mm
-
     result: list[Stroke] = []
-    for ps in pixel_strokes:
-        if len(ps) < _MIN_STROKE_PX:
-            continue
-        col = ps[:, 0].astype(float)
-        row = ps[:, 1].astype(float)
-        x_n = col / max(w_px - 1, 1)
-        y_n = 1.0 - row / max(h_px - 1, 1)  # row=0=top → Y=1 in Y-UP
-        x_out = x0 + x_n * w_mm
-        y_out = y0 + y_n * h_mm
+    for s in unit_strokes:
+        x_out = x0 + s[:, 0] * w_mm
+        y_out = y0 + s[:, 1] * h_mm
         stroke = np.stack([x_out, y_out], axis=1).astype(np.float64)
-        # 全長が短すぎるストロークは除去（スケルトン化の孤立ピクセル雑音）
         diffs = np.diff(stroke, axis=0)
         length = float(np.hypot(diffs[:, 0], diffs[:, 1]).sum())
         if length >= _MIN_STROKE_MM:
@@ -85,10 +102,12 @@ def _render_to_gray(math_src: str) -> np.ndarray | None:
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.set_axis_off()
+        # 未エスケープの % だけ \% にする（既に \% になってるものは二重化しない）
+        safe_src = re.sub(r"(?<!\\)%", r"\\%", math_src)
         ax.text(
             0.5,
             0.5,
-            f"${math_src}$",
+            f"${safe_src}$",
             fontsize=_FONT_SIZE_PT,
             ha="center",
             va="center",
@@ -142,76 +161,163 @@ def _trace_skeleton(skeleton: np.ndarray) -> list[np.ndarray]:
         return [
             p
             for p in [
-                (col - 1, row - 1), (col, row - 1), (col + 1, row - 1),
-                (col - 1, row),                      (col + 1, row),
-                (col - 1, row + 1), (col, row + 1), (col + 1, row + 1),
+                (col - 1, row - 1),
+                (col, row - 1),
+                (col + 1, row - 1),
+                (col - 1, row),
+                (col + 1, row),
+                (col - 1, row + 1),
+                (col, row + 1),
+                (col + 1, row + 1),
             ]
             if p in pixel_set
         ]
 
-    # 各ピクセルの近傍数を事前計算
     deg: dict[tuple[int, int], int] = {p: len(nbrs(*p)) for p in pixel_set}
 
-    # エッジ単位で訪問管理（同じ分岐点を複数の枝で通過できるよう pixel ではなく edge で管理）
-    visited_edges: set[frozenset[tuple[int, int]]] = set()
-    raw_strokes: list[list[tuple[int, int]]] = []
+    # ---- 1. ノード（端点・分岐点）間のセグメントを収集 ----
+    # deg=2 の点は通過点、deg≠2 の点がノード
+    special: set[tuple[int, int]] = {p for p in pixel_set if deg[p] != 2}
+    if not special:
+        # 全点 deg=2 → 孤立ループ: 任意の1点をノードとして扱う
+        special = {next(iter(pixel_set))}
 
-    endpoints = [p for p in pixel_set if deg[p] == 1]
-    # 端点がなければ任意の点（孤立ループ）から開始
-    start_order = endpoints if endpoints else list(pixel_set)[:1]
-    # 未訪問エッジが残れば分岐点からも開始
-    all_starts = start_order + [p for p in pixel_set if deg[p] >= 3]
+    # 有向エッジ訪問管理（セグメント収集用）
+    seg_visited: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+    # segments: (node_a, node_b, pixel_path)
+    segments: list[tuple[tuple[int, int], tuple[int, int], list[tuple[int, int]]]] = []
 
-    def _best_next(
-        cur: tuple[int, int],
-        prev: tuple[int, int] | None,
-        candidates: list[tuple[int, int]],
-    ) -> tuple[int, int]:
-        """進行方向に最も近い（角度変化最小）の隣接点を返す。"""
-        if prev is None or len(candidates) == 1:
-            return candidates[0]
-        dx = cur[0] - prev[0]
-        dy = cur[1] - prev[1]
-        best, best_dot = candidates[0], float("-inf")
-        for c in candidates:
-            cdx, cdy = c[0] - cur[0], c[1] - cur[1]
-            dot = dx * cdx + dy * cdy
-            if dot > best_dot:
-                best_dot, best = dot, c
-        return best
-
-    for start in all_starts:
-        for init_nb in nbrs(*start):
-            edge = frozenset((start, init_nb))
-            if edge in visited_edges:
+    for s in special:
+        for nb in nbrs(*s):
+            if (s, nb) in seg_visited:
                 continue
-            visited_edges.add(edge)
-            path: list[tuple[int, int]] = [start, init_nb]
-            prev, cur = start, init_nb
+            seg_visited.add((s, nb))
+            seg_visited.add((nb, s))
 
-            while True:
-                unvisited = [
-                    n for n in nbrs(*cur)
-                    if frozenset((cur, n)) not in visited_edges
-                ]
-                if not unvisited:
+            path: list[tuple[int, int]] = [s, nb]
+            prev, cur = s, nb
+            while cur not in special:
+                nxts = [n for n in nbrs(*cur) if n != prev]
+                if not nxts:
                     break
-                nxt = _best_next(cur, prev, unvisited)
-                edge = frozenset((cur, nxt))
-                visited_edges.add(edge)
+                nxt = nxts[0]
+                seg_visited.add((cur, nxt))
+                seg_visited.add((nxt, cur))
                 path.append(nxt)
                 prev, cur = cur, nxt
 
-            if len(path) >= 2:
-                raw_strokes.append(path)
+            segments.append((s, cur, path))
 
-    # Douglas-Peucker 簡略化でステアケース除去
+    # ---- 2. ノードごとの隣接セグメントリストを構築 ----
+    from collections import defaultdict
+
+    adj: dict[tuple[int, int], list[tuple[int, int, bool]]] = defaultdict(list)
+    # (other_node, seg_index, forward)
+    for i, (a, b, _) in enumerate(segments):
+        adj[a].append((b, i, True))
+        if a != b:
+            adj[b].append((a, i, False))
+
+    # ---- 3. グリーディー最小ペンリフト経路 ----
+    used: set[int] = set()
+    raw_strokes: list[list[tuple[int, int]]] = []
+
+    def seg_pts(idx: int, forward: bool) -> list[tuple[int, int]]:
+        pts = segments[idx][2]
+        return pts if forward else pts[::-1]
+
+    def _dot(
+        cur: tuple[int, int],
+        prev: tuple[int, int],
+        nxt: tuple[int, int],
+    ) -> float:
+        dx, dy = cur[0] - prev[0], cur[1] - prev[1]
+        ex, ey = nxt[0] - cur[0], nxt[1] - cur[1]
+        return float(dx * ex + dy * ey)
+
+    # 端点 → 分岐点 → その他 の順でスタート
+    endpoints = [p for p in special if deg[p] == 1]
+    junctions = [p for p in special if deg[p] >= 3]
+    start_order = (
+        endpoints + junctions + [p for p in special if p not in set(endpoints + junctions)]
+    )
+
+    for start_node in start_order:
+        while any(i not in used for _, i, _ in adj[start_node]):
+            # 未使用セグメントの中で最初のものを選ぶ
+            init = next((e for e in adj[start_node] if e[1] not in used), None)
+            if init is None:
+                break
+            other, si, fwd = init
+            used.add(si)
+            path = list(seg_pts(si, fwd))
+            cur_node = other
+
+            # 続けられる限りセグメントをつなぐ（最直進を選択）
+            while True:
+                avail = [(o, i, f) for o, i, f in adj[cur_node] if i not in used]
+                if not avail:
+                    break
+                # 直前2点から進行方向を計算し内積最大の枝へ
+                if len(path) >= 2:
+                    prev_pt = path[-2]
+                    cur_pt = path[-1]
+                    best = max(avail, key=lambda e: _dot(cur_pt, prev_pt, e[0]))
+                else:
+                    best = avail[0]
+                other2, si2, fwd2 = best
+                used.add(si2)
+                path.extend(seg_pts(si2, fwd2)[1:])
+                cur_node = other2
+
+            raw_strokes.append(path)
+
+    # 未使用セグメント（孤立連結成分）を追加
+    for i, (_, _, pts) in enumerate(segments):
+        if i not in used:
+            raw_strokes.append(list(pts))
+
+    # ---- 4. Douglas-Peucker 簡略化でステアケース除去 ----
     result: list[np.ndarray] = []
     for path in raw_strokes:
-        arr = np.array(path, dtype=np.float64)  # (N, 2): [col, row]
-        # approximate_polygon は (row, col) 順を期待する
-        simplified = approximate_polygon(arr[:, ::-1], tolerance=1.5)  # → (M, 2) [row, col]
+        arr = np.array(path, dtype=np.float64)
+        simplified = approximate_polygon(arr[:, ::-1], tolerance=1.5)
         if len(simplified) >= 2:
-            result.append(simplified[:, ::-1].astype(np.float64))  # [col, row]
+            result.append(simplified[:, ::-1].astype(np.float64))
 
     return result
+
+
+@lru_cache(maxsize=256)
+def render_math_char_to_unit_strokes(text: str) -> tuple[np.ndarray, ...] | None:
+    """1 文字／1 トークンを unit square [0,1]×[0,1] Y-UP のストロークに変換（キャッシュ付き）。
+
+    `_position_strokes` と組み合わせて使う。返り値は tuple（lru_cache のため）。
+    None のとき既存 fallback へ。
+    """
+    gray = _render_to_gray(text)
+    if gray is None:
+        return None
+
+    binary = _binarize(gray)
+    if not binary.any():
+        return None
+
+    binary = _crop(binary)
+    skeleton = morphology.skeletonize(binary)
+    pixel_strokes = _trace_skeleton(skeleton)
+
+    h_px, w_px = skeleton.shape
+    result: list[np.ndarray] = []
+    for ps in pixel_strokes:
+        if len(ps) < _MIN_STROKE_PX:
+            continue
+        col = ps[:, 0] / max(w_px - 1, 1)
+        row = 1.0 - ps[:, 1] / max(h_px - 1, 1)  # Y-UP
+        stroke = np.stack([col, row], axis=1).astype(np.float64)
+        diffs = np.diff(stroke, axis=0)
+        length = float(np.hypot(diffs[:, 0], diffs[:, 1]).sum())
+        if length >= _MIN_STROKE_UNIT:
+            result.append(stroke)
+
+    return tuple(result) if result else None

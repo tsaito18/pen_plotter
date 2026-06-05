@@ -208,6 +208,21 @@ _BLOCK_MATH_PLACEHOLDER_PREFIX = "\x00BLK\x00"
 _BLOCK_MATH_PLACEHOLDER_SUFFIX = "\x00BLK\x00"
 _INLINE_MATH_PLACEHOLDER_BASE = 0xE000
 
+# 数式内の . は変換しない（小数点は LaTeX で . のまま使う）
+_MATH_OR_BLOCK_RE = re.compile(r"\$\$.*?\$\$|\$[^$]+?\$", re.DOTALL)
+
+
+def _replace_ascii_period(text: str) -> str:
+    """テキスト部分の ASCII . を 。 に変換（$...$, $$...$$ 内は除外）。"""
+    result: list[str] = []
+    last_end = 0
+    for m in _MATH_OR_BLOCK_RE.finditer(text):
+        result.append(text[last_end : m.start()].replace(".", "。"))
+        result.append(m.group(0))
+        last_end = m.end()
+    result.append(text[last_end:].replace(".", "。"))
+    return "".join(result)
+
 
 def _split_segments(text: str) -> list[tuple[str, str]]:
     """テキストを通常テキストと数式セグメントに分割する。
@@ -333,7 +348,7 @@ class Typesetter:
         if not text:
             return [[]]
 
-        text = text.replace(".", "。")
+        text = _replace_ascii_period(text)
 
         area = self._layout.content_area()
         line_positions = self._layout.line_positions()
@@ -840,38 +855,44 @@ class Typesetter:
 
         for mp in placements:
             if not mp.text and mp.line_segment is not None:
-                output.append(make_cp(
-                    char="",
-                    x=mp.x,
-                    y=mp.y,
-                    font_size=mp.font_size,
-                    page=page_idx,
-                    role=mp.role,
-                    line_segment=mp.line_segment,
-                ))
+                output.append(
+                    make_cp(
+                        char="",
+                        x=mp.x,
+                        y=mp.y,
+                        font_size=mp.font_size,
+                        page=page_idx,
+                        role=mp.role,
+                        line_segment=mp.line_segment,
+                    )
+                )
             elif len(mp.text) == 1 or mp.role == "operator":
-                output.append(make_cp(
-                    char=mp.text,
-                    x=mp.x,
-                    y=mp.y,
-                    font_size=mp.font_size,
-                    page=page_idx,
-                    role=mp.role,
-                    line_segment=mp.line_segment,
-                ))
+                output.append(
+                    make_cp(
+                        char=mp.text,
+                        x=mp.x,
+                        y=mp.y,
+                        font_size=mp.font_size,
+                        page=page_idx,
+                        role=mp.role,
+                        line_segment=mp.line_segment,
+                    )
+                )
             else:
                 for i, ch in enumerate(mp.text):
                     role = mp.role if i == 0 else None
                     seg = mp.line_segment if i == 0 else None
-                    output.append(make_cp(
-                        char=ch,
-                        x=mp.x + i * mp.font_size * _CHAR_WIDTH_RATIO,
-                        y=mp.y,
-                        font_size=mp.font_size,
-                        page=page_idx,
-                        role=role,
-                        line_segment=seg,
-                    ))
+                    output.append(
+                        make_cp(
+                            char=ch,
+                            x=mp.x + i * mp.font_size * _CHAR_WIDTH_RATIO,
+                            y=mp.y,
+                            font_size=mp.font_size,
+                            page=page_idx,
+                            role=role,
+                            line_segment=seg,
+                        )
+                    )
 
     @staticmethod
     def _rebuild_lines_with_math(

@@ -53,6 +53,7 @@ class PlotterPipeline:
         temperature: float = 1.0,
         user_strokes_dir: Path | str | None = None,
         messiness: float = 1.0,
+        instance_variation: float = 0.5,
     ) -> None:
         self._page_config = page_config or PageConfig(
             paper_size=(210.0, 297.0),
@@ -88,6 +89,7 @@ class PlotterPipeline:
             user_strokes_dir=user_strokes_dir,
             augmenter=self._typesetter.augmenter,
             page_config=self._page_config,
+            instance_variation=instance_variation,
         )
 
         default_bg = Path("data/report_paper.jpg")
@@ -579,6 +581,8 @@ def build_pipeline(
         draw_speed=settings.draw_speed,
         travel_speed=settings.travel_speed,
         pen_delay=settings.pen_delay,
+        pressure_variation=settings.pressure_variation,
+        entry_taper=settings.entry_taper,
     )
     pipeline = PlotterPipeline(
         page_config=page_config,
@@ -589,6 +593,7 @@ def build_pipeline(
         temperature=settings.temperature,
         user_strokes_dir=user_strokes_dir,
         messiness=settings.messiness,
+        instance_variation=settings.instance_variation,
     )
     # PlotterPipeline.__init__ は font_size=4.5 ハードコーディングのため、
     # UISettings.font_size を反映するため Typesetter を再構築する

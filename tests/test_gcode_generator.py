@@ -1,8 +1,15 @@
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
+from src.gcode.config import PlotterConfig
 from src.gcode.generator import GCodeGenerator, Stroke
+
+
+def _finish_only_generator() -> GCodeGenerator:
+    """終端加工を単独検証するための、画内筆圧変調・入筆を 0 にした generator。"""
+    return GCodeGenerator(replace(PlotterConfig(), pressure_variation=0.0, entry_taper=0.0))
 
 
 def _g1_lines(lines: list[str]) -> list[str]:
@@ -239,11 +246,12 @@ class TestGCodeGeneratorFinishLift:
         assert gcode_generator.generate([stroke], finishes=None) == legacy
         assert gcode_generator.generate([stroke], finishes=["none"]) == legacy
 
-    def test_tome_matches_legacy(self, gcode_generator: GCodeGenerator):
-        """とめは変化なし（Z付きG1を出さず従来と一致）"""
+    def test_tome_matches_legacy(self):
+        """とめは終端加工なし（筆圧変調を切れば Z 付き G1 を出さず従来と一致）"""
+        gen = _finish_only_generator()
         stroke = _long_stroke()
-        legacy = gcode_generator.generate([stroke])
-        tome = gcode_generator.generate([stroke], finishes=["tome"])
+        legacy = gen.generate([stroke])
+        tome = gen.generate([stroke], finishes=["tome"])
         assert tome == legacy
         assert _z_values(_g1_lines(tome)) == []
 
@@ -263,11 +271,12 @@ class TestGCodeGeneratorFinishLift:
         for z in zs:
             assert cfg.finish_lift_z - 1e-6 <= z <= cfg.pen_down_z + 1e-6
 
-    def test_harai_z_monotonic_toward_lift(self, gcode_generator: GCodeGenerator):
-        """終端へ向かって Z が単調に持ち上がる（finish_lift_z 方向）"""
-        cfg = gcode_generator.config
+    def test_harai_z_monotonic_toward_lift(self):
+        """終端へ向かって Z が単調に持ち上がる（筆圧変調を切った単独検証）"""
+        gen = _finish_only_generator()
+        cfg = gen.config
         stroke = _long_stroke()
-        lines = gcode_generator.generate([stroke], finishes=["harai"])
+        lines = gen.generate([stroke], finishes=["harai"])
         zs = _z_values(_g1_lines(lines))
         assert all(b <= a + 1e-9 for a, b in zip(zs, zs[1:]))  # 単調非増加
         assert zs[-1] < cfg.pen_down_z  # 接触高さから持ち上がっている

@@ -80,8 +80,12 @@ class TestBuildCalibrationGcode:
         assert cfg.finish_lift_z - 1.0 <= mz <= cfg.pen_down_z
 
     def test_tome_emits_no_z(self):
+        from dataclasses import replace
+
+        # 終端リフトの単独検証: 画内筆圧変調・入筆を 0 にして切り分ける
+        cfg = replace(PlotterConfig(), pressure_variation=0.0, entry_taper=0.0)
         strokes = [_tome_stroke()]
-        lines = build_calibration_gcode(strokes, ["tome"], [2.0, 2.5])
+        lines = build_calibration_gcode(strokes, ["tome"], [2.0, 2.5], base_config=cfg)
         assert _min_z(lines) is None  # とめはZリフトなし
 
     def test_finish_count_scales_with_variants(self):

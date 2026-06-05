@@ -146,8 +146,14 @@ class TestGcodeFinishWiring:
         assert _g1_has_z(content), "払いなのに G1 に Z リフトが出ていない"
 
     def test_gcode_file_no_z_for_tome(self, tmp_path):
+        from dataclasses import replace
+
+        from src.gcode.config import PlotterConfig
+
         _create_kanjivg_json_with_type(tmp_path, "二", "㇐")  # とめ（横）
-        pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
+        # 終端加工の単独検証: 画内筆圧変調・入筆を 0 にして切り分ける
+        cfg = replace(PlotterConfig(), pressure_variation=0.0, entry_taper=0.0)
+        pipeline = PlotterPipeline(kanjivg_dir=tmp_path, plotter_config=cfg)
         gcode_path = tmp_path / "out.gcode"
         paths = pipeline.generate_gcode_file("二", save_path=gcode_path)
         content = paths[0].read_text()

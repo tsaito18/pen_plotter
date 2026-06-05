@@ -408,6 +408,30 @@ def create_app(
                     label="汚さ",
                     info="行内の上下動・字間・サイズ・傾きのばらつき。0=整った字、2=大きく乱れる",
                 )
+                pressure_variation = gr.Slider(
+                    0.0,
+                    1.0,
+                    value=default_settings.pressure_variation,
+                    step=0.05,
+                    label="筆圧変化",
+                    info="画の中の濃淡。0=均一な定幅ペン感、大=下ろし濃く上げ薄く（人の筆圧）",
+                )
+                instance_variation = gr.Slider(
+                    0.0,
+                    1.0,
+                    value=default_settings.instance_variation,
+                    step=0.05,
+                    label="字のばらつき",
+                    info="同じ字を毎回少し変える。0=毎回同じ形、大=書くたびに違う",
+                )
+                entry_taper = gr.Slider(
+                    0.0,
+                    1.0,
+                    value=default_settings.entry_taper,
+                    step=0.05,
+                    label="入筆",
+                    info="始筆を軽く入れて立ち上げる筆の入り。0=なし",
+                )
 
                 reset_btn = gr.Button("デフォルトに戻す", size="sm")
                 validation_md = gr.HTML(value="", visible=False)
@@ -427,6 +451,9 @@ def create_app(
             pen_delay,
             temperature,
             messiness,
+            pressure_variation,
+            instance_variation,
+            entry_taper,
         ]
 
         # ===== コールバック =====
@@ -479,6 +506,9 @@ def create_app(
             pen_delay: "pen_delay",
             temperature: "temperature",
             messiness: "messiness",
+            pressure_variation: "pressure_variation",
+            instance_variation: "instance_variation",
+            entry_taper: "entry_taper",
         }
         for slider, field in slider_field_map.items():
             slider.change(
@@ -710,6 +740,9 @@ def create_app(
                 d.pen_delay,
                 d.temperature,
                 d.messiness,
+                d.pressure_variation,
+                d.instance_variation,
+                d.entry_taper,
                 d.to_dict(),  # ブラウザ永続化もデフォルトへ
             )
 
@@ -754,6 +787,9 @@ def create_app(
                 settings.pen_delay,
                 settings.temperature,
                 settings.messiness,
+                settings.pressure_variation,
+                settings.instance_variation,
+                settings.entry_taper,
                 gr.update(value=prof) if profile_options else gr.update(),
                 gr.update(value=_validation_status(errors), visible=has_err),
                 gr.update(interactive=not has_err),

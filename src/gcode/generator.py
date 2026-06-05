@@ -5,7 +5,12 @@ import numpy as np
 import numpy.typing as npt
 
 from src.gcode.config import PlotterConfig
-from src.model.stroke_finishing import arc_length_from_end, contact_profile
+from src.model.stroke_finishing import (
+    arc_length_from_end,
+    contact_profile,
+    entry_modulation,
+    pressure_modulation,
+)
 
 # ストローク = (N, 2) の numpy配列。各行は (x, y) 座標 (mm)
 Stroke = npt.NDArray[np.float64]
@@ -83,6 +88,11 @@ class GCodeGenerator:
 
         arc = arc_length_from_end(stroke)
         contact = contact_profile(finish, arc, self.config.finish_lift_length_mm)
+        # 画内の筆圧変調（濃淡）と入筆ランプを乗算。終端リフトと同じ contact 系で Z へ。
+        contact = contact * pressure_modulation(stroke, self.config.pressure_variation)
+        contact = contact * entry_modulation(
+            stroke, self.config.entry_length_mm, self.config.entry_taper
+        )
         speed_factor = self._finish_speed_factor(finish)
         n_draw_points = len(stroke) - 1
         for i, point in enumerate(stroke[1:]):

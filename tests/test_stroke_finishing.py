@@ -1,6 +1,7 @@
 """kvg:type 分類と終端加工のテスト。"""
 
 import numpy as np
+import pytest
 
 from src.model.stroke_finishing import (
     HANE,
@@ -16,9 +17,66 @@ from src.model.stroke_finishing import (
     classify_finish,
     classify_finishes,
     contact_profile,
+    entry_modulation,
     infer_finish_from_stroke,
     infer_finishes,
+    pressure_modulation,
 )
+
+
+class TestEntryModulation:
+    """入筆: 始筆の接触をランプさせ、軽く入って濃くなる筆の入りを作る。"""
+
+    def _stroke(self, n=20, total=10.0):
+        return np.column_stack([np.linspace(0.0, total, n), np.zeros(n)])
+
+    def test_zero_strength_identity(self):
+        m = entry_modulation(self._stroke(), entry_length=1.0, strength=0.0)
+        assert np.allclose(m, 1.0)
+
+    def test_start_lighter_then_full(self):
+        m = entry_modulation(self._stroke(), entry_length=2.0, strength=0.5)
+        assert m[0] == pytest.approx(0.5)  # 始点 = 1 - strength
+        assert m[-1] == pytest.approx(1.0)  # entry_length 以降は満額
+        assert np.all(np.diff(m) >= -1e-9)  # 単調非減少
+
+    def test_short_stroke_safe(self):
+        assert np.allclose(entry_modulation(np.array([[0.0, 0.0]]), 1.0, 0.5), 1.0)
+
+
+class TestPressureModulation:
+    """画内の筆圧（濃淡）変調。決定論的で preview/G-code が一致する。"""
+
+    def _down(self, n=20):
+        # 下ろし画（Y-UP で Y 減少）
+        return np.column_stack([np.zeros(n), np.linspace(10.0, 0.0, n)])
+
+    def _up(self, n=20):
+        return np.column_stack([np.zeros(n), np.linspace(0.0, 10.0, n)])
+
+    def test_zero_amplitude_is_identity(self):
+        m = pressure_modulation(self._down(), amplitude=0.0)
+        assert np.allclose(m, 1.0)
+        assert len(m) == 20
+
+    def test_range_within_bounds(self):
+        amp = 0.4
+        m = pressure_modulation(self._down(), amplitude=amp)
+        assert m.max() <= 1.0 + 1e-9
+        assert m.min() >= 1.0 - amp - 1e-9
+
+    def test_deterministic(self):
+        s = self._down()
+        assert np.allclose(pressure_modulation(s, 0.4), pressure_modulation(s, 0.4))
+
+    def test_downstroke_darker_than_upstroke(self):
+        # 下ろしは濃く(接触大)、上げは薄く(接触小)＝人の筆圧
+        down = pressure_modulation(self._down(), 0.4).mean()
+        up = pressure_modulation(self._up(), 0.4).mean()
+        assert down > up
+
+    def test_short_stroke_safe(self):
+        assert np.allclose(pressure_modulation(np.array([[0.0, 0.0]]), 0.4), 1.0)
 
 
 class TestClassifyFinish:

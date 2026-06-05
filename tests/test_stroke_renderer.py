@@ -248,6 +248,40 @@ class TestWaverScaleByStrokeCount:
         out = r._apply_distortion(s, waver_scale=0.0)
         assert np.allclose(out[0], s[0])  # 揺らぎ0なら不変
 
+    def test_instance_variation_makes_repeats_differ(self):
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        r = StrokeRenderer(
+            augmenter=HandwritingAugmenter(AugmentConfig(), seed=0),
+            instance_variation=0.6,
+        )
+        s = [np.array([[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], dtype=float)]
+        a = r._apply_instance_variation([s[0].copy()])
+        b = r._apply_instance_variation([s[0].copy()])
+        assert not np.allclose(a[0], b[0])  # RNG が進み毎回違う
+
+    def test_instance_variation_zero_is_identity(self):
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        r = StrokeRenderer(
+            augmenter=HandwritingAugmenter(AugmentConfig(), seed=0),
+            instance_variation=0.0,
+        )
+        s = np.array([[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], dtype=float)
+        out = r._apply_instance_variation([s.copy()])
+        assert np.allclose(out[0], s)  # 強度0は恒等
+
+    def test_instance_variation_disabled_aug_is_identity(self):
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        r = StrokeRenderer(
+            augmenter=HandwritingAugmenter(AugmentConfig(enabled=False), seed=0),
+            instance_variation=0.6,
+        )
+        s = np.array([[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], dtype=float)
+        out = r._apply_instance_variation([s.copy()])
+        assert np.allclose(out[0], s)  # クリーンモード(aug無効)は変動なし
+
     def test_dense_char_gets_smaller_deform_scale(self):
         from pathlib import Path
 

@@ -227,6 +227,74 @@ def contact_profile(
     return contact
 
 
+def pressure_modulation(stroke: np.ndarray, amplitude: float) -> np.ndarray:
+    """画内の筆圧（濃淡）を進行方向と弧長から決定論的に変調する倍率列を返す。
+
+    実機は単線シャーペンで線幅を出せないが、Z（接触圧＝濃さ）は画の途中でも
+    変えられる。本関数は contact に掛ける ``[1-amplitude, 1]`` の倍率を返し、
+    定幅ペンのような均一な線を避けて人の筆圧リズムを与える。``contact_profile``
+    と同じく **純粋関数**なので、プレビュー線幅と G-code の Z 補間が一致する。
+
+    濃淡の決め方（Y-UP 前提）:
+      - 進行方向の縦成分: 下ろし(dy<0)で濃く、上げ(dy>0)で薄く（筆圧の基本）。
+      - 弧長位置の低周波サイン（位相は始点座標から決定的）で有機的な揺らぎ。
+    最大値は 1.0（＝完全接触より濃くはしない。薄くする方向のみ）。
+
+    Args:
+        stroke: ``(N, 2)`` の点列（mm 座標、Y-UP）。
+        amplitude: 変調の深さ ``∈ [0, 1]``。``0`` で恒等（全点 1.0）。
+
+    Returns:
+        長さ ``N`` の接触倍率配列。``N < 2`` または ``amplitude <= 0`` で全 1.0。
+    """
+    pts = np.asarray(stroke, dtype=float)
+    n = len(pts)
+    out = np.ones(n, dtype=float)
+    if n < 2 or amplitude <= 0:
+        return out
+    d = np.diff(pts, axis=0)
+    seg_len = np.sqrt((d**2).sum(axis=1)) + 1e-9
+    dir_y = -d[:, 1] / seg_len  # +1=下ろし(濃) / -1=上げ(薄)
+    dir_pt = np.concatenate([[dir_y[0]], dir_y])
+    arc = np.concatenate([[0.0], np.cumsum(seg_len)])
+    total = float(arc[-1])
+    if total < 1e-9:
+        return out
+    phase = pts[0, 0] * 0.7 + pts[0, 1] * 1.3
+    wave = np.sin(2.0 * np.pi * 1.5 * arc / total + phase)
+    combined = 0.6 * dir_pt + 0.4 * wave  # ∈ [-1, 1]
+    mult = 1.0 - amplitude * (1.0 - (combined + 1.0) / 2.0)
+    return np.clip(mult, 1.0 - amplitude, 1.0)
+
+
+def entry_modulation(stroke: np.ndarray, entry_length: float, strength: float) -> np.ndarray:
+    """入筆: 始筆の接触を軽く（薄く）入れて満額へランプさせる倍率列を返す。
+
+    始点から ``entry_length`` mm の区間で contact を ``1 - strength`` から ``1.0``
+    へ線形に上げる。人の筆が「すっと入って」線が立ち上がる感じを与える。終端の
+    リフト（収筆）と対になり、画が両端で締まる。:func:`contact_profile` と同じく
+    純粋関数で preview と G-code が一致する。
+
+    Args:
+        stroke: ``(N, 2)`` の点列（mm 座標）。
+        entry_length: 入筆ランプ区間長(mm)。``<=0`` で恒等。
+        strength: 始点の薄さ ``∈ [0, 1]``。``0`` で恒等（全点 1.0）。
+
+    Returns:
+        長さ ``N`` の接触倍率配列。``N < 2`` 等で全 1.0。
+    """
+    pts = np.asarray(stroke, dtype=float)
+    n = len(pts)
+    out = np.ones(n, dtype=float)
+    if n < 2 or strength <= 0 or entry_length <= 0:
+        return out
+    d = np.diff(pts, axis=0)
+    seg = np.sqrt((d**2).sum(axis=1))
+    arc_from_start = np.concatenate([[0.0], np.cumsum(seg)])
+    t = np.clip(arc_from_start / entry_length, 0.0, 1.0)
+    return (1.0 - strength) + strength * t
+
+
 @dataclass
 class FinishingConfig:
     """終端加工のパラメータ設定。
