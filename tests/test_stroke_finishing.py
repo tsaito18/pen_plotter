@@ -12,6 +12,7 @@ from src.model.stroke_finishing import (
     apply_hane,
     apply_harai,
     apply_tome,
+    arc_length_from_end,
     classify_finish,
     classify_finishes,
     contact_profile,
@@ -131,48 +132,81 @@ class TestApplyFinishing:
         assert np.array_equal(out[0], strokes[0])  # 落ちない
 
 
+class TestArcLengthFromEnd:
+    def test_terminal_is_zero(self):
+        pts = np.array([[0, 0], [3, 0], [7, 0], [10, 0]], dtype=float)
+        arc = arc_length_from_end(pts)
+        assert arc[-1] == 0.0
+        assert np.isclose(arc[0], 10.0)  # 始点は全長
+        assert np.all(np.diff(arc) < 0)  # 終端へ向かって単調減少
+
+    def test_matches_segment_lengths(self):
+        pts = np.array([[0, 0], [0, 3], [4, 3]], dtype=float)  # 3 + 4
+        arc = arc_length_from_end(pts)
+        assert np.allclose(arc, [7.0, 4.0, 0.0])
+
+    def test_single_point_safe(self):
+        arc = arc_length_from_end(np.array([[1.0, 1.0]]))
+        assert list(arc) == [0.0]
+
+
 class TestContactProfile:
+    """距離(mm)ベース: arc_from_end と lift_length(mm) で contact を決める。"""
+
+    def _arc(self, n, total):
+        # 等間隔ストロークの終端からの弧長(mm)
+        return np.linspace(total, 0.0, n)
+
     def test_none_and_tome_all_contact(self):
+        arc = self._arc(10, 9.0)
         for finish in (NONE, TOME):
-            prof = contact_profile(finish, n_points=10, lift_points=5)
+            prof = contact_profile(finish, arc, lift_length=3.0)
             assert len(prof) == 10
             assert np.allclose(prof, 1.0)
 
-    def test_harai_monotonic_decreasing_tail(self):
-        prof = contact_profile(HARAI, n_points=12, lift_points=5, harai_min=0.15)
-        assert len(prof) == 12
-        # 先頭は完全接触、末尾は最小接触へ
-        assert prof[0] == 1.0
-        assert np.isclose(prof[-1], 0.15, atol=1e-6)
-        # 全体が単調非増加
-        assert np.all(np.diff(prof) <= 1e-9)
-        # リフト区間より前(7点)は接触1.0のまま
-        assert np.allclose(prof[:7], 1.0)
+    def test_harai_terminal_zero_and_monotonic(self):
+        arc = self._arc(20, 19.0)
+        prof = contact_profile(HARAI, arc, lift_length=5.0)
+        assert len(prof) == 20
+        assert np.isclose(prof[-1], 0.0, atol=1e-9)  # 終端は完全リフト
+        assert np.all(np.diff(prof) <= 1e-9)  # 単調非増加
+        # リフト区間(終端5mm)より手前は接触1.0
+        assert np.allclose(prof[arc > 5.0 + 1e-9], 1.0)
 
-    def test_hane_drops_lower_than_harai(self):
-        harai = contact_profile(HARAI, n_points=12, lift_points=5, harai_min=0.15)
-        hane = contact_profile(HANE, n_points=12, lift_points=5, hane_min=0.2)
-        assert hane[0] == 1.0
-        assert np.isclose(hane[-1], 0.2, atol=1e-6)
-        assert np.all(np.diff(hane) <= 1e-9)  # 単調非増加
-        # はねは二乗カーブで急峻：リフト区間の中間点で払いより接触が小さい
-        mid = 9  # 末尾5点(index7..11)の中央
-        assert hane[mid] < harai[mid]
+    def test_size_independent(self):
+        # 同じ lift_length(mm) なら、点数や全長が違っても終端付近の contact は一致。
+        small = contact_profile(HARAI, self._arc(8, 4.5), lift_length=2.5)
+        large = contact_profile(HARAI, self._arc(40, 20.0), lift_length=2.5)
+        # 終端から 2.5mm 地点(=リフト境界)で両者 contact≈1.0、終端で 0
+        assert np.isclose(small[-1], 0.0, atol=1e-9)
+        assert np.isclose(large[-1], 0.0, atol=1e-9)
 
-    def test_default_floor_reaches_zero(self):
-        # 既定の最小接触率は 0：終端が finish_lift_z に完全到達し確実に浮く。
-        harai = contact_profile(HARAI, n_points=12, lift_points=5)
-        hane = contact_profile(HANE, n_points=12, lift_points=5)
-        assert np.isclose(harai[-1], 0.0, atol=1e-9)
-        assert np.isclose(hane[-1], 0.0, atol=1e-9)
+        # 終端から 1.25mm(リフト中間)地点の contact が一致(線形なら≈0.5)
+        def contact_at(prof, arc, d):
+            # arc は終端0→始点全長で降順。np.interp 用に昇順化して補間。
+            return float(np.interp(d, arc[::-1], prof[::-1]))
 
-    def test_lift_points_exceeds_length_safe(self):
-        prof = contact_profile(HARAI, n_points=3, lift_points=10)
-        assert len(prof) == 3
-        assert prof[0] == 1.0
-        assert prof[-1] < 1.0
+        cs = contact_at(small, self._arc(8, 4.5), 1.25)
+        cl = contact_at(large, self._arc(40, 20.0), 1.25)
+        assert abs(cs - cl) < 1e-6  # サイズ非依存（式は arc/lift_length のみ）
+        assert abs(cs - 0.5) < 1e-6
+
+    def test_hane_steeper_than_harai(self):
+        arc = self._arc(20, 19.0)
+        harai = contact_profile(HARAI, arc, lift_length=5.0)
+        hane = contact_profile(HANE, arc, lift_length=5.0)
+        # リフト中間(終端2.5mm付近)ではねの方が接触小(二乗で急)
+        i = int(np.argmin(np.abs(arc - 2.5)))
+        assert hane[i] < harai[i]
+
+    def test_lift_length_exceeds_stroke_safe(self):
+        arc = self._arc(5, 2.0)
+        prof = contact_profile(HARAI, arc, lift_length=10.0)
+        assert len(prof) == 5
+        assert np.isclose(prof[-1], 0.0, atol=1e-9)
+        assert prof[0] < 1.0  # 全体がリフト区間に入る
 
     def test_short_stroke_guard(self):
-        prof = contact_profile(HARAI, n_points=1, lift_points=5)
+        prof = contact_profile(HARAI, np.array([0.0]), lift_length=5.0)
         assert len(prof) == 1
         assert np.allclose(prof, 1.0)

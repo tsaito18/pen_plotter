@@ -7,7 +7,7 @@ import numpy.typing as npt
 from matplotlib.collections import LineCollection
 
 from src.gcode.config import PlotterConfig
-from src.model.stroke_finishing import contact_profile
+from src.model.stroke_finishing import arc_length_from_end, contact_profile
 
 Stroke = npt.NDArray[np.float64]
 
@@ -15,30 +15,35 @@ Stroke = npt.NDArray[np.float64]
 # 上限 0.9 は実機の単線太さに相当。下限は終端で消えない最小幅。
 PREVIEW_WIDTH_MAX = 0.9
 PREVIEW_WIDTH_MIN = 0.15
-# 終端リフト区間に充てる末尾点数（PlotterConfig.finish_lift_points と揃える）。
-PREVIEW_LIFT_POINTS = 5
+# 終端リフト区間長(mm)。PlotterConfig.finish_lift_length_mm と揃える。
+PREVIEW_LIFT_LENGTH_MM = 2.5
 
 
-def compute_stroke_widths(n_segments: int, finish: str = "none") -> list[float]:
-    """ストローク内の各セグメントの太さを計算する。
+def compute_stroke_widths(
+    stroke: Stroke, finish: str = "none", lift_length: float = PREVIEW_LIFT_LENGTH_MM
+) -> list[float]:
+    """ストローク各セグメントの太さ(linewidth)を計算する。
 
     実機の終端Zリフト（接触圧の抜き）と同一の :func:`contact_profile` から線幅を
-    導く。``width = w_min + (w_max - w_min) * contact`` で、接触率が高いほど太く
-    なる。これによりプレビューの細りかたが実機 Z リフトと一致する（「見た目＝
-    実機」）。終端Zリフトの無いとめ/none は接触一定＝幅一定。
+    導く。終端からの距離(mm)ベースなので、文字サイズが変わっても抜けの見え方が
+    実機と一致する（「見た目＝実機」）。``width = w_min + (w_max - w_min) * contact``。
+    とめ/none は接触一定＝幅一定。
 
     Args:
-        n_segments: セグメント数。
+        stroke: ``(N, 2)`` の点列（mm 座標）。
         finish: 筆画タイプ（``"tome"`` / ``"hane"`` / ``"harai"`` / ``"none"``）。
-            未知の値は ``"none"`` と同じ（接触一定）。
+        lift_length: 終端リフト区間長(mm)。
 
     Returns:
-        各セグメントの linewidth リスト。``n_segments<=0`` は空リスト。
+        各セグメント（``N-1`` 本）の linewidth リスト。点数 2 未満は空リスト。
     """
-    if n_segments <= 0:
+    pts = np.asarray(stroke, dtype=float)
+    if len(pts) < 2:
         return []
-    contact = contact_profile(finish, n_segments, PREVIEW_LIFT_POINTS)
-    widths = PREVIEW_WIDTH_MIN + (PREVIEW_WIDTH_MAX - PREVIEW_WIDTH_MIN) * contact
+    arc = arc_length_from_end(pts)
+    contact = contact_profile(finish, arc, lift_length)
+    seg_contact = (contact[:-1] + contact[1:]) / 2.0  # セグメント太さ=両端の平均
+    widths = PREVIEW_WIDTH_MIN + (PREVIEW_WIDTH_MAX - PREVIEW_WIDTH_MIN) * seg_contact
     return widths.tolist()
 
 
@@ -59,7 +64,7 @@ def _draw_stroke_with_width(
         return
 
     segments = [[stroke[i].tolist(), stroke[i + 1].tolist()] for i in range(n_segments)]
-    widths = compute_stroke_widths(n_segments, finish)
+    widths = compute_stroke_widths(stroke, finish)
 
     lc = LineCollection(segments, linewidths=widths, colors=color)
     ax.add_collection(lc)

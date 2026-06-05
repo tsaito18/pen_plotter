@@ -5,7 +5,7 @@ import numpy as np
 import numpy.typing as npt
 
 from src.gcode.config import PlotterConfig
-from src.model.stroke_finishing import contact_profile
+from src.model.stroke_finishing import arc_length_from_end, contact_profile
 
 # ストローク = (N, 2) の numpy配列。各行は (x, y) 座標 (mm)
 Stroke = npt.NDArray[np.float64]
@@ -81,7 +81,8 @@ class GCodeGenerator:
         )
         lines.append(self.config.pen_down_command)
 
-        contact = contact_profile(finish, len(stroke), self.config.finish_lift_points)
+        arc = arc_length_from_end(stroke)
+        contact = contact_profile(finish, arc, self.config.finish_lift_length_mm)
         speed_factor = self._finish_speed_factor(finish)
         n_draw_points = len(stroke) - 1
         for i, point in enumerate(stroke[1:]):

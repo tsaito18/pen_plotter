@@ -30,8 +30,9 @@ class PlotterConfig:
     # 終端で芯を持ち上げる到達高さ。pen_up_z(0.5) < finish_lift_z < pen_down_z(3.5)。
     # 芯が完全に離れない手前。実機計測で浮き始め≈2.6、払いが最も自然なのは 2.2。
     finish_lift_z: float = 2.2
-    # 終端のリフト区間に充てるストローク末尾の点数。
-    finish_lift_points: int = 5
+    # 終端のリフト区間長(mm)。終端からこの距離でZを接触→finish_lift_zへ漸減する。
+    # 点数でなく実距離なので文字サイズに依らず同じ抜けになる（小さい字でも先細る）。
+    finish_lift_length_mm: float = 2.5
     # 払い＝ゆっくり抜く、はね＝速く跳ね上げる、の速度倍率。
     harai_speed_factor: float = 0.5
     hane_speed_factor: float = 1.3

@@ -95,46 +95,63 @@ def classify_finishes(kvg_types: list[str]) -> list[str]:
     return [classify_finish(t) for t in kvg_types]
 
 
+def arc_length_from_end(points: np.ndarray) -> np.ndarray:
+    """各点の「終端までの弧長(mm)」配列を返す。
+
+    終端（末尾点）が ``0``、始点が全長。終端へ向かって単調減少する。Zリフトを
+    点数ではなく実距離(mm)で設計し、文字サイズ非依存にするための基礎量。
+
+    Args:
+        points: ``(N, 2)`` の点列（mm 座標）。
+
+    Returns:
+        長さ ``N`` の弧長配列（終端 0）。``N < 2`` なら ``[0.0]*N``。
+    """
+    n = len(points)
+    if n < 2:
+        return np.zeros(n, dtype=float)
+    diffs = np.diff(points, axis=0)
+    seg = np.sqrt((diffs**2).sum(axis=1))
+    cum_from_start = np.concatenate([[0.0], np.cumsum(seg)])
+    return cum_from_start[-1] - cum_from_start
+
+
 def contact_profile(
     finish: str,
-    n_points: int,
-    lift_points: int,
+    arc_from_end: np.ndarray,
+    lift_length: float,
     harai_min: float = 0.0,
     hane_min: float = 0.0,
 ) -> np.ndarray:
-    """ストローク各点の接触率 ``contact ∈ [0, 1]`` 列を返す。
+    """各点の接触率 ``contact ∈ [0, 1]`` 列を距離(mm)ベースで返す。
 
-    実機の終端Zリフト（芯の接触圧抜き）とプレビューの線幅を同一ソースから
-    導くための無次元プロファイル。``1.0`` が完全接触（最も太く/濃く）、``0.0``
-    が半浮き手前（最も細く/薄く）に対応する。
+    実機の終端Zリフト（芯の接触圧抜き）とプレビューの線幅を同一ソースから導く
+    無次元プロファイル。``1.0`` が完全接触（太く/濃く）、``0.0`` が完全リフト
+    （細く/消える）。終端から ``lift_length`` mm 以内をリフト区間とし、終端で 0、
+    境界で 1.0 へ。点数でなく**距離**で決めるため文字サイズに依らず同じ抜けになる。
 
-    払い・はねは末尾 ``min(lift_points, n_points)`` 点で接触を漸減させる
-    （払い＝線形にすっと抜く、はね＝二乗カーブで急峻に跳ねて消える）。
-    とめ・none は全点 ``1.0``（変化なし）。
+    払い＝線形、はね＝二乗カーブ（終端付近で急峻）。とめ・none は全点 ``1.0``。
 
     Args:
         finish: :data:`TOME` / :data:`HANE` / :data:`HARAI` / :data:`NONE`。
-        n_points: ストロークの点数。
-        lift_points: 終端リフトに充てる末尾点数。
-        harai_min: 払い終端の最小接触率。``0`` で終端が finish_lift_z に完全到達
-            （芯が確実に浮いて先細りが消える）。
-        hane_min: はね終端の最小接触率。``0`` で完全到達。
+        arc_from_end: 各点の終端までの弧長(mm)。:func:`arc_length_from_end` の出力。
+        lift_length: 終端リフト区間の長さ(mm)。``<=0`` でリフトなし。
+        harai_min: 払い終端の最小接触率（``0`` で完全リフト）。
+        hane_min: はね終端の最小接触率（``0`` で完全リフト）。
 
     Returns:
-        長さ ``n_points`` の接触率配列。先頭は常に ``1.0``、単調非増加。
+        ``arc_from_end`` と同長の接触率配列。先頭1.0寄り、終端へ単調非増加。
     """
-    contact = np.ones(n_points, dtype=float)
-    if n_points < 2 or finish not in (HARAI, HANE):
+    arc = np.asarray(arc_from_end, dtype=float)
+    contact = np.ones(len(arc), dtype=float)
+    if len(arc) < 2 or finish not in (HARAI, HANE) or lift_length <= 0:
         return contact
-    k = min(lift_points, n_points)
-    if k < 1:
-        return contact
+    # 終端からの正規化位置 t: 終端0 → 境界1.0（境界より手前は1.0で頭打ち）
+    t = np.clip(arc / lift_length, 0.0, 1.0)
     if finish == HARAI:
-        tail = np.linspace(1.0, harai_min, k)
-    else:  # HANE: 二乗カーブで急峻に落とす
-        s = np.linspace(0.0, 1.0, k)
-        tail = hane_min + (1.0 - hane_min) * (1.0 - s) ** 2
-    contact[n_points - k :] = tail
+        contact = harai_min + (1.0 - harai_min) * t
+    else:  # HANE: 終端付近で急峻
+        contact = hane_min + (1.0 - hane_min) * t**2
     return contact
 
 
