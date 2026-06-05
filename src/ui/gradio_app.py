@@ -189,6 +189,29 @@ def _cleanup_paths(paths: Iterable[str | Path] | None) -> None:
             logger.debug("temp cleanup failed for %s: %s", p, exc)
 
 
+def _resolve_restored_profile(
+    stored_profile: str | None,
+    profile_ids: list[str],
+    default_profile: str | None,
+) -> str | None:
+    """永続化された profile_id を現在の選択肢に照合して解決する。
+
+    保存後にプロファイルが削除/リネームされていた場合に備え、
+    現在の選択肢に存在しない値はデフォルトへフォールバックする。
+
+    Args:
+        stored_profile: localStorage から復元した profile_id。
+        profile_ids: 現在利用可能な profile_id 一覧。
+        default_profile: フォールバック先（通常は先頭プロファイル）。
+
+    Returns:
+        有効な profile_id、または default_profile。
+    """
+    if stored_profile is not None and stored_profile in profile_ids:
+        return stored_profile
+    return default_profile
+
+
 def _validation_status(errors: list[str]) -> str:
     """validate() の戻り値を赤色 HTML で表示するためのフラグメント。"""
     if not errors:
@@ -258,6 +281,10 @@ def create_app(
 
     with gr.Blocks(title="Pen Plotter") as app:
         settings_state = gr.State(value=default_settings)
+        # ブラウザ localStorage への永続化。同一ブラウザで再訪時に設定を復元する。
+        # storage_key にバージョン接尾辞を付け、将来の構造変更時に破棄しやすくする。
+        persisted_settings = gr.BrowserState(None, storage_key="pen_plotter_settings_v1")
+        persisted_profile = gr.BrowserState(None, storage_key="pen_plotter_profile_v1")
         # stale=True なら「設定が変わったがプレビュー未更新」状態
         preview_stale = gr.State(value=False)
         # 旧プレビューの一時パスを保持し、再生成時に確実にクリーンアップする
@@ -426,6 +453,7 @@ def create_app(
                     gr.update(value=_validation_status(errors), visible=has_err),
                     gr.update(interactive=not has_err),
                     gr.update(interactive=not has_err),
+                    new_settings.to_dict(),  # ブラウザ永続化
                 )
 
             return _update
@@ -453,19 +481,21 @@ def create_app(
                     validation_md,
                     preview_btn,
                     gcode_btn,
+                    persisted_settings,
                 ],
             )
 
-        def _on_profile_change(_profile_id: str | None):
+        def _on_profile_change(profile_id: str | None):
             return (
                 True,
                 gr.update(value=_STALE_BANNER_HTML, visible=True),
+                profile_id,  # ブラウザ永続化
             )
 
         profile_select.change(
             _on_profile_change,
             inputs=[profile_select],
-            outputs=[preview_stale, stale_banner],
+            outputs=[preview_stale, stale_banner, persisted_profile],
         )
 
         def _on_preview(
@@ -669,6 +699,7 @@ def create_app(
                 d.travel_speed,
                 d.pen_delay,
                 d.temperature,
+                d.to_dict(),  # ブラウザ永続化もデフォルトへ
             )
 
         reset_btn.click(
@@ -681,11 +712,53 @@ def create_app(
                 preview_btn,
                 gcode_btn,
                 *slider_components,
+                persisted_settings,
             ],
         )
 
         ex_report_btn.click(lambda: _EXAMPLE_REPORT_HEADER, outputs=[text_input])
         ex_math_btn.click(lambda: _EXAMPLE_MATH_REPORT, outputs=[text_input])
         ex_essay_btn.click(lambda: _EXAMPLE_ESSAY, outputs=[text_input])
+
+        # ページロード時にブラウザ localStorage から設定を復元する。
+        # 永続値が無ければ UISettings.from_dict(None) が default() を返すため、
+        # 初回訪問時は通常のデフォルト表示になる。
+        profile_ids = [pid for pid, _ in profile_options]
+
+        def _on_load(stored_settings: dict | None, stored_profile: str | None):
+            settings = UISettings.from_dict(stored_settings)
+            errors = settings.validate()
+            has_err = bool(errors)
+            prof = _resolve_restored_profile(stored_profile, profile_ids, default_profile)
+            return (
+                settings,
+                settings.font_size,
+                settings.line_spacing,
+                settings.margin_top,
+                settings.margin_bottom,
+                settings.margin_left,
+                settings.margin_right,
+                settings.draw_speed,
+                settings.travel_speed,
+                settings.pen_delay,
+                settings.temperature,
+                gr.update(value=prof) if profile_options else gr.update(),
+                gr.update(value=_validation_status(errors), visible=has_err),
+                gr.update(interactive=not has_err),
+                gr.update(interactive=not has_err),
+            )
+
+        app.load(
+            _on_load,
+            inputs=[persisted_settings, persisted_profile],
+            outputs=[
+                settings_state,
+                *slider_components,
+                profile_select,
+                validation_md,
+                preview_btn,
+                gcode_btn,
+            ],
+        )
 
     return app

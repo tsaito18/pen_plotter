@@ -188,6 +188,77 @@ class TestUISettingsValidate:
         assert isinstance(result, list)
 
 
+class TestUISettingsSerialization:
+    """to_dict() / from_dict() による永続化シリアライズのテスト。"""
+
+    def test_to_dict_contains_all_fields(self):
+        """to_dict() は全フィールドを含む。"""
+        d = UISettings.default().to_dict()
+        for field in (
+            "font_size",
+            "line_spacing",
+            "margin_top",
+            "margin_bottom",
+            "margin_left",
+            "margin_right",
+            "draw_speed",
+            "travel_speed",
+            "pen_delay",
+            "temperature",
+            "paper_width",
+            "paper_height",
+        ):
+            assert field in d
+
+    def test_roundtrip_preserves_values(self):
+        """to_dict → from_dict で元の値が完全に復元される。"""
+        s = UISettings(
+            font_size=6.0,
+            line_spacing=9.0,
+            margin_top=20.0,
+            margin_bottom=20.0,
+            margin_left=15.0,
+            margin_right=15.0,
+            draw_speed=1500.0,
+            travel_speed=4000.0,
+            pen_delay=0.1,
+            temperature=1.5,
+        )
+        assert UISettings.from_dict(s.to_dict()) == s
+
+    def test_from_dict_none_returns_default(self):
+        """None からは default() を返す。"""
+        assert UISettings.from_dict(None) == UISettings.default()
+
+    def test_from_dict_empty_returns_default(self):
+        """空 dict からは default() を返す。"""
+        assert UISettings.from_dict({}) == UISettings.default()
+
+    def test_from_dict_partial_fills_defaults(self):
+        """部分 dict は欠損フィールドを default 値で補完する。"""
+        s = UISettings.from_dict({"font_size": 7.0})
+        assert s.font_size == 7.0
+        assert s.line_spacing == UISettings.default().line_spacing
+
+    def test_from_dict_ignores_unknown_keys(self):
+        """未知キーは無視される（ストレージ破損・将来削除フィールドに強い）。"""
+        s = UISettings.from_dict({"font_size": 7.0, "bogus_key": 99})
+        assert s.font_size == 7.0
+        assert not hasattr(s, "bogus_key")
+
+    def test_from_dict_ignores_invalid_values(self):
+        """float 化できない値は無視され default 値が残る。"""
+        default_fs = UISettings.default().font_size
+        s = UISettings.from_dict({"font_size": "not_a_number"})
+        assert s.font_size == default_fs
+
+    def test_from_dict_ignores_none_values(self):
+        """値が None のフィールドは無視される。"""
+        default_fs = UISettings.default().font_size
+        s = UISettings.from_dict({"font_size": None})
+        assert s.font_size == default_fs
+
+
 class TestBuildPipeline:
     """build_pipeline() のテスト。"""
 

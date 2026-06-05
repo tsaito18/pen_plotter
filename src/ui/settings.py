@@ -7,7 +7,7 @@ PlotterPipeline は UISettings を介して構築されることで、
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields, replace
 
 
 @dataclass(frozen=True)
@@ -105,3 +105,38 @@ class UISettings:
             errors.append(f"temperature は正の値である必要があります (現在: {self.temperature})")
 
         return errors
+
+    def to_dict(self) -> dict[str, float]:
+        """ブラウザ永続化（gr.BrowserState）用の plain dict へ変換する。
+
+        Returns:
+            全フィールドを float 値で持つ dict。JSON シリアライズ可能。
+        """
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> UISettings:
+        """to_dict() / 永続化された dict から UISettings を復元する。
+
+        default() をベースに既知フィールドのみを上書きするため、
+        フィールドの増減やストレージ破損に強い（前方/後方互換）。
+
+        Args:
+            data: 復元元 dict。None・空・未知キーは無視され、欠損は default 値で補完。
+
+        Returns:
+            復元された UISettings。data が None/空なら default()。
+        """
+        base = cls.default()
+        if not data:
+            return base
+        valid = {f.name for f in fields(cls)}
+        updates: dict[str, float] = {}
+        for key, value in data.items():
+            if key not in valid or value is None:
+                continue
+            try:
+                updates[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return replace(base, **updates)
