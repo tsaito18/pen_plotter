@@ -68,9 +68,11 @@ class TestApplyHarai:
 
 
 class TestApplyHane:
-    def test_adds_hook_off_tangent(self):
-        # 下向き縦画。はねで終端が接線と別方向へ折れる
-        stroke = np.array([[0, 3], [0, 2], [0, 1], [0, 0]], dtype=float)
+    def test_extends_along_existing_hook_direction(self):
+        # KanjiVG の鈎は既にフック形状を含む。終端接線(=フック向き)へ延長し、
+        # 回転して逆向きに飛ばないこと（二重フックのバグ回帰防止）。
+        # 左上へ一貫して跳ねる終端を模した点列。
+        stroke = np.array([[3, 0], [2, 1], [1, 2], [0, 3]], dtype=float)
         out = apply_hane(stroke, scale=10.0, config=FinishingConfig())
         assert len(out) > len(stroke)
         seg_before = stroke[-1] - stroke[-2]
@@ -78,7 +80,12 @@ class TestApplyHane:
         cos = np.dot(seg_before, seg_after) / (
             np.linalg.norm(seg_before) * np.linalg.norm(seg_after)
         )
-        assert cos < 0.9  # 進行方向から明確に折れる
+        assert cos > 0.9  # 既存フック方向をそのまま継続（回転しない）
+
+    def test_zero_length_terminal_is_safe(self):
+        stroke = np.array([[0, 0], [1, 0], [1, 0]], dtype=float)
+        out = apply_hane(stroke, scale=10.0, config=FinishingConfig())
+        assert out is not None
 
 
 class TestApplyTome:

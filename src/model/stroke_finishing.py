@@ -148,10 +148,8 @@ class FinishingConfig:
         enabled: ``False`` で :func:`apply_finishing` を完全バイパス（A/B・回帰用）。
         harai_ext_ratio: 払いの延長長さ / ``scale``。
         harai_points: 払いで末尾に追加する点数。
-        hane_hook_ratio: はねフック長 / ``scale``。
-        hane_points: はねフックで末尾に追加する点数。
-        hane_angle_deg: 接線からの回転角（度）。Y-UP で時計回りが負。
-            縦画なら左上、横画なら左下方向のフックになる。
+        hane_hook_ratio: はねの延長長さ / ``scale``。
+        hane_points: はねで末尾に追加する点数。
         tangent_window: 終端接線の算出に使う終端点数。
         tome_setback_ratio: とめ打ち込み量 / ``scale``。初期 0 は恒等。
     """
@@ -161,7 +159,6 @@ class FinishingConfig:
     harai_points: int = 5
     hane_hook_ratio: float = 0.12
     hane_points: int = 4
-    hane_angle_deg: float = -135.0
     tangent_window: int = 3
     tome_setback_ratio: float = 0.0
 
@@ -218,16 +215,18 @@ def apply_harai(stroke: np.ndarray, scale: float, config: FinishingConfig) -> np
 
 
 def apply_hane(stroke: np.ndarray, scale: float, config: FinishingConfig) -> np.ndarray:
-    """はね: 終端接線を回転させた方向へ小フックを付ける。
+    """はね: 既存フック方向（終端接線）へ短く延長して跳ねを強調する。
 
-    終端接線を ``hane_angle_deg`` だけ回転（回転行列
-    ``[[cos, -sin], [sin, cos]]``）してフック方向を作り、
-    ``hook_len = scale * hane_hook_ratio`` で ``hane_points`` 点のフックを末尾へ
-    追加する。接線が定義できない場合は ``stroke`` をそのまま返す。
+    KanjiVG の鈎（はね）ストロークは**既にフック形状を経路に含む**ため、終端接線は
+    そのままフックの向き（縦画なら左上など）を指す。ここで接線を回転させると二重
+    フックになって逆向きに飛ぶため、回転はせず終端接線方向へ ``hook_len = scale *
+    hane_hook_ratio`` だけ ``hane_points`` 点を延長する。実機ではこの延長区間で Z を
+    持ち上げ（:func:`contact_profile`）、跳ねが細く抜ける。接線が定義できない場合は
+    ``stroke`` をそのまま返す。
 
     Args:
         stroke: ``(N, 2)`` の配置後点列。
-        scale: 配置時の ``font_size``（mm）。フック長の基準。
+        scale: 配置時の ``font_size``（mm）。延長長さの基準。
         config: 加工パラメータ。
 
     Returns:
@@ -236,18 +235,14 @@ def apply_hane(stroke: np.ndarray, scale: float, config: FinishingConfig) -> np.
     tangent = _terminal_tangent(stroke, config.tangent_window)
     if tangent is None:
         return stroke
-    theta = np.deg2rad(config.hane_angle_deg)
-    cos, sin = np.cos(theta), np.sin(theta)
-    rot = np.array([[cos, -sin], [sin, cos]], dtype=float)
-    hook_dir = rot @ tangent
     n = config.hane_points
     hook_len = scale * config.hane_hook_ratio
     end = stroke[-1]
-    hook = np.array(
-        [end + hook_dir * (hook_len * i / n) for i in range(1, n + 1)],
+    ext = np.array(
+        [end + tangent * (hook_len * i / n) for i in range(1, n + 1)],
         dtype=float,
     )
-    return np.vstack([stroke, hook])
+    return np.vstack([stroke, ext])
 
 
 def apply_tome(stroke: np.ndarray, scale: float, config: FinishingConfig) -> np.ndarray:
