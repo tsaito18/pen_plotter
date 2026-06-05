@@ -24,8 +24,9 @@ _PAD_INCHES = 0.05
 _MIN_STROKE_PX = 2
 _MIN_STROKE_MM = 0.5  # 0.5mm 未満のストロークは除去
 _MIN_STROKE_UNIT = 0.02  # unit square の 2% 未満は除去（per-char 用）
-_MATH_LIFT_FRACTION = 0.12  # 数式を bbox 高さの何割上にずらすか（行内でやや上寄せ）
-_MATH_HEIGHT_STRETCH = 1.2  # 縦方向の引き伸ばし（matplotlib の分数が横に潰れて見えるのを補正）
+_MATH_LIFT_FRACTION = 0.2  # 数式を bbox 高さの何割上にずらすか（行内でやや上寄せ）
+_MATH_HEIGHT_STRETCH = 1.1  # 縦方向の引き伸ばし（matplotlib の分数が横に潰れて見えるのを補正）
+# 下端 = y0 + h_mm*(0.5 + LIFT - STRETCH/2) を正に保ち、分母が下の行へはみ出さないこと
 
 
 @lru_cache(maxsize=64)
