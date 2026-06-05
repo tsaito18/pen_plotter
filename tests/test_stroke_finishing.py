@@ -159,6 +159,13 @@ class TestContactProfile:
         mid = 9  # 末尾5点(index7..11)の中央
         assert hane[mid] < harai[mid]
 
+    def test_default_floor_reaches_zero(self):
+        # 既定の最小接触率は 0：終端が finish_lift_z に完全到達し確実に浮く。
+        harai = contact_profile(HARAI, n_points=12, lift_points=5)
+        hane = contact_profile(HANE, n_points=12, lift_points=5)
+        assert np.isclose(harai[-1], 0.0, atol=1e-9)
+        assert np.isclose(hane[-1], 0.0, atol=1e-9)
+
     def test_lift_points_exceeds_length_safe(self):
         prof = contact_profile(HARAI, n_points=3, lift_points=10)
         assert len(prof) == 3

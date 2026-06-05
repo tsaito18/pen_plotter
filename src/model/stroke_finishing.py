@@ -99,8 +99,8 @@ def contact_profile(
     finish: str,
     n_points: int,
     lift_points: int,
-    harai_min: float = 0.15,
-    hane_min: float = 0.2,
+    harai_min: float = 0.0,
+    hane_min: float = 0.0,
 ) -> np.ndarray:
     """ストローク各点の接触率 ``contact ∈ [0, 1]`` 列を返す。
 
@@ -116,8 +116,9 @@ def contact_profile(
         finish: :data:`TOME` / :data:`HANE` / :data:`HARAI` / :data:`NONE`。
         n_points: ストロークの点数。
         lift_points: 終端リフトに充てる末尾点数。
-        harai_min: 払い終端の最小接触率。
-        hane_min: はね終端の最小接触率。
+        harai_min: 払い終端の最小接触率。``0`` で終端が finish_lift_z に完全到達
+            （芯が確実に浮いて先細りが消える）。
+        hane_min: はね終端の最小接触率。``0`` で完全到達。
 
     Returns:
         長さ ``n_points`` の接触率配列。先頭は常に ``1.0``、単調非増加。
