@@ -815,14 +815,15 @@ class Typesetter:
         col_w = [w * scale for w in col_w]
 
         row_h = self._config.line_spacing
-        # 行境界 y（Y-UP: 上端が大きい値）。確保行範囲の上端から row_h 刻みで下る。
-        top_y = line_positions[line_idx] + row_h / 2
-        ys = [top_y - i * row_h for i in range(n_rows + 1)]
+        # 横罫線は用紙の罫線(line_positions)に一致させる。各行=1罫線バンドを占有。
+        # 境界 y: 先頭行の上罫線(L[idx]+row_h) → 各行の下罫線 L[idx+r]。
+        ys = [line_positions[line_idx] + row_h]
+        ys += [line_positions[line_idx + r] for r in range(n_rows)]
         xs = [area.x]
         for w in col_w:
             xs.append(xs[-1] + w)
 
-        # 横罫線（行境界）
+        # 横罫線（用紙の罫線に重なる）
         for y in ys:
             output.append(
                 CharPlacement(
@@ -834,22 +835,24 @@ class Typesetter:
                     line_segment=(area.x, y, xs[-1], y),
                 )
             )
-        # 縦罫線（列境界）
+        # 縦罫線（列境界）。表の上端〜下端まで。
+        y_top, y_bot = ys[0], ys[-1]
         for x in xs:
             output.append(
                 CharPlacement(
                     char="",
                     x=x,
-                    y=ys[0],
+                    y=y_top,
                     font_size=fs,
                     page=page_idx,
-                    line_segment=(x, ys[0], x, ys[-1]),
+                    line_segment=(x, y_top, x, y_bot),
                 )
             )
-        # セル文字（左寄せ、行中央のベースライン）。字送りも scale して列内に収める。
+        # セル文字（左寄せ）。各行のベースラインは下罫線 L[idx+r] の少し上に置き、
+        # 通常本文と同じ「罫線の上に乗る」見え方にする。字送りも scale。
         cell_fs = fs * scale
         for r in range(n_rows):
-            baseline = (ys[r] + ys[r + 1]) / 2 - cell_fs * 0.35
+            baseline = line_positions[line_idx + r] + row_h * 0.18
             for c in range(n_cols):
                 text = rows[r][c]
                 cx = xs[c] + pad * scale

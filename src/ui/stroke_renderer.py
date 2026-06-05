@@ -863,7 +863,8 @@ class StrokeRenderer:
             ]
         if char == "s":
             t = np.linspace(0, 1, 30)
-            x = 0.5 + 0.28 * np.sin(2 * np.pi * t)
+            # 上が左・下が右に膨らむ正しい S 字（+sin だと左右反転 Ƨ になる）
+            x = 0.5 - 0.28 * np.sin(2 * np.pi * t)
             y = 0.85 - 0.7 * t
             return [np.stack([x, y], axis=1).astype(np.float64)]
         if char == "i":
@@ -1122,7 +1123,8 @@ class StrokeRenderer:
             return [stem, loop, leg]
         if char == "S":
             t = np.linspace(0, 1, 32)
-            x = 0.5 + 0.32 * np.sin(2 * np.pi * t)
+            # 上が左・下が右に膨らむ正しい S 字（+sin だと左右反転 Ƨ になる）
+            x = 0.5 - 0.32 * np.sin(2 * np.pi * t)
             y = 0.95 - 0.9 * t
             return [np.stack([x, y], axis=1).astype(np.float64)]
         if char == "T":

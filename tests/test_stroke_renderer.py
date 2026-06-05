@@ -196,6 +196,16 @@ class TestAsciiMathSymbols:
         for circle in result[1:]:
             assert np.allclose(circle[0], circle[-1], atol=1e-6)
 
+    @pytest.mark.parametrize("char", ["S", "s"])
+    def test_s_not_mirrored(self, char):
+        """S/s は上が左・下が右に膨らむ正しい向き（左右反転 Ƨ でない）。"""
+        renderer = StrokeRenderer()
+        stroke = renderer._ascii_letter_strokes(char)[0]
+        # 最も左へ張り出す点は上側(yが大)、最も右は下側(yが小)
+        left_pt = stroke[np.argmin(stroke[:, 0])]
+        right_pt = stroke[np.argmax(stroke[:, 0])]
+        assert left_pt[1] > right_pt[1]
+
     def test_fullwidth_normalized_to_ascii(self):
         """全角プラスも幾何ルートで処理される（_CHAR_SUBSTITUTIONS 経由）。"""
         renderer = StrokeRenderer()
