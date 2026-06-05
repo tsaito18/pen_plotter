@@ -308,7 +308,8 @@ class StrokeRenderer:
         if direct is not None:
             cov.user_strokes.append(original_char)
             positioned = self._position_strokes(direct, placement)
-            positioned = positioned if is_smooth else self._apply_distortion(positioned)
+            waver = self._waver_scale(len(positioned))
+            positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
             return positioned, ["none"] * len(positioned)
 
         reference, ref_types = self._load_reference_strokes(placement.char)
@@ -319,11 +320,13 @@ class StrokeRenderer:
             and self._is_ml_deformable(placement.char)
         ):
             try:
+                waver = self._waver_scale(len(reference))
                 raw = self._inference.generate(
                     self._style_sample,
                     num_steps=50,
                     temperature=self._temperature,
                     reference_strokes=reference,
+                    deform_scale=waver,
                 )
                 cov.ml_inference.append(original_char)
                 positioned = self._position_strokes(raw, placement)
@@ -334,7 +337,7 @@ class StrokeRenderer:
                     scale=placement.font_size,
                     config=self._finishing_config,
                 )
-                positioned = positioned if is_smooth else self._apply_distortion(positioned)
+                positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
                 return positioned, finishes
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
@@ -351,19 +354,43 @@ class StrokeRenderer:
                     scale=placement.font_size,
                     config=self._finishing_config,
                 )
-                positioned = positioned if is_smooth else self._apply_distortion(positioned)
+                waver = self._waver_scale(len(char_strokes))
+                positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
                 return positioned, finishes
 
         cov.rect_fallback.append(original_char)
         rect = self._rect_fallback(placement)
         return rect, ["none"] * len(rect)
 
-    def _apply_distortion(self, strokes: list[Stroke]) -> list[Stroke]:
+    # 揺らぎを満額にする画数の上限と、下限まで落とす画数。多画字は画間隔が
+    # 狭く、揺らぎで画が隣のレーンへはみ出して「固まる」ため画数で逓減する。
+    _WAVER_FULL_STROKES = 10
+    _WAVER_MIN_STROKES = 20
+    _WAVER_FLOOR = 0.3
+
+    @classmethod
+    def _waver_scale(cls, n_strokes: int) -> float:
+        """画数に応じた揺らぎ倍率 ∈ [_WAVER_FLOOR, 1.0] を返す。
+
+        ``_WAVER_FULL_STROKES`` 画以下は 1.0（満額）、``_WAVER_MIN_STROKES`` 画
+        以上は ``_WAVER_FLOOR``、間は線形。多画字ほど tremor/elastic と ML の
+        per-point offset を縮らせ、画の重なり（固まり）を防ぐ。
+        """
+        lo, hi = cls._WAVER_FULL_STROKES, cls._WAVER_MIN_STROKES
+        if n_strokes <= lo:
+            return 1.0
+        if n_strokes >= hi:
+            return cls._WAVER_FLOOR
+        frac = (n_strokes - lo) / (hi - lo)
+        return 1.0 - frac * (1.0 - cls._WAVER_FLOOR)
+
+    def _apply_distortion(self, strokes: list[Stroke], waver_scale: float = 1.0) -> list[Stroke]:
         aug = self._augmenter
         if aug is None:
             return strokes
-        strokes = [aug.elastic_distort(s) for s in strokes]
-        strokes = [aug.apply_tremor(s) for s in strokes]
+        # 既定振幅(elastic=0.002 bbox比, tremor=0.01mm)を waver_scale で縮める
+        strokes = [aug.elastic_distort(s, amplitude=0.002 * waver_scale) for s in strokes]
+        strokes = [aug.apply_tremor(s, amplitude=0.01 * waver_scale) for s in strokes]
         return strokes
 
     def _direct_stroke(self, char: str) -> list[Stroke] | None:

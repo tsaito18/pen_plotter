@@ -215,6 +215,52 @@ class _FailingInference:
         raise self.exc
 
 
+class _RecordingInference:
+    """deform_scale を記録し、参照ストロークをそのまま返すフェイク。"""
+
+    def __init__(self) -> None:
+        self.deform_scales: list[float] = []
+
+    def generate(self, style_sample, *, reference_strokes=None, deform_scale=1.0, **kwargs):
+        self.deform_scales.append(deform_scale)
+        return [np.asarray(s, dtype=float) for s in (reference_strokes or [])]
+
+
+class TestWaverScaleByStrokeCount:
+    """画数が多い字ほど揺らぎ(distortion/ML offset)を落として固まりを防ぐ。"""
+
+    def test_waver_scale_decreasing_and_clamped(self):
+        f = StrokeRenderer._waver_scale
+        assert f(1) == pytest.approx(1.0)
+        assert f(10) == pytest.approx(1.0)  # 閾値以下は満額
+        assert f(30) == pytest.approx(0.3)  # 高画数は下限
+        # 単調非増加
+        vals = [f(n) for n in range(1, 31)]
+        assert all(b <= a + 1e-9 for a, b in zip(vals, vals[1:]))
+        # 中間(15画)は 1.0 と 0.3 の間
+        assert 0.3 < f(15) < 1.0
+
+    def test_apply_distortion_zero_scale_is_identity(self):
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        r = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
+        s = [np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 1.0]], dtype=float)]
+        out = r._apply_distortion(s, waver_scale=0.0)
+        assert np.allclose(out[0], s[0])  # 揺らぎ0なら不変
+
+    def test_dense_char_gets_smaller_deform_scale(self):
+        from pathlib import Path
+
+        r = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        rec = _RecordingInference()
+        r._inference = rec
+        for ch in ["一", "機"]:  # 1画 vs 16画
+            r.generate_char_strokes(CharPlacement(char=ch, x=0.0, y=0.0, font_size=4.5, page=0))
+        simple, dense = rec.deform_scales
+        assert simple == pytest.approx(1.0)
+        assert dense < simple  # 多画字はML変形を縮小
+
+
 class TestGeometricFallbackOrder:
     """句読点・括弧は ML 推論より前に幾何描画する。"""
 
