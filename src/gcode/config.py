@@ -17,7 +17,7 @@ class PlotterConfig:
 
     # 速度 (mm/min)
     travel_speed: float = 5000.0
-    draw_speed: float = 1000.0
+    draw_speed: float = 3000.0
 
     # ペン制御 (Z軸)
     pen_down_command: str = "G1G90 Z3.5 F5000"
@@ -28,8 +28,8 @@ class PlotterConfig:
     # pen_down_z は補間の基準となる接触高さ。pen_down_command の Z 値と一致させること。
     pen_down_z: float = 3.5
     # 終端で芯を持ち上げる到達高さ。pen_up_z(0.5) < finish_lift_z < pen_down_z(3.5)。
-    # 芯が完全に離れない手前。実機キャリブで詰める仮値。
-    finish_lift_z: float = 2.0
+    # 芯が完全に離れない手前。実機計測で浮き始め≈2.6、払いが最も自然なのは 2.2。
+    finish_lift_z: float = 2.2
     # 終端のリフト区間に充てるストローク末尾の点数。
     finish_lift_points: int = 5
     # 払い＝ゆっくり抜く、はね＝速く跳ね上げる、の速度倍率。

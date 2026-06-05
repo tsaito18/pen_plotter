@@ -14,7 +14,7 @@ class TestPlotterConfigDefaults:
 
     def test_speed_settings(self, plotter_config: PlotterConfig):
         assert plotter_config.travel_speed == 5000.0
-        assert plotter_config.draw_speed == 1000.0
+        assert plotter_config.draw_speed == 3000.0
 
     def test_pen_commands(self, plotter_config: PlotterConfig):
         assert plotter_config.pen_down_command == "G1G90 Z3.5 F5000"
@@ -27,7 +27,7 @@ class TestPlotterConfigDefaults:
     def test_finish_lift_params(self, plotter_config: PlotterConfig):
         # 終端Zリフト（払い・はねの接触圧抜き）パラメータ。
         assert plotter_config.pen_down_z == 3.5
-        assert plotter_config.finish_lift_z == 2.0
+        assert plotter_config.finish_lift_z == 2.2
         assert plotter_config.finish_lift_points == 5
         assert plotter_config.harai_speed_factor == 0.5
         assert plotter_config.hane_speed_factor == 1.3

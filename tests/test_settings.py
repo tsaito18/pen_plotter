@@ -24,7 +24,7 @@ class TestUISettingsDefault:
         assert s.margin_bottom == 34.0
         assert s.margin_left == 5.0
         assert s.margin_right == 5.0
-        assert s.draw_speed == 1000.0
+        assert s.draw_speed == 3000.0
         assert s.travel_speed == 5000.0
         assert s.pen_delay == 0.0
         assert s.temperature == 1.0

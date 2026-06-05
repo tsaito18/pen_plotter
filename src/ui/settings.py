@@ -61,7 +61,7 @@ class UISettings:
             margin_bottom=34.0,
             margin_left=5.0,
             margin_right=5.0,
-            draw_speed=1000.0,
+            draw_speed=3000.0,
             travel_speed=5000.0,
             pen_delay=0.0,
             temperature=1.0,
