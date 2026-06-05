@@ -14,6 +14,7 @@ from src.model.stroke_finishing import (
     apply_tome,
     classify_finish,
     classify_finishes,
+    contact_profile,
 )
 
 
@@ -121,3 +122,43 @@ class TestApplyFinishing:
         strokes = [np.array([[0, 0]], dtype=float)]  # 1点
         out = apply_finishing(strokes, [HARAI], scale=10.0)
         assert np.array_equal(out[0], strokes[0])  # 落ちない
+
+
+class TestContactProfile:
+    def test_none_and_tome_all_contact(self):
+        for finish in (NONE, TOME):
+            prof = contact_profile(finish, n_points=10, lift_points=5)
+            assert len(prof) == 10
+            assert np.allclose(prof, 1.0)
+
+    def test_harai_monotonic_decreasing_tail(self):
+        prof = contact_profile(HARAI, n_points=12, lift_points=5, harai_min=0.15)
+        assert len(prof) == 12
+        # 先頭は完全接触、末尾は最小接触へ
+        assert prof[0] == 1.0
+        assert np.isclose(prof[-1], 0.15, atol=1e-6)
+        # 全体が単調非増加
+        assert np.all(np.diff(prof) <= 1e-9)
+        # リフト区間より前(7点)は接触1.0のまま
+        assert np.allclose(prof[:7], 1.0)
+
+    def test_hane_drops_lower_than_harai(self):
+        harai = contact_profile(HARAI, n_points=12, lift_points=5, harai_min=0.15)
+        hane = contact_profile(HANE, n_points=12, lift_points=5, hane_min=0.2)
+        assert hane[0] == 1.0
+        assert np.isclose(hane[-1], 0.2, atol=1e-6)
+        assert np.all(np.diff(hane) <= 1e-9)  # 単調非増加
+        # はねは二乗カーブで急峻：リフト区間の中間点で払いより接触が小さい
+        mid = 9  # 末尾5点(index7..11)の中央
+        assert hane[mid] < harai[mid]
+
+    def test_lift_points_exceeds_length_safe(self):
+        prof = contact_profile(HARAI, n_points=3, lift_points=10)
+        assert len(prof) == 3
+        assert prof[0] == 1.0
+        assert prof[-1] < 1.0
+
+    def test_short_stroke_guard(self):
+        prof = contact_profile(HARAI, n_points=1, lift_points=5)
+        assert len(prof) == 1
+        assert np.allclose(prof, 1.0)

@@ -7,40 +7,38 @@ import numpy.typing as npt
 from matplotlib.collections import LineCollection
 
 from src.gcode.config import PlotterConfig
+from src.model.stroke_finishing import contact_profile
 
 Stroke = npt.NDArray[np.float64]
+
+# プレビュー線幅の上限（完全接触）/ 下限（終端の抜け）。
+# 上限 0.9 は実機の単線太さに相当。下限は終端で消えない最小幅。
+PREVIEW_WIDTH_MAX = 0.9
+PREVIEW_WIDTH_MIN = 0.15
+# 終端リフト区間に充てる末尾点数（PlotterConfig.finish_lift_points と揃える）。
+PREVIEW_LIFT_POINTS = 5
 
 
 def compute_stroke_widths(n_segments: int, finish: str = "none") -> list[float]:
     """ストローク内の各セグメントの太さを計算する。
 
-    筆画タイプ（``finish``）ごとに終端の細りかたを変える。``t`` は始点 0、
-    終点 1 の正規化パラメータで、終端で線幅を細くすることで払い・はねの抜けを
-    表現する。
+    実機の終端Zリフト（接触圧の抜き）と同一の :func:`contact_profile` から線幅を
+    導く。``width = w_min + (w_max - w_min) * contact`` で、接触率が高いほど太く
+    なる。これによりプレビューの細りかたが実機 Z リフトと一致する（「見た目＝
+    実機」）。終端Zリフトの無いとめ/none は接触一定＝幅一定。
 
     Args:
         n_segments: セグメント数。
         finish: 筆画タイプ（``"tome"`` / ``"hane"`` / ``"harai"`` / ``"none"``）。
-            未知の値は ``"none"`` と同じプロファイル。
+            未知の値は ``"none"`` と同じ（接触一定）。
 
     Returns:
-        各セグメントの linewidth リスト（一般に始点で太く、終点で細い）。
-        ``n_segments<=0`` は空リスト、``n_segments==1`` は ``t=[0.5]`` で 1 要素。
+        各セグメントの linewidth リスト。``n_segments<=0`` は空リスト。
     """
     if n_segments <= 0:
         return []
-    if n_segments == 1:
-        t = np.array([0.5])
-    else:
-        t = np.linspace(0.0, 1.0, n_segments)
-    if finish == "harai":
-        widths = 0.6 + 0.4 * np.exp(-4.0 * t)
-    elif finish == "hane":
-        widths = 0.5 + 0.35 * np.exp(-1.2 * t)
-    elif finish == "tome":
-        widths = np.full_like(t, 0.9)
-    else:
-        widths = 0.7 + 0.3 * np.exp(-2.0 * t)
+    contact = contact_profile(finish, n_segments, PREVIEW_LIFT_POINTS)
+    widths = PREVIEW_WIDTH_MIN + (PREVIEW_WIDTH_MAX - PREVIEW_WIDTH_MIN) * contact
     return widths.tolist()
 
 

@@ -319,9 +319,19 @@ class PlotterPipeline:
             x += font_size * 0.5
         return all_strokes
 
-    def strokes_to_gcode(self, strokes: list[Stroke]) -> list[str]:
-        optimized = optimize_stroke_order(strokes)
-        return self._generator.generate(optimized)
+    def strokes_to_gcode(
+        self, strokes: list[Stroke], finishes: list[str] | None = None
+    ) -> list[str]:
+        """ストローク列を G-code 化する。
+
+        finishes を渡すと終端Zリフト（払い・はね）が G-code に乗る。順序最適化は
+        finishes と同期する版を使い、対応関係を保つ。finishes 無しは従来挙動。
+        """
+        if finishes is None:
+            optimized = optimize_stroke_order(strokes)
+            return self._generator.generate(optimized)
+        optimized, optimized_finishes = optimize_stroke_order_with_finishes(strokes, finishes)
+        return self._generator.generate(optimized, finishes=optimized_finishes)
 
     def generate_gcode(
         self,
@@ -336,14 +346,17 @@ class PlotterPipeline:
             return save_path
 
         all_strokes: list[Stroke] = []
+        all_finishes: list[str] = []
         for i, page_placements in enumerate(pages, start=1):
-            strokes = self.placements_to_strokes(page_placements)
+            strokes, finishes = self.placements_to_strokes_with_finishes(page_placements)
             page_num_strokes = self._generate_page_number_strokes(i)
             all_strokes.extend(strokes)
+            all_finishes.extend(finishes)
             all_strokes.extend(page_num_strokes)
+            all_finishes.extend(["none"] * len(page_num_strokes))
 
         # ストローク順序を保持（optimize_stroke_orderを使わない）
-        gcode = self._generator.generate(all_strokes, vary_speed=True)
+        gcode = self._generator.generate(all_strokes, finishes=all_finishes, vary_speed=True)
         self._generator.save(gcode, save_path)
         return save_path
 
@@ -454,18 +467,19 @@ class PlotterPipeline:
                 if progress_callback:
                     progress_callback(_base + frac * _span * 0.7, desc)
 
-            strokes = self.placements_to_strokes(
+            strokes, finishes = self.placements_to_strokes_with_finishes(
                 page_placements, progress_callback=_stroke_progress
             )
             page_num_strokes = self._generate_page_number_strokes(i)
             all_strokes = strokes + page_num_strokes
+            all_finishes = finishes + ["none"] * len(page_num_strokes)
 
             if progress_callback:
                 progress_callback(
                     page_base + page_span * 0.85,
                     f"G-code \u5909\u63db\u4e2d ({i}/{n_pages})...",
                 )
-            gcode = self._generator.generate(all_strokes, vary_speed=True)
+            gcode = self._generator.generate(all_strokes, finishes=all_finishes, vary_speed=True)
 
             page_path = save_path if n_pages == 1 else parent / f"{stem}_p{i}{suffix}"
             self._generator.save(gcode, page_path)

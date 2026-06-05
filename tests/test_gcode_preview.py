@@ -55,15 +55,17 @@ class TestPreviewStrokesVaryWidth:
             assert mock_lc.called
 
     def test_vary_width_linewidths_decrease(self, tmp_path: Path):
-        """太さが始点で太く終点で細い（減衰する）"""
+        """none は実機Z一定に連動して幅一定、払いは終端で細る。"""
         from src.gcode.preview import compute_stroke_widths
 
         n_segments = 10
+        # 終端Zリフトの無い none は接触一定＝幅一定（実機の単線に忠実）
         widths = compute_stroke_widths(n_segments)
         assert len(widths) == n_segments
-        assert widths[0] > widths[-1]
-        assert widths[0] > 0.9
-        assert widths[-1] < 0.8
+        assert all(abs(w - widths[0]) < 1e-9 for w in widths)
+        # 払いは終端で細る（接触圧が抜ける）
+        harai = compute_stroke_widths(n_segments, "harai")
+        assert harai[0] > harai[-1]
 
     def test_vary_width_with_single_point_stroke(self, tmp_path: Path):
         """1点ストロークでもクラッシュしない"""

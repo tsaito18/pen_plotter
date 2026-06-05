@@ -24,6 +24,20 @@ class PlotterConfig:
     pen_up_command: str = "G1G90 Z0.5 F5000"
     pen_delay: float = 0.0  # Z軸制御は速度指定で完了するため遅延不要
 
+    # 終端Zリフト（払い・はねの接触圧を抜く筆遣い表現）
+    # pen_down_z は補間の基準となる接触高さ。pen_down_command の Z 値と一致させること。
+    pen_down_z: float = 3.5
+    # 終端で芯を持ち上げる到達高さ。pen_up_z(0.5) < finish_lift_z < pen_down_z(3.5)。
+    # 芯が完全に離れない手前。実機キャリブで詰める仮値。
+    finish_lift_z: float = 2.0
+    # 終端のリフト区間に充てるストローク末尾の点数。
+    finish_lift_points: int = 5
+    # 払い＝ゆっくり抜く、はね＝速く跳ね上げる、の速度倍率。
+    harai_speed_factor: float = 0.5
+    hane_speed_factor: float = 1.3
+    # Z軸移動のフィードレート (mm/min)。
+    pen_z_feed: float = 5000.0
+
     # G-code設定
     decimal_places: int = 2
 

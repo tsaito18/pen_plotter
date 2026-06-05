@@ -95,6 +95,48 @@ def classify_finishes(kvg_types: list[str]) -> list[str]:
     return [classify_finish(t) for t in kvg_types]
 
 
+def contact_profile(
+    finish: str,
+    n_points: int,
+    lift_points: int,
+    harai_min: float = 0.15,
+    hane_min: float = 0.2,
+) -> np.ndarray:
+    """ストローク各点の接触率 ``contact ∈ [0, 1]`` 列を返す。
+
+    実機の終端Zリフト（芯の接触圧抜き）とプレビューの線幅を同一ソースから
+    導くための無次元プロファイル。``1.0`` が完全接触（最も太く/濃く）、``0.0``
+    が半浮き手前（最も細く/薄く）に対応する。
+
+    払い・はねは末尾 ``min(lift_points, n_points)`` 点で接触を漸減させる
+    （払い＝線形にすっと抜く、はね＝二乗カーブで急峻に跳ねて消える）。
+    とめ・none は全点 ``1.0``（変化なし）。
+
+    Args:
+        finish: :data:`TOME` / :data:`HANE` / :data:`HARAI` / :data:`NONE`。
+        n_points: ストロークの点数。
+        lift_points: 終端リフトに充てる末尾点数。
+        harai_min: 払い終端の最小接触率。
+        hane_min: はね終端の最小接触率。
+
+    Returns:
+        長さ ``n_points`` の接触率配列。先頭は常に ``1.0``、単調非増加。
+    """
+    contact = np.ones(n_points, dtype=float)
+    if n_points < 2 or finish not in (HARAI, HANE):
+        return contact
+    k = min(lift_points, n_points)
+    if k < 1:
+        return contact
+    if finish == HARAI:
+        tail = np.linspace(1.0, harai_min, k)
+    else:  # HANE: 二乗カーブで急峻に落とす
+        s = np.linspace(0.0, 1.0, k)
+        tail = hane_min + (1.0 - hane_min) * (1.0 - s) ** 2
+    contact[n_points - k :] = tail
+    return contact
+
+
 @dataclass
 class FinishingConfig:
     """終端加工のパラメータ設定。

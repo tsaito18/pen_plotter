@@ -24,6 +24,23 @@ class TestPlotterConfigDefaults:
     def test_decimal_places(self, plotter_config: PlotterConfig):
         assert plotter_config.decimal_places == 2
 
+    def test_finish_lift_params(self, plotter_config: PlotterConfig):
+        # 終端Zリフト（払い・はねの接触圧抜き）パラメータ。
+        assert plotter_config.pen_down_z == 3.5
+        assert plotter_config.finish_lift_z == 2.0
+        assert plotter_config.finish_lift_points == 5
+        assert plotter_config.harai_speed_factor == 0.5
+        assert plotter_config.hane_speed_factor == 1.3
+        assert plotter_config.pen_z_feed == 5000.0
+
+    def test_finish_lift_z_within_safe_range(self, plotter_config: PlotterConfig):
+        # 半浮き高さは接触(pen_down_z)と浮き(pen_up_z=0.5)の間。
+        assert 0.5 < plotter_config.finish_lift_z < plotter_config.pen_down_z
+
+    def test_pen_down_z_matches_command(self, plotter_config: PlotterConfig):
+        # pen_down_z は pen_down_command の Z 値と一致していること。
+        assert f"Z{plotter_config.pen_down_z}" in plotter_config.pen_down_command
+
 
 class TestPenDelayGcode:
     def test_default_delay(self, plotter_config: PlotterConfig):
