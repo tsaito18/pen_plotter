@@ -63,8 +63,7 @@ class TableLayout:
     def cell_position(self, row: int, col: int) -> CellPlacement:
         if row < 0 or row >= self._cfg.rows or col < 0 or col >= self._cfg.cols:
             raise IndexError(
-                f"Cell ({row}, {col}) is out of range for "
-                f"{self._cfg.rows}x{self._cfg.cols} table"
+                f"Cell ({row}, {col}) is out of range for {self._cfg.rows}x{self._cfg.cols} table"
             )
         pad = self._cfg.cell_padding
         x = self._ox + sum(self._cfg.col_widths[:col]) + pad  # type: ignore[index]

@@ -45,7 +45,7 @@ class TestPageLayout:
         lines = layout.line_positions()
         assert len(lines) > 0
         for i in range(1, len(lines)):
-            assert abs(lines[i] - lines[i-1]) == pytest.approx(8.0)
+            assert abs(lines[i] - lines[i - 1]) == pytest.approx(8.0)
 
     def test_line_positions_within_content_area(self):
         layout = PageLayout(PageConfig())

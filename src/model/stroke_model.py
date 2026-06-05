@@ -77,9 +77,7 @@ class StrokeGenerator(nn.Module):
             clamped = stroke_index.clamp(0, self.MAX_STROKE_INDEX - 1)
             stroke_emb = self.stroke_embed(clamped)
         else:
-            stroke_emb = torch.zeros(
-                batch, self.stroke_embed_dim, device=x.device
-            )
+            stroke_emb = torch.zeros(batch, self.stroke_embed_dim, device=x.device)
         stroke_expanded = stroke_emb.unsqueeze(1).expand(-1, seq_len, -1)
         lstm_input = torch.cat([x, style_expanded, stroke_expanded], dim=-1)
 
@@ -170,9 +168,7 @@ def mdn_loss(
     return stroke_loss, eos_loss
 
 
-def embedding_variance_loss(
-    embeddings: torch.Tensor, min_variance: float = 1.0
-) -> torch.Tensor:
+def embedding_variance_loss(embeddings: torch.Tensor, min_variance: float = 1.0) -> torch.Tensor:
     """Penalize low variance in batch embeddings to prevent encoder collapse.
 
     Args:

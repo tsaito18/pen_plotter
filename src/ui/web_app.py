@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -15,12 +16,30 @@ from src.gcode.optimizer import (
 )
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement, Typesetter
-from src.model.augmentation import HandwritingAugmenter
+from src.model.augmentation import AugmentConfig, HandwritingAugmenter
 from src.ui.stroke_renderer import CharCoverageReport  # noqa: F401 (re-export)
 
 Stroke = npt.NDArray[np.float64]
 
 logger = logging.getLogger(__name__)
+
+
+def _scaled_augment_config(messiness: float) -> AugmentConfig:
+    """汚さ倍率 messiness でレイアウト揺らぎ4項目をスケールした設定を返す。
+
+    baseline_drift（行内上下）・spacing_variation（字間）・size_variation
+    （字サイズ）・slant_variation（字の傾き）を一括倍率する。messiness=1.0 で
+    AugmentConfig の素の値、0 で揺らぎなし（整った字）、2 で倍に乱れる。
+    jitter/density 等は字形そのものの質感なので据え置く。
+    """
+    base = AugmentConfig()
+    return replace(
+        base,
+        baseline_drift=base.baseline_drift * messiness,
+        spacing_variation=base.spacing_variation * messiness,
+        size_variation=base.size_variation * messiness,
+        slant_variation=base.slant_variation * messiness,
+    )
 
 
 class PlotterPipeline:
@@ -33,6 +52,7 @@ class PlotterPipeline:
         style_sample: object | None = None,
         temperature: float = 1.0,
         user_strokes_dir: Path | str | None = None,
+        messiness: float = 1.0,
     ) -> None:
         self._page_config = page_config or PageConfig(
             paper_size=(210.0, 297.0),
@@ -51,7 +71,9 @@ class PlotterPipeline:
             paper_height=self._page_config.paper_size[1],
         )
         self._typesetter = Typesetter(
-            self._page_config, font_size=4.5, augmenter=HandwritingAugmenter()
+            self._page_config,
+            font_size=4.5,
+            augmenter=HandwritingAugmenter(_scaled_augment_config(messiness)),
         )
         self._generator = GCodeGenerator(self._plotter_config)
 
@@ -566,6 +588,7 @@ def build_pipeline(
         style_sample=style_sample,
         temperature=settings.temperature,
         user_strokes_dir=user_strokes_dir,
+        messiness=settings.messiness,
     )
     # PlotterPipeline.__init__ は font_size=4.5 ハードコーディングのため、
     # UISettings.font_size を反映するため Typesetter を再構築する

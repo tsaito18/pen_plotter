@@ -1,4 +1,5 @@
 """PreviewRenderer の単体テスト。"""
+
 import numpy as np
 
 from src.gcode.config import PlotterConfig
@@ -108,12 +109,8 @@ class TestPreviewWithRuledLines:
             np.array([[30.0, 30.0], [40.0, 40.0]]),
         ]
         finishes = ["harai", "tome"]
-        with patch(
-            "src.ui.preview_renderer._draw_stroke_with_width"
-        ) as mock_draw:
-            renderer.preview_with_ruled_lines(
-                strokes, [], save_path, finishes=finishes
-            )
+        with patch("src.ui.preview_renderer._draw_stroke_with_width") as mock_draw:
+            renderer.preview_with_ruled_lines(strokes, [], save_path, finishes=finishes)
         passed = [call.kwargs.get("finish") for call in mock_draw.call_args_list]
         assert "harai" in passed
         assert "tome" in passed

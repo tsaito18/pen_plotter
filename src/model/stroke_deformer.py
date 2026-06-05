@@ -132,9 +132,7 @@ class StrokeDeformer(nn.Module):
                 device=reference_points.device,
             )
 
-        features = torch.cat(
-            [reference_points, t, curvature, style_expanded, stroke_emb], dim=-1
-        )
+        features = torch.cat([reference_points, t, curvature, style_expanded, stroke_emb], dim=-1)
         return self.mlp(features)
 
 
@@ -316,9 +314,7 @@ class TransformerDeformer(nn.Module):
         if stroke_index is not None:
             idx = stroke_index.clamp(0, self.MAX_STROKE_INDEX - 1)
             stroke_emb = self.stroke_embedding(idx)
-            stroke_emb = stroke_emb.unsqueeze(1).expand(
-                batch_size, n_points, self.stroke_embed_dim
-            )
+            stroke_emb = stroke_emb.unsqueeze(1).expand(batch_size, n_points, self.stroke_embed_dim)
         else:
             stroke_emb = torch.zeros(
                 batch_size,
@@ -340,9 +336,7 @@ class TransformerDeformer(nn.Module):
         x = self.self_attn_layers(x)
 
         # Cross-attention to style (multi-token KV for richer attention)
-        style_tokens = self.style_proj(style).view(
-            batch_size, self.num_style_tokens, self.d_model
-        )
+        style_tokens = self.style_proj(style).view(batch_size, self.num_style_tokens, self.d_model)
         attn_out, _ = self.cross_attn(query=x, key=style_tokens, value=style_tokens)
         x = self.cross_norm(x + attn_out)
 
@@ -378,8 +372,8 @@ class TwoStageDeformer(nn.Module):
         max_points: int = 64,
         dropout: float = 0.0,
         # Affine multipliers tuned for larger global deformation
-        theta_mult: float = 0.05,        # ~3° at param=1
-        scale_mult: float = 0.10,        # ±10%
+        theta_mult: float = 0.05,  # ~3° at param=1
+        scale_mult: float = 0.10,  # ±10%
         shear_mult: float = 0.05,
         translation_mult: float = 0.30,  # ±0.3 in [0,10] coord = 3%
     ) -> None:

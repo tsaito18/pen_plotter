@@ -144,7 +144,6 @@ def optimize_stroke_order_with_finishes(
     ordered, order_indices = _optimize_with_indices(strokes, start_pos)
     src_finishes = finishes if finishes is not None else []
     ordered_finishes = [
-        src_finishes[idx] if 0 <= idx < len(src_finishes) else "none"
-        for idx in order_indices
+        src_finishes[idx] if 0 <= idx < len(src_finishes) else "none" for idx in order_indices
     ]
     return ordered, ordered_finishes

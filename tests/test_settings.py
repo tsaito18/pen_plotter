@@ -28,6 +28,7 @@ class TestUISettingsDefault:
         assert s.travel_speed == 5000.0
         assert s.pen_delay == 0.0
         assert s.temperature == 1.0
+        assert s.messiness == 1.0
 
     def test_default_paper_size_a4(self):
         """default() の用紙サイズは A4。"""
@@ -108,6 +109,21 @@ class TestUISettingsValidate:
         )
         errs = invalid.validate()
         assert len(errs) >= 1
+
+    def test_negative_messiness_invalid(self):
+        """messiness < 0 はエラー。"""
+        from dataclasses import replace
+
+        invalid = replace(UISettings.default(), messiness=-0.5)
+        errs = invalid.validate()
+        assert len(errs) >= 1
+
+    def test_zero_messiness_is_valid(self):
+        """messiness == 0（揺らぎなし）は妥当。"""
+        from dataclasses import replace
+
+        s = replace(UISettings.default(), messiness=0.0)
+        assert s.validate() == []
 
     def test_line_spacing_too_small(self):
         """line_spacing < font_size * 0.6 はエラー。"""
@@ -205,6 +221,7 @@ class TestUISettingsSerialization:
             "travel_speed",
             "pen_delay",
             "temperature",
+            "messiness",
             "paper_width",
             "paper_height",
         ):
@@ -316,6 +333,45 @@ class TestBuildPipeline:
         assert from_settings._plotter_config.travel_speed == from_init._plotter_config.travel_speed
         assert from_settings._plotter_config.pen_delay == from_init._plotter_config.pen_delay
         assert from_settings._temperature == from_init._temperature
+
+    def test_build_pipeline_messiness_scales_augmenter(self):
+        """messiness は augmenter の揺らぎ4項目を一括スケールする。"""
+        from dataclasses import replace
+
+        from src.model.augmentation import AugmentConfig
+        from src.ui.web_app import build_pipeline
+
+        base = AugmentConfig()
+        pipeline = build_pipeline(replace(UISettings.default(), messiness=2.0))
+        cfg = pipeline._typesetter.augmenter._config
+        assert cfg.baseline_drift == pytest.approx(base.baseline_drift * 2.0)
+        assert cfg.spacing_variation == pytest.approx(base.spacing_variation * 2.0)
+        assert cfg.size_variation == pytest.approx(base.size_variation * 2.0)
+        assert cfg.slant_variation == pytest.approx(base.slant_variation * 2.0)
+
+    def test_build_pipeline_messiness_zero_disables_jitter(self):
+        """messiness=0 で揺らぎ4項目が 0 になる（整った字）。"""
+        from dataclasses import replace
+
+        from src.ui.web_app import build_pipeline
+
+        pipeline = build_pipeline(replace(UISettings.default(), messiness=0.0))
+        cfg = pipeline._typesetter.augmenter._config
+        assert cfg.baseline_drift == 0.0
+        assert cfg.spacing_variation == 0.0
+        assert cfg.size_variation == 0.0
+        assert cfg.slant_variation == 0.0
+
+    def test_build_pipeline_default_messiness_unchanged(self):
+        """messiness=1.0（デフォルト）は AugmentConfig の素の値と一致。"""
+        from src.model.augmentation import AugmentConfig
+        from src.ui.web_app import build_pipeline
+
+        base = AugmentConfig()
+        pipeline = build_pipeline(UISettings.default())
+        cfg = pipeline._typesetter.augmenter._config
+        assert cfg.baseline_drift == pytest.approx(base.baseline_drift)
+        assert cfg.slant_variation == pytest.approx(base.slant_variation)
 
     def test_build_pipeline_passes_through_kwargs(self, tmp_path):
         """build_pipeline は user_strokes_dir などを既存シグネチャ通り受け渡す。"""

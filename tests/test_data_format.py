@@ -39,8 +39,10 @@ class TestStrokeSample:
         assert len(sample.strokes[0]) == 2
 
     def test_to_json_and_back(self):
-        points1 = [StrokePoint(x=0, y=0, pressure=0.5, timestamp=0.0),
-                    StrokePoint(x=10, y=10, pressure=1.0, timestamp=100.0)]
+        points1 = [
+            StrokePoint(x=0, y=0, pressure=0.5, timestamp=0.0),
+            StrokePoint(x=10, y=10, pressure=1.0, timestamp=100.0),
+        ]
         points2 = [StrokePoint(x=5, y=5), StrokePoint(x=15, y=15)]
         sample = StrokeSample(
             character="漢",
@@ -69,8 +71,8 @@ class TestStrokeSample:
     def test_multiple_strokes(self):
         strokes = [
             [StrokePoint(x=i, y=i) for i in range(5)],
-            [StrokePoint(x=i*2, y=i*2) for i in range(3)],
-            [StrokePoint(x=i*3, y=i*3) for i in range(4)],
+            [StrokePoint(x=i * 2, y=i * 2) for i in range(3)],
+            [StrokePoint(x=i * 3, y=i * 3) for i in range(4)],
         ]
         sample = StrokeSample(character="書", strokes=strokes)
         json_str = sample.to_json()

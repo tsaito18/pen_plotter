@@ -373,7 +373,11 @@ class TestTwoStageDeformer:
     @pytest.fixture()
     def small_model(self) -> "TwoStageDeformer":
         return TwoStageDeformer(
-            style_dim=64, d_model=32, nhead=2, num_self_attn_layers=1, ff_dim=64,
+            style_dim=64,
+            d_model=32,
+            nhead=2,
+            num_self_attn_layers=1,
+            ff_dim=64,
             affine_hidden_dim=32,
         )
 

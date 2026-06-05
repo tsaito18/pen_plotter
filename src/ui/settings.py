@@ -28,7 +28,10 @@ class UISettings:
         draw_speed: 描画速度 (mm/min)。
         travel_speed: 移動速度 (mm/min)。
         pen_delay: ペン昇降後の待機 (s)。
-        temperature: ML モデル温度（揺らぎの強度）。
+        temperature: ML モデル温度（字形そのものの揺らぎの強度）。
+        messiness: レイアウトの汚さ倍率。baseline_drift/字間/サイズ/傾きを
+            一括スケール。1.0=標準、0=整った字、2=大きく乱れる。temperature
+            （字形の揺らぎ）とは別軸。
         paper_width: 用紙幅 (mm)。デフォルト A4。
         paper_height: 用紙高 (mm)。デフォルト A4。
     """
@@ -43,6 +46,7 @@ class UISettings:
     travel_speed: float
     pen_delay: float
     temperature: float
+    messiness: float = 1.0
     paper_width: float = 210.0
     paper_height: float = 297.0
 
@@ -65,6 +69,7 @@ class UISettings:
             travel_speed=5000.0,
             pen_delay=0.0,
             temperature=1.0,
+            messiness=1.0,
         )
 
     def validate(self) -> list[str]:
@@ -103,6 +108,8 @@ class UISettings:
             errors.append(f"travel_speed は正の値である必要があります (現在: {self.travel_speed})")
         if self.temperature <= 0:
             errors.append(f"temperature は正の値である必要があります (現在: {self.temperature})")
+        if self.messiness < 0:
+            errors.append(f"messiness は 0 以上である必要があります (現在: {self.messiness})")
 
         return errors
 

@@ -14,8 +14,10 @@ def _make_samples(tmp_path: Path, n_chars: int = 3, n_samples: int = 5):
     chars = ["あ", "い", "う", "え", "お"][:n_chars]
     for ch in chars:
         for i in range(n_samples):
-            stroke = [{"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": float(j * 10)}
-                      for j in range(15)]
+            stroke = [
+                {"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": float(j * 10)}
+                for j in range(15)
+            ]
             data = {"character": ch, "strokes": [stroke], "metadata": {}}
             d = tmp_path / ch
             d.mkdir(exist_ok=True)

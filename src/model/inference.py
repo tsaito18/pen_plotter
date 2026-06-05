@@ -52,12 +52,16 @@ def _limit_style_sample(
     """Keep inference style sequences within GPU LSTM limits."""
     if style_sample.ndim != 3 or style_sample.shape[1] <= max_points:
         return style_sample.contiguous()
-    indices = torch.linspace(
-        0,
-        style_sample.shape[1] - 1,
-        max_points,
-        device=style_sample.device,
-    ).round().long()
+    indices = (
+        torch.linspace(
+            0,
+            style_sample.shape[1] - 1,
+            max_points,
+            device=style_sample.device,
+        )
+        .round()
+        .long()
+    )
     return style_sample.index_select(1, indices).contiguous()
 
 

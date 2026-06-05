@@ -20,33 +20,39 @@ def gcode_generator(plotter_config: PlotterConfig) -> GCodeGenerator:
 @pytest.fixture
 def square_stroke() -> Stroke:
     """四角形ストローク"""
-    return np.array([
-        [10.0, 10.0],
-        [50.0, 10.0],
-        [50.0, 50.0],
-        [10.0, 50.0],
-        [10.0, 10.0],
-    ])
+    return np.array(
+        [
+            [10.0, 10.0],
+            [50.0, 10.0],
+            [50.0, 50.0],
+            [10.0, 50.0],
+            [10.0, 10.0],
+        ]
+    )
 
 
 @pytest.fixture
 def triangle_stroke() -> Stroke:
     """三角形ストローク"""
-    return np.array([
-        [30.0, 10.0],
-        [50.0, 50.0],
-        [10.0, 50.0],
-        [30.0, 10.0],
-    ])
+    return np.array(
+        [
+            [30.0, 10.0],
+            [50.0, 50.0],
+            [10.0, 50.0],
+            [30.0, 10.0],
+        ]
+    )
 
 
 @pytest.fixture
 def line_stroke() -> Stroke:
     """単純直線ストローク"""
-    return np.array([
-        [0.0, 0.0],
-        [10.0, 10.0],
-    ])
+    return np.array(
+        [
+            [0.0, 0.0],
+            [10.0, 10.0],
+        ]
+    )
 
 
 @pytest.fixture

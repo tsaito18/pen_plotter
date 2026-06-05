@@ -39,7 +39,9 @@ class TestTableLayout:
         assert len(v_strokes) == 3  # cols+1 = 3本
 
     def test_cell_placement(self):
-        cfg = TableConfig(rows=2, cols=2, row_height=10.0, col_widths=[30.0, 40.0], cell_padding=2.0)
+        cfg = TableConfig(
+            rows=2, cols=2, row_height=10.0, col_widths=[30.0, 40.0], cell_padding=2.0
+        )
         layout = TableLayout(cfg, origin_x=5.0, origin_y=10.0)
         placement = layout.cell_position(row=0, col=0)
         assert isinstance(placement, CellPlacement)

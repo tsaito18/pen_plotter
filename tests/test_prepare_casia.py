@@ -101,9 +101,7 @@ class TestConvertPotDirectory:
         input_dir.mkdir()
         output_dir = tmp_path / "output"
 
-        pot_data = _make_pot_sample(
-            "\u4e00", [[(0, 0), (25, 25), (50, 50), (75, 75), (100, 100)]]
-        )
+        pot_data = _make_pot_sample("\u4e00", [[(0, 0), (25, 25), (50, 50), (75, 75), (100, 100)]])
         (input_dir / "test.pot").write_bytes(pot_data)
 
         convert_pot_directory(input_dir, output_dir, target_size=10.0, num_points=16)

@@ -169,9 +169,7 @@ class TestStream:
 
         events = _drain(eq)
         assert any(isinstance(e, Progress) and e.idx == 1 and e.line == "G90" for e in events)
-        assert any(
-            isinstance(e, JobFinished) and e.kind == "stream" and e.success for e in events
-        )
+        assert any(isinstance(e, JobFinished) and e.kind == "stream" and e.success for e in events)
         assert mock.written[-1] == b"G90\n"
 
     def test_stream_emits_started_and_finished_on_success(self) -> None:

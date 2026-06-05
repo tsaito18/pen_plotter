@@ -255,13 +255,9 @@ class _ParserState:
                         )
                     )
                 elif cmd in _LATEX_OPERATORS:
-                    elements.append(
-                        MathElement(type="operator", content=_LATEX_OPERATORS[cmd])
-                    )
+                    elements.append(MathElement(type="operator", content=_LATEX_OPERATORS[cmd]))
                 elif cmd in _LATEX_SYMBOL_MAP:
-                    elements.append(
-                        MathElement(type="symbol", content=_LATEX_SYMBOL_MAP[cmd])
-                    )
+                    elements.append(MathElement(type="symbol", content=_LATEX_SYMBOL_MAP[cmd]))
                 else:
                     logger.warning("Unsupported LaTeX command ignored: \\%s", cmd)
 
@@ -362,9 +358,7 @@ class MathLayoutEngine:
         )
 
     @staticmethod
-    def _layout_element(
-        elem: MathElement, x: float, y: float, font_size: float
-    ) -> MathBox:
+    def _layout_element(elem: MathElement, x: float, y: float, font_size: float) -> MathBox:
         """単一要素を box として返す。横方向の起点は x、ベースラインは y。"""
         if elem.type == "text" or elem.type == "symbol" or elem.type == "tag":
             text = elem.content
@@ -415,9 +409,7 @@ class MathLayoutEngine:
         return MathBox(placements=[], width=0.0, ascent=0.0, descent=0.0)
 
     @staticmethod
-    def _layout_frac(
-        elem: MathElement, x: float, y: float, font_size: float
-    ) -> MathBox:
+    def _layout_frac(elem: MathElement, x: float, y: float, font_size: float) -> MathBox:
         frac_font = font_size * 0.7
         gap = font_size * 0.15
         # 分子は y より上、分母は下に配置するため、各々の box は仮ベースラインで計算してから平行移動する
@@ -497,9 +489,7 @@ class MathLayoutEngine:
             offset_y = -font_size * 0.3
             role = "subscript"
 
-        child_box = MathLayoutEngine.layout(
-            elem.children, x=0.0, y=0.0, font_size=script_font
-        )
+        child_box = MathLayoutEngine.layout(elem.children, x=0.0, y=0.0, font_size=script_font)
 
         placements: list[MathPlacement] = []
         for i, p in enumerate(child_box.placements):
@@ -529,14 +519,10 @@ class MathLayoutEngine:
         )
 
     @staticmethod
-    def _layout_sqrt(
-        elem: MathElement, x: float, y: float, font_size: float
-    ) -> MathBox:
+    def _layout_sqrt(elem: MathElement, x: float, y: float, font_size: float) -> MathBox:
         prefix = font_size * 0.4
         suffix = font_size * 0.2
-        child_box = MathLayoutEngine.layout(
-            elem.children, x=x + prefix, y=y, font_size=font_size
-        )
+        child_box = MathLayoutEngine.layout(elem.children, x=x + prefix, y=y, font_size=font_size)
         # 既存テスト互換のため、子の先頭 placement に sqrt_body role を付与する
         placements: list[MathPlacement] = []
         for i, p in enumerate(child_box.placements):
@@ -587,9 +573,7 @@ class MathLayoutEngine:
         )
 
     @staticmethod
-    def _layout_accent(
-        elem: MathElement, x: float, y: float, font_size: float
-    ) -> MathBox:
+    def _layout_accent(elem: MathElement, x: float, y: float, font_size: float) -> MathBox:
         child_box = MathLayoutEngine.layout(elem.children, x=x, y=y, font_size=font_size)
         width = max(child_box.width, font_size * 0.5)
         gap = font_size * 0.12
@@ -624,8 +608,12 @@ class MathLayoutEngine:
             add_segment((right, accent_y, right - font_size * 0.18, accent_y - gap))
         elif elem.content == "ddot":
             dot_w = font_size * 0.08
-            add_segment((mid - font_size * 0.12, accent_y, mid - font_size * 0.12 + dot_w, accent_y))
-            add_segment((mid + font_size * 0.12, accent_y, mid + font_size * 0.12 + dot_w, accent_y))
+            add_segment(
+                (mid - font_size * 0.12, accent_y, mid - font_size * 0.12 + dot_w, accent_y)
+            )
+            add_segment(
+                (mid + font_size * 0.12, accent_y, mid + font_size * 0.12 + dot_w, accent_y)
+            )
         elif elem.content == "dot":
             dot_w = font_size * 0.08
             add_segment((mid, accent_y, mid + dot_w, accent_y))
@@ -644,8 +632,6 @@ class MathLayoutEngine:
     def total_width(placements: list[MathPlacement]) -> float:
         if not placements:
             return 0.0
-        rightmost = max(
-            p.x + len(p.text) * p.font_size * _CHAR_WIDTH_RATIO for p in placements
-        )
+        rightmost = max(p.x + len(p.text) * p.font_size * _CHAR_WIDTH_RATIO for p in placements)
         leftmost = min(p.x for p in placements)
         return rightmost - leftmost

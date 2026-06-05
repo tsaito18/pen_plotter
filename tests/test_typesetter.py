@@ -356,9 +356,14 @@ class TestHalfwidthSpacingReduction:
     """連続する半角文字間ではaugmentationのspacing variationが減衰する。"""
 
     def _make_typesetter(self, seed: int = 42) -> Typesetter:
-        cfg = AugmentConfig(spacing_variation=1.0, baseline_drift=0.0,
-                            size_variation=0.0, slant_variation=0.0,
-                            jitter_amplitude=0.0, line_density_variation=0.0)
+        cfg = AugmentConfig(
+            spacing_variation=1.0,
+            baseline_drift=0.0,
+            size_variation=0.0,
+            slant_variation=0.0,
+            jitter_amplitude=0.0,
+            line_density_variation=0.0,
+        )
         aug = HandwritingAugmenter(cfg, seed=seed)
         return Typesetter(PageConfig(), augmenter=aug)
 
@@ -417,21 +422,25 @@ class TestCharSizeScale:
 
     def test_kanji_scale_is_1(self):
         from src.layout.typesetter import _char_size_scale
+
         assert _char_size_scale("漢") == 1.0
         assert _char_size_scale("字") == 1.0
 
     def test_hiragana_scale(self):
         from src.layout.typesetter import _char_size_scale
+
         assert _char_size_scale("あ") == 0.85
         assert _char_size_scale("ん") == 0.80
 
     def test_katakana_scale(self):
         from src.layout.typesetter import _char_size_scale
+
         assert _char_size_scale("ア") == 0.85  # override table
         assert _char_size_scale("ン") == 0.78
 
     def test_small_kana_scale(self):
         from src.layout.typesetter import _char_size_scale
+
         assert _char_size_scale("っ") == 0.55
         assert _char_size_scale("ょ") == 0.55
         assert _char_size_scale("ッ") == 0.55
@@ -439,12 +448,14 @@ class TestCharSizeScale:
 
     def test_halfwidth_scale(self):
         from src.layout.typesetter import _char_size_scale
+
         assert _char_size_scale("a") == 0.7
         assert _char_size_scale("1") == 0.7
 
     def test_typeset_hiragana_smaller_than_kanji(self):
         """組版時、ひらがなは漢字より小さいfont_sizeで配置される。"""
         from src.layout.page_layout import PageConfig
+
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("漢あ")
         placements = pages[0]
@@ -455,6 +466,7 @@ class TestCharSizeScale:
     def test_typeset_small_kana_smallest(self):
         """小書き文字は最小のfont_sizeで配置される。"""
         from src.layout.page_layout import PageConfig
+
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("漢っ")
         placements = pages[0]
@@ -464,6 +476,7 @@ class TestCharSizeScale:
         """augmenter有効時もスケールが適用される。"""
         from src.layout.page_layout import PageConfig
         from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
         aug = HandwritingAugmenter(AugmentConfig(), seed=42)
         ts = Typesetter(PageConfig(), font_size=7.0, augmenter=aug)
         pages = ts.typeset("漢あ")
@@ -815,7 +828,7 @@ class TestInlineMath:
         placements = pages[0]
         xs = [p.x for p in placements]
         for i in range(1, len(xs)):
-            assert xs[i] > xs[i - 1], f"x[{i}]={xs[i]} <= x[{i-1}]={xs[i-1]}"
+            assert xs[i] > xs[i - 1], f"x[{i}]={xs[i]} <= x[{i - 1}]={xs[i - 1]}"
 
     def test_math_width_advances_cursor(self):
         """数式部分の幅分だけカーソルが進み、後続テキストが正しい位置に配置される。"""

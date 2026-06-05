@@ -81,8 +81,10 @@ class TestPairedStrokeDataset:
         hand_dir, ref_dir = _make_paired_data(tmp_path, chars=("あ", "い"), n_samples=2)
         extra_dir = hand_dir / "う"
         extra_dir.mkdir(parents=True, exist_ok=True)
-        stroke = [{"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0},
-                  {"x": 1.0, "y": 1.0, "pressure": 1.0, "timestamp": 10.0}]
+        stroke = [
+            {"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0},
+            {"x": 1.0, "y": 1.0, "pressure": 1.0, "timestamp": 10.0},
+        ]
         data = {"character": "う", "strokes": [stroke], "metadata": {}}
         (extra_dir / "う_0.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
@@ -122,19 +124,24 @@ class TestPairedStrokeDataset:
         hand_dir = tmp_path / "hand"
         ref_dir = tmp_path / "ref"
         ch = "あ"
-        stroke = [{"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": 0.0}
-                  for j in range(5)]
+        stroke = [
+            {"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": 0.0}
+            for j in range(5)
+        ]
         data = {"character": ch, "strokes": [stroke], "metadata": {}}
         d = hand_dir / ch
         d.mkdir(parents=True, exist_ok=True)
         import json as _json
+
         (d / f"{ch}_0.json").write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
         s1 = [{"x": float(j), "y": float(j)} for j in range(3)]
         s2 = [{"x": float(j + 5), "y": float(j + 5)} for j in range(4)]
         ref_data = {"character": ch, "strokes": [s1, s2], "metadata": {}}
         rd = ref_dir / ch
         rd.mkdir(parents=True, exist_ok=True)
-        (rd / f"{ch}_0.json").write_text(_json.dumps(ref_data, ensure_ascii=False), encoding="utf-8")
+        (rd / f"{ch}_0.json").write_text(
+            _json.dumps(ref_data, ensure_ascii=False), encoding="utf-8"
+        )
         ds = PairedStrokeDataset(hand_dir, ref_dir)
         item = ds[0]
         ref = item["reference"]
@@ -153,8 +160,10 @@ class TestPairedStrokeDataset:
             for hdir in (hand1, hand2):
                 d = hdir / ch
                 d.mkdir(parents=True, exist_ok=True)
-                stroke = [{"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0},
-                          {"x": 1.0, "y": 1.0, "pressure": 1.0, "timestamp": 10.0}]
+                stroke = [
+                    {"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0},
+                    {"x": 1.0, "y": 1.0, "pressure": 1.0, "timestamp": 10.0},
+                ]
                 data = {"character": ch, "strokes": [stroke], "metadata": {}}
                 (d / f"{ch}_0.json").write_text(
                     json.dumps(data, ensure_ascii=False), encoding="utf-8"
@@ -164,8 +173,12 @@ class TestPairedStrokeDataset:
             rd.mkdir(parents=True, exist_ok=True)
             ref_data = {
                 "character": ch,
-                "strokes": [[{"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0},
-                              {"x": 1.0, "y": 1.0, "pressure": 1.0, "timestamp": 10.0}]],
+                "strokes": [
+                    [
+                        {"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 0.0},
+                        {"x": 1.0, "y": 1.0, "pressure": 1.0, "timestamp": 10.0},
+                    ]
+                ],
                 "metadata": {},
             }
             (rd / f"{ch}_0.json").write_text(
@@ -483,9 +496,7 @@ class TestDeformationPretrainer:
         pot_dir = tmp_path / "pot"
         ref_dir = tmp_path / "ref"
         chars = ["\u5927", "\u5c0f", "\u4e2d"]
-        sample_strokes = {
-            ch: [[(100 + j * 10, 200 + j * 10) for j in range(5)]] for ch in chars
-        }
+        sample_strokes = {ch: [[(100 + j * 10, 200 + j * 10) for j in range(5)]] for ch in chars}
         self._create_pot_file(pot_dir, sample_strokes)
         self._create_ref_dir(ref_dir, chars)
 

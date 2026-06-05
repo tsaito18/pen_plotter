@@ -40,9 +40,7 @@ class CharEncoder(nn.Module):
                 hidden_dim = param.shape[0] // 4
                 param.data[hidden_dim : 2 * hidden_dim].fill_(1.0)
 
-    def forward(
-        self, x: torch.Tensor, lengths: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
             x: (batch, seq_len, 2) — reference stroke coordinates
@@ -54,9 +52,7 @@ class CharEncoder(nn.Module):
         if lengths is not None:
             from torch.nn.utils.rnn import pack_padded_sequence
 
-            packed = pack_padded_sequence(
-                x, lengths.cpu(), batch_first=True, enforce_sorted=False
-            )
+            packed = pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=False)
             _, (h_n, _) = self.lstm(packed)
         else:
             _, (h_n, _) = self.lstm(x)

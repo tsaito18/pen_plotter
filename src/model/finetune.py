@@ -77,9 +77,7 @@ def augment_style_strokes(style_tensor: torch.Tensor, rng: np.random.Generator) 
         return result
 
     bbox = result[:, :2].abs().max().item() + 1e-6
-    jitter = torch.from_numpy(
-        rng.normal(0, 0.02 * bbox, size=(seq_len, 2)).astype(np.float32)
-    )
+    jitter = torch.from_numpy(rng.normal(0, 0.02 * bbox, size=(seq_len, 2)).astype(np.float32))
     result[:, :2] += jitter
 
     angle = rng.normal(0, np.radians(5))
@@ -213,7 +211,9 @@ class BaseFinetuner:
     dataloader: DataLoader
     optimizer: torch.optim.Optimizer
 
-    def __init__(self, config: FinetuneConfig | UserTrainConfig, output_dir: Path, device: str | None = None) -> None:
+    def __init__(
+        self, config: FinetuneConfig | UserTrainConfig, output_dir: Path, device: str | None = None
+    ) -> None:
         self.config = config
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -258,9 +258,7 @@ class BaseFinetuner:
 
                 self.optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    self._get_clip_params(), self.config.grad_clip_norm
-                )
+                torch.nn.utils.clip_grad_norm_(self._get_clip_params(), self.config.grad_clip_norm)
                 self.optimizer.step()
 
                 epoch_loss += loss.item()
@@ -603,9 +601,7 @@ def collate_deformation_finetune(batch: list[dict]) -> dict:
     doubled_chars = chars + chars
     unique_chars = sorted(set(chars))
     char_to_idx = {c: i for i, c in enumerate(unique_chars)}
-    character_labels = torch.tensor(
-        [char_to_idx[c] for c in doubled_chars], dtype=torch.long
-    )
+    character_labels = torch.tensor([char_to_idx[c] for c in doubled_chars], dtype=torch.long)
 
     return {
         "reference_points": reference_points,
@@ -880,9 +876,7 @@ class UserDeformationTrainer(BaseFinetuner):
     def _get_contrastive_beta(self) -> float:
         warmup_epochs = int(self.config.epochs * self.config.contrastive_warmup_frac)
         if self._current_epoch < warmup_epochs:
-            return self.config.contrastive_weight * (
-                self._current_epoch / max(warmup_epochs, 1)
-            )
+            return self.config.contrastive_weight * (self._current_epoch / max(warmup_epochs, 1))
         return self.config.contrastive_weight
 
     def _pre_epoch(self, epoch: int) -> None:

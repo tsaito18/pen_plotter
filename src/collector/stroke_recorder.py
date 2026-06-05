@@ -193,9 +193,7 @@ class StrokeRecorder:
                         "filename": path.name,
                         "stroke_count": stroke_count,
                         "point_count": point_count,
-                        "strokes": [
-                            [p.to_dict() for p in stroke] for stroke in sample.strokes
-                        ],
+                        "strokes": [[p.to_dict() for p in stroke] for stroke in sample.strokes],
                     }
                 )
 
@@ -236,9 +234,7 @@ class StrokeRecorder:
 
                 stroke_count = len(sample.strokes)
                 point_count = sum(len(stroke) for stroke in sample.strokes)
-                strokes_dicts = [
-                    [p.to_dict() for p in stroke] for stroke in sample.strokes
-                ]
+                strokes_dicts = [[p.to_dict() for p in stroke] for stroke in sample.strokes]
 
                 reasons: list[str] = []
                 if point_count < 5:

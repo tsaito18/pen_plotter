@@ -110,12 +110,8 @@ class StyleEncoder(nn.Module):
                 hidden_dim = param.shape[0] // 4
                 param.data[hidden_dim : 2 * hidden_dim].fill_(1.0)
 
-    def enable_projection_head(
-        self, hidden_dim: int = 128, output_dim: int = 64
-    ) -> None:
-        self.projection_head = ProjectionHead(
-            self.fc.out_features, hidden_dim, output_dim
-        )
+    def enable_projection_head(self, hidden_dim: int = 128, output_dim: int = 64) -> None:
+        self.projection_head = ProjectionHead(self.fc.out_features, hidden_dim, output_dim)
 
     def forward(
         self,
@@ -135,9 +131,7 @@ class StyleEncoder(nn.Module):
         if lengths is not None:
             from torch.nn.utils.rnn import pack_padded_sequence
 
-            packed = pack_padded_sequence(
-                x, lengths.cpu(), batch_first=True, enforce_sorted=False
-            )
+            packed = pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=False)
             _, (h_n, _) = self.lstm(packed)
         else:
             _, (h_n, _) = self.lstm(x)

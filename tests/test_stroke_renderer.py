@@ -132,7 +132,7 @@ class TestStrokeRendererMethods:
 class TestAsciiMathSymbols:
     """数式で頻出する ASCII 記号は矩形フォールバックではなく幾何で描画する。"""
 
-    @pytest.mark.parametrize("char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?"])
+    @pytest.mark.parametrize("char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%"])
     def test_ascii_math_renders_geometric(self, char):
         from src.layout.typesetter import CharPlacement
 
@@ -152,7 +152,7 @@ class TestAsciiMathSymbols:
     def test_ascii_math_internal_unit_box(self):
         """_ascii_math_strokes は単位正方形 (0,0)-(1,1) 内に座標を返す。"""
         renderer = StrokeRenderer()
-        for char in ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?"]:
+        for char in ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%"]:
             result = renderer._ascii_math_strokes(char)
             assert result is not None, f"'{char}' returned None"
             assert len(result) >= 1
@@ -182,6 +182,19 @@ class TestAsciiMathSymbols:
         result = renderer._ascii_math_strokes("=")
         assert result is not None
         assert len(result) == 2
+
+    def test_percent_has_diagonal_and_two_circles(self):
+        """`%` は斜線 1 本＋左上・右下の小円 2 本の計 3 ストローク。"""
+        renderer = StrokeRenderer()
+        result = renderer._ascii_math_strokes("%")
+        assert result is not None
+        assert len(result) == 3
+        # 斜線は右上がり（始点が左下・終点が右上）
+        diag = result[0]
+        assert diag[0][0] < diag[-1][0] and diag[0][1] < diag[-1][1]
+        # 小円 2 本は閉じている（始点≈終点）
+        for circle in result[1:]:
+            assert np.allclose(circle[0], circle[-1], atol=1e-6)
 
     def test_fullwidth_normalized_to_ascii(self):
         """全角プラスも幾何ルートで処理される（_CHAR_SUBSTITUTIONS 経由）。"""

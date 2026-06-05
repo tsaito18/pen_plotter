@@ -482,7 +482,9 @@ class StrokeRenderer:
             main = np.array([[0.15, 0.05], [0.85, 0.95]], dtype=np.float64)
             cross = np.array([[0.3, 0.55], [0.1, 0.95]], dtype=np.float64)
             return [main, cross]
-        elif char == "\u03bc":  # \u03bc: u\u5b57\u578b + \u5de6\u811a\u304c\u30d9\u30fc\u30b9\u30e9\u30a4\u30f3\u4e0b\u307e\u3067\u5ef6\u3073\u308b
+        elif (
+            char == "\u03bc"
+        ):  # \u03bc: u\u5b57\u578b + \u5de6\u811a\u304c\u30d9\u30fc\u30b9\u30e9\u30a4\u30f3\u4e0b\u307e\u3067\u5ef6\u3073\u308b
             left_stem = np.array([[0.2, 0.85], [0.2, 0.0]], dtype=np.float64)
             right_stem = np.array([[0.8, 0.85], [0.8, 0.48]], dtype=np.float64)
             t = np.linspace(np.pi, 2 * np.pi, 16)
@@ -669,6 +671,17 @@ class StrokeRenderer:
             return arms
         elif char == "/":
             return [np.array([[0.2, 0.2], [0.8, 0.8]], dtype=np.float64)]
+        elif char == "%":
+            # 斜線（右上がり）＋左上・右下の小円
+            diag = np.array([[0.18, 0.12], [0.82, 0.88]], dtype=np.float64)
+            t = np.linspace(0.0, 2.0 * np.pi, 13)
+            tl = np.stack([0.28 + 0.13 * np.cos(t), 0.72 + 0.13 * np.sin(t)], axis=1).astype(
+                np.float64
+            )
+            br = np.stack([0.72 + 0.13 * np.cos(t), 0.28 + 0.13 * np.sin(t)], axis=1).astype(
+                np.float64
+            )
+            return [diag, tl, br]
         elif char == ":":
             return [self._small_dot(0.5, 0.7), self._small_dot(0.5, 0.3)]
         elif char == ";":

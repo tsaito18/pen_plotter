@@ -35,7 +35,14 @@ class TestStrokeCollectorApp:
     def test_build_html_reads_from_template_file(self):
         """build_html() はテンプレートファイルから読み込む"""
         from pathlib import Path
-        template_path = Path(__file__).resolve().parent.parent / "src" / "collector" / "templates" / "collector.html"
+
+        template_path = (
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "collector"
+            / "templates"
+            / "collector.html"
+        )
         assert template_path.exists(), f"Template file not found: {template_path}"
         content = template_path.read_text(encoding="utf-8")
         assert "<!DOCTYPE html>" in content
@@ -375,7 +382,12 @@ class TestManagementAPI:
         status, _data = self._post(
             app.port,
             "/api/samples/metadata",
-            {"char": "あ", "file": "nonexistent_12345.json", "key": "ignore_anomaly", "value": True},
+            {
+                "char": "あ",
+                "file": "nonexistent_12345.json",
+                "key": "ignore_anomaly",
+                "value": True,
+            },
         )
 
         assert status == 404
