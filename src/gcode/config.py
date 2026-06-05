@@ -20,14 +20,16 @@ class PlotterConfig:
     draw_speed: float = 3000.0
 
     # ペン制御 (Z軸)
-    pen_down_command: str = "G1G90 Z3.5 F5000"
+    pen_down_command: str = "G1G90 Z5.0 F5000"
     pen_up_command: str = "G1G90 Z0.5 F5000"
     pen_delay: float = 0.0  # Z軸制御は速度指定で完了するため遅延不要
 
     # 終端Zリフト（払い・はねの接触圧を抜く筆遣い表現）
-    # pen_down_z は補間の基準となる接触高さ。pen_down_command の Z 値と一致させること。
-    pen_down_z: float = 3.5
-    # 終端で芯を持ち上げる到達高さ。pen_up_z(0.5) < finish_lift_z < pen_down_z(3.5)。
+    # pen_down_z は補間の基準となる接触（最大筆圧）高さ。pen_down_command の Z 値と
+    # 一致させること。リフト導入時に一旦 3.5 へ下げたが、通常画まで筆圧不足になり
+    # 終端が薄くなったため、元の実機キャリブ値 5.0（しっかり下ろす）へ戻す。
+    pen_down_z: float = 5.0
+    # 終端で芯を持ち上げる到達高さ。pen_up_z(0.5) < finish_lift_z < pen_down_z(5.0)。
     # 実機計測で芯の浮き始め≈2.7。それより下げると余計に持ち上がる（上がりが急・
     # 過大）だけで線は変わらないため、浮き始め直下の 2.6 に留める＝最小リフト。
     finish_lift_z: float = 2.6

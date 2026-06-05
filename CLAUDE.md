@@ -181,7 +181,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - 機種: xDraw A4（iDraw互換、Inkscape extension制御）
 - USB: CH340（VID:PID=1A86:7523/8040）、115200bps
 - ペン制御: Z軸（ダウン: Z5 F5000、アップ: Z0.5 F5000）※M3/M5ではない
-- **筆遣いの終端Zリフト**: 払い・はねの終端区間で Z を接触(pen_down_z=3.5)→半浮き(finish_lift_z=2.6)へ漸減し、シャーペンの接触圧を抜いて線を尻すぼみにする（`G1 XYZ`同時補間）。とめ＝変化なし。実機計測で芯の浮き始め≈2.7、それ以上下げても線は変わらず上がりが過大になるだけなので finish_lift_z=2.6（浮き始め直下＝最小リフト）。リフト区間は `contact_profile` が全長の `max_lift_fraction`(=0.5)で頭打ちし、短い画で全体が薄くなるのを防ぐ。接触率は `stroke_finishing.contact_profile()` が単一ソースで、G-codeのZ補間とプレビュー線幅(`compute_stroke_widths`)が連動。パラメータは `PlotterConfig`（finish_lift_z, finish_lift_length_mm, harai/hane_speed_factor）で実機キャリブ。手順は docs/plotter_gui_checklist.md
+- **筆遣いの終端Zリフト**: 払い・はねの終端区間で Z を接触(pen_down_z=5.0=最大筆圧)→半浮き(finish_lift_z=2.6)へ漸減し、シャーペンの接触圧を抜いて線を尻すぼみにする（`G1 XYZ`同時補間）。とめ＝変化なし。実機計測で芯の浮き始め≈2.7、それ以上下げても線は変わらず上がりが過大になるだけなので finish_lift_z=2.6（浮き始め直下＝最小リフト）。リフト区間は `contact_profile` が全長の `max_lift_fraction`(=0.5)で頭打ちし、短い画で全体が薄くなるのを防ぐ。接触率は `stroke_finishing.contact_profile()` が単一ソースで、G-codeのZ補間とプレビュー線幅(`compute_stroke_widths`)が連動。パラメータは `PlotterConfig`（finish_lift_z, finish_lift_length_mm, harai/hane_speed_factor）で実機キャリブ。手順は docs/plotter_gui_checklist.md
 - ホーミング: `$H`（左上角に移動）→ `G92 X0 Y297 Z0`（左上角を紙座標(0,297)に設定）
 - 紙座標: (0,0)=左下、(210,297)=右上
 - G-code送信: Windows側で `python scripts/run_plotter_gui.py` または `python -m src.plotter_gui` で GUI を起動（src/plotter_gui/）。CH340 自動検出・ホーミング・ペンテスト・進捗表示・緊急停止が GUI 操作で可能。実機チェックリストは docs/plotter_gui_checklist.md
