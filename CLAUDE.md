@@ -153,8 +153,8 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - オフセットクランプ±1.2 + スムージングkernel=11（訓練/推論で統一）
 - ストローク単位の幾何バリエーション（回転・スケール・シフト）で自然さ追加
 - 局所曲率特徴追加でストロークの曲がり角に大きなオフセット許容
-- augmentation控えめ設定（baseline_drift=0.3, spacing=0.2, size=0.05）— 整然さ重視
-- ストローク太さ変化は控えめ（width=0.7+0.3*exp(-2t)）
+- augmentation設定（baseline_drift=0.3, spacing=0.2, size=0.05）＋文字単位の傾き(slant_variation=0.02)有効 — 手書きの揺らぎ。slantはCharPlacement.slant経由で_position_strokesが文字中心回転
+- ストローク太さ変化はプレビューのみ。実機は終端Zリフト（contact_profile, 距離mmベース）で払い・はねを表現
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 
 ### 全体進捗（2026-04-01時点）

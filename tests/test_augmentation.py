@@ -20,11 +20,11 @@ def sample_stroke() -> np.ndarray:
 class TestAugmentConfig:
     def test_augment_config_defaults(self):
         cfg = AugmentConfig()
-        assert cfg.baseline_drift == 0.15
-        assert cfg.size_variation == 0.02
+        assert cfg.baseline_drift == 0.3
+        assert cfg.size_variation == 0.05
         assert cfg.slant_variation == 0.02
         assert cfg.jitter_amplitude == 0.03
-        assert cfg.spacing_variation == 0.05
+        assert cfg.spacing_variation == 0.2
         assert cfg.char_density_variation == 0.02
         assert cfg.enabled is True
 
@@ -103,6 +103,16 @@ class TestSlant:
         result = aug.apply_slant(sample_stroke, 2.0, 0.5)
         assert not np.array_equal(result, sample_stroke)
 
+    def test_get_char_slant_nonzero_when_enabled(self):
+        aug = HandwritingAugmenter(AugmentConfig(slant_variation=0.05), seed=1)
+        angles = [aug.get_char_slant() for _ in range(20)]
+        assert any(a != 0.0 for a in angles)
+        assert all(abs(a) < 0.5 for a in angles)  # 微小角
+
+    def test_get_char_slant_zero_when_disabled(self):
+        aug = HandwritingAugmenter(AugmentConfig(enabled=False), seed=1)
+        assert aug.get_char_slant() == 0.0
+
 
 class TestReproducibility:
     def test_seed_reproducibility(self, sample_stroke: np.ndarray):
@@ -152,9 +162,7 @@ class TestLineDensityScale:
         aug = HandwritingAugmenter(seed=42)
         for _ in range(100):
             scale = aug.get_line_density_scale()
-            assert 0.85 <= scale <= 1.15, (
-                f"Scale {scale} outside expected range [0.85, 1.15]"
-            )
+            assert 0.85 <= scale <= 1.15, f"Scale {scale} outside expected range [0.85, 1.15]"
 
     def test_get_line_density_scale_disabled(self):
         cfg = AugmentConfig(enabled=False)
@@ -178,9 +186,7 @@ class TestCharDensityScale:
         aug = HandwritingAugmenter(seed=42)
         for _ in range(100):
             scale = aug.get_char_density_scale()
-            assert 0.98 <= scale <= 1.02, (
-                f"Scale {scale} outside expected range [0.98, 1.02]"
-            )
+            assert 0.98 <= scale <= 1.02, f"Scale {scale} outside expected range [0.98, 1.02]"
 
     def test_get_char_density_scale_uses_char_variation(self):
         cfg = AugmentConfig(line_density_variation=0.0, char_density_variation=0.02)

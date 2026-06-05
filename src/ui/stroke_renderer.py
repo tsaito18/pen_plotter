@@ -1168,7 +1168,19 @@ class StrokeRenderer:
             y_offset = placement.y + (line_spacing - rendered_h) / 2
 
         offset = np.array([x_offset, y_offset])
-        return [stroke + offset for stroke in scaled]
+        positioned = [stroke + offset for stroke in scaled]
+
+        # 文字単位の微小傾き（手書きの揺らぎ）。文字内の全画を同一角で中心回転。
+        slant = getattr(placement, "slant", 0.0)
+        if slant:
+            cx = x_offset + rendered_w / 2
+            cy = y_offset + rendered_h / 2
+            cos_a, sin_a = np.cos(slant), np.sin(slant)
+            rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+            center = np.array([cx, cy])
+            positioned = [(s - center) @ rot.T + center for s in positioned]
+
+        return positioned
 
     @staticmethod
     def _rect_fallback(p: CharPlacement) -> list[Stroke]:

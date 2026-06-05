@@ -14,8 +14,8 @@ from src.layout.math_layout import (
 )
 from src.layout.page_layout import PageConfig, PageLayout
 
-_SMALL_KANA = set('っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ')
-_SMALL_PUNCT = set('・、。，．')
+_SMALL_KANA = set("っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ")
+_SMALL_PUNCT = set("・、。，．")
 _HEADING_X: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
 _BODY_X: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
 _HEADING_FONT_SCALES: dict[int, float] = {1: 1.15, 2: 1.08, 3: 1.0}
@@ -24,40 +24,148 @@ _KANJI_ADVANCE_SCALE = 1.08
 # 手書きバランス調整: 画数が少なく視覚的に軽い文字は小さめにする
 _KANA_SIZE_OVERRIDES: dict[str, float] = {
     # カタカナ: 画数少・形が小さい文字 → 小さめ
-    'ロ': 0.68, 'ハ': 0.78, 'ニ': 0.78, 'ノ': 0.75, 'ヘ': 0.78,
-    'フ': 0.80, 'ク': 0.80, 'ワ': 0.80, 'カ': 0.82, 'コ': 0.80,
-    'ン': 0.78, 'ソ': 0.78, 'リ': 0.78, 'ル': 0.80, 'レ': 0.78,
-    'イ': 0.80, 'ト': 0.78, 'チ': 0.82, 'ラ': 0.82,
+    "ロ": 0.68,
+    "ハ": 0.78,
+    "ニ": 0.78,
+    "ノ": 0.75,
+    "ヘ": 0.78,
+    "フ": 0.80,
+    "ク": 0.80,
+    "ワ": 0.80,
+    "カ": 0.82,
+    "コ": 0.80,
+    "ン": 0.78,
+    "ソ": 0.78,
+    "リ": 0.78,
+    "ル": 0.80,
+    "レ": 0.78,
+    "イ": 0.80,
+    "ト": 0.78,
+    "チ": 0.82,
+    "ラ": 0.82,
     # カタカナ: 画数多・形が大きい文字 → やや大きめ
-    'ス': 0.85, 'テ': 0.85, 'セ': 0.85, 'サ': 0.85, 'タ': 0.85,
-    'ナ': 0.85, 'マ': 0.85, 'ミ': 0.82, 'ム': 0.85, 'メ': 0.82,
-    'モ': 0.85, 'ヤ': 0.85, 'ユ': 0.82, 'ヨ': 0.82,
-    'キ': 0.85, 'ケ': 0.82, 'シ': 0.82, 'ネ': 0.85, 'ヌ': 0.85,
-    'オ': 0.85, 'エ': 0.82, 'ア': 0.85, 'ウ': 0.85,
-    'ダ': 0.88, 'デ': 0.88, 'ド': 0.88, 'バ': 0.85, 'パ': 0.85,
-    'ガ': 0.88, 'ギ': 0.88, 'グ': 0.85, 'ゲ': 0.85, 'ゴ': 0.85,
-    'ザ': 0.88, 'ジ': 0.85, 'ズ': 0.88, 'ゼ': 0.88, 'ゾ': 0.85,
-    'ビ': 0.85, 'ブ': 0.85, 'ベ': 0.82, 'ボ': 0.88,
-    'ピ': 0.85, 'プ': 0.82, 'ペ': 0.82, 'ポ': 0.85,
-    'ヒ': 0.78, 'ホ': 0.85,
+    "ス": 0.85,
+    "テ": 0.85,
+    "セ": 0.85,
+    "サ": 0.85,
+    "タ": 0.85,
+    "ナ": 0.85,
+    "マ": 0.85,
+    "ミ": 0.82,
+    "ム": 0.85,
+    "メ": 0.82,
+    "モ": 0.85,
+    "ヤ": 0.85,
+    "ユ": 0.82,
+    "ヨ": 0.82,
+    "キ": 0.85,
+    "ケ": 0.82,
+    "シ": 0.82,
+    "ネ": 0.85,
+    "ヌ": 0.85,
+    "オ": 0.85,
+    "エ": 0.82,
+    "ア": 0.85,
+    "ウ": 0.85,
+    "ダ": 0.88,
+    "デ": 0.88,
+    "ド": 0.88,
+    "バ": 0.85,
+    "パ": 0.85,
+    "ガ": 0.88,
+    "ギ": 0.88,
+    "グ": 0.85,
+    "ゲ": 0.85,
+    "ゴ": 0.85,
+    "ザ": 0.88,
+    "ジ": 0.85,
+    "ズ": 0.88,
+    "ゼ": 0.88,
+    "ゾ": 0.85,
+    "ビ": 0.85,
+    "ブ": 0.85,
+    "ベ": 0.82,
+    "ボ": 0.88,
+    "ピ": 0.85,
+    "プ": 0.82,
+    "ペ": 0.82,
+    "ポ": 0.85,
+    "ヒ": 0.78,
+    "ホ": 0.85,
     # ひらがな: 画数少・形が小さい文字 → 小さめ
-    'の': 0.78, 'く': 0.75, 'し': 0.78, 'へ': 0.78, 'つ': 0.80,
-    'り': 0.78, 'い': 0.80, 'こ': 0.78, 'て': 0.72, 'に': 0.80,
-    'と': 0.80, 'う': 0.80, 'か': 0.82, 'る': 0.80, 'を': 0.80,
+    "の": 0.78,
+    "く": 0.75,
+    "し": 0.78,
+    "へ": 0.78,
+    "つ": 0.80,
+    "り": 0.78,
+    "い": 0.80,
+    "こ": 0.78,
+    "て": 0.72,
+    "に": 0.80,
+    "と": 0.80,
+    "う": 0.80,
+    "か": 0.82,
+    "る": 0.80,
+    "を": 0.80,
     # ひらがな: 標準〜やや大きめ
-    'あ': 0.85, 'お': 0.85, 'き': 0.85, 'け': 0.82, 'さ': 0.82,
-    'す': 0.82, 'せ': 0.85, 'そ': 0.82, 'た': 0.85, 'ち': 0.82,
-    'な': 0.85, 'ぬ': 0.85, 'ね': 0.85, 'は': 0.85, 'ひ': 0.78,
-    'ふ': 0.85, 'ほ': 0.85, 'ま': 0.85, 'み': 0.82, 'む': 0.85,
-    'め': 0.82, 'も': 0.82, 'や': 0.85, 'ゆ': 0.85, 'よ': 0.82,
-    'ら': 0.82, 'れ': 0.82, 'ろ': 0.80, 'わ': 0.82, 'ん': 0.80,
-    'え': 0.82,
+    "あ": 0.85,
+    "お": 0.85,
+    "き": 0.85,
+    "け": 0.82,
+    "さ": 0.82,
+    "す": 0.82,
+    "せ": 0.85,
+    "そ": 0.82,
+    "た": 0.85,
+    "ち": 0.82,
+    "な": 0.85,
+    "ぬ": 0.85,
+    "ね": 0.85,
+    "は": 0.85,
+    "ひ": 0.78,
+    "ふ": 0.85,
+    "ほ": 0.85,
+    "ま": 0.85,
+    "み": 0.82,
+    "む": 0.85,
+    "め": 0.82,
+    "も": 0.82,
+    "や": 0.85,
+    "ゆ": 0.85,
+    "よ": 0.82,
+    "ら": 0.82,
+    "れ": 0.82,
+    "ろ": 0.80,
+    "わ": 0.82,
+    "ん": 0.80,
+    "え": 0.82,
     # 濁音ひらがな
-    'が': 0.88, 'ぎ': 0.88, 'ぐ': 0.85, 'げ': 0.85, 'ご': 0.85,
-    'ざ': 0.88, 'じ': 0.85, 'ず': 0.85, 'ぜ': 0.88, 'ぞ': 0.85,
-    'だ': 0.88, 'ぢ': 0.85, 'づ': 0.85, 'で': 0.85, 'ど': 0.88,
-    'ば': 0.88, 'び': 0.85, 'ぶ': 0.88, 'べ': 0.85, 'ぼ': 0.88,
-    'ぱ': 0.88, 'ぴ': 0.85, 'ぷ': 0.85, 'ぺ': 0.85, 'ぽ': 0.88,
+    "が": 0.88,
+    "ぎ": 0.88,
+    "ぐ": 0.85,
+    "げ": 0.85,
+    "ご": 0.85,
+    "ざ": 0.88,
+    "じ": 0.85,
+    "ず": 0.85,
+    "ぜ": 0.88,
+    "ぞ": 0.85,
+    "だ": 0.88,
+    "ぢ": 0.85,
+    "づ": 0.85,
+    "で": 0.85,
+    "ど": 0.88,
+    "ば": 0.88,
+    "び": 0.85,
+    "ぶ": 0.88,
+    "べ": 0.85,
+    "ぼ": 0.88,
+    "ぱ": 0.88,
+    "ぴ": 0.85,
+    "ぷ": 0.85,
+    "ぺ": 0.85,
+    "ぽ": 0.88,
 }
 
 
@@ -92,9 +200,9 @@ def _is_kanji(ch: str) -> bool:
     )
 
 
-_INLINE_MATH_RE = re.compile(r'(?<!\$)\$(?!\$)(.*?)\$')
+_INLINE_MATH_RE = re.compile(r"(?<!\$)\$(?!\$)(.*?)\$")
 # DOTALL: $$\n...\n$$ のように改行を含む複数行ブロック数式を 1 つのマッチで捕捉する
-_BLOCK_MATH_RE = re.compile(r'\$\$(.*?)\$\$', re.DOTALL)
+_BLOCK_MATH_RE = re.compile(r"\$\$(.*?)\$\$", re.DOTALL)
 # ブロック数式を段落分割前に抽出するためのプレースホルダ（NULL文字で前後を囲み通常テキストと衝突しない形に）
 _BLOCK_MATH_PLACEHOLDER_PREFIX = "\x00BLK\x00"
 _BLOCK_MATH_PLACEHOLDER_SUFFIX = "\x00BLK\x00"
@@ -111,7 +219,7 @@ def _split_segments(text: str) -> list[tuple[str, str]]:
     last_end = 0
     for m in _INLINE_MATH_RE.finditer(text):
         if m.start() > last_end:
-            segments.append(("text", text[last_end:m.start()]))
+            segments.append(("text", text[last_end : m.start()]))
         math_content = m.group(1)
         if math_content:
             segments.append(("math", math_content))
@@ -134,6 +242,7 @@ class CharPlacement:
     page: int = 0
     role: str | None = None
     line_segment: tuple[float, float, float, float] | None = None
+    slant: float = 0.0  # 文字単位の微小傾き角(rad)。手書きの揺らぎ表現。
 
 
 @dataclass
@@ -183,9 +292,7 @@ class Typesetter:
     def _inline_math_width(self, math_src: str) -> float:
         elements = MathParser.parse(math_src)
         elements = [e for e in elements if e.type != "tag"]
-        return MathLayoutEngine.layout(
-            elements, x=0.0, y=0.0, font_size=self.font_size
-        ).width
+        return MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size).width
 
     def _line_neutral_width(
         self,
@@ -210,7 +317,7 @@ class Typesetter:
         parts: list[str] = []
         last_end = 0
         for idx, match in enumerate(_INLINE_MATH_RE.finditer(text)):
-            parts.append(text[last_end:match.start()])
+            parts.append(text[last_end : match.start()])
             placeholder = chr(_INLINE_MATH_PLACEHOLDER_BASE + idx)
             placeholders[placeholder] = match.group(1)
             parts.append(placeholder)
@@ -243,7 +350,12 @@ class Typesetter:
             if global_line_idx in doc.block_math_lines:
                 math_src = doc.block_math_lines[global_line_idx]
                 consumed = self._place_block_math(
-                    math_src, line_idx, line_positions, area, page_idx, current_page,
+                    math_src,
+                    line_idx,
+                    line_positions,
+                    area,
+                    page_idx,
+                    current_page,
                 )
                 if consumed == -1:
                     # 残り行不足 → ページ確定して次ページ先頭に再配置
@@ -252,7 +364,12 @@ class Typesetter:
                     page_idx += 1
                     line_idx = 0
                     consumed = self._place_block_math(
-                        math_src, 0, line_positions, area, page_idx, current_page,
+                        math_src,
+                        0,
+                        line_positions,
+                        area,
+                        page_idx,
+                        current_page,
                     )
                     # 新ページでも入らないケースは想定外（required_rows > rows/page）。
                     # 安全策として -1 のまま返ったら 1 行扱いで進めて無限ループを避ける。
@@ -266,10 +383,9 @@ class Typesetter:
             body_level = doc.line_body_level.get(global_line_idx, 0)
             is_para_start = global_line_idx in doc.para_start_indices
             is_page_first = line_idx == 0
-            prev_is_heading = (
-                (global_line_idx - 1) in doc.heading_lines
-                or (global_line_idx - 2) in doc.heading_lines
-            )
+            prev_is_heading = (global_line_idx - 1) in doc.heading_lines or (
+                global_line_idx - 2
+            ) in doc.heading_lines
 
             placements = self._place_line(
                 line_text=line_text,
@@ -317,6 +433,7 @@ class Typesetter:
         )
 
         paragraphs = text.split("\n")
+
         # プレースホルダ置換時に追加した前後 \n が元の paragraph 区切りと重複して
         # 空段落を生むため、placeholder 段落に隣接する空段落のみ取り除く
         def _is_placeholder_para(s: str) -> bool:
@@ -325,8 +442,8 @@ class Typesetter:
         cleaned: list[str] = []
         for i, p in enumerate(paragraphs):
             if p == "":
-                next_is_placeholder = (
-                    i + 1 < len(paragraphs) and _is_placeholder_para(paragraphs[i + 1])
+                next_is_placeholder = i + 1 < len(paragraphs) and _is_placeholder_para(
+                    paragraphs[i + 1]
                 )
                 prev_is_placeholder = bool(cleaned) and _is_placeholder_para(cleaned[-1])
                 if next_is_placeholder or prev_is_placeholder:
@@ -354,18 +471,18 @@ class Typesetter:
 
             heading_level = 0
             display_para = para
-            if para.startswith('###'):
+            if para.startswith("###"):
                 heading_level = 3
                 display_para = para[3:].strip()
-            elif para.startswith('##'):
+            elif para.startswith("##"):
                 heading_level = 2
                 display_para = para[2:].strip()
-            elif para.startswith('#'):
+            elif para.startswith("#"):
                 heading_level = 1
                 display_para = para[1:].strip()
 
             if heading_level > 0:
-                if len(lines) > 0 and lines != ['']:
+                if len(lines) > 0 and lines != [""]:
                     lines.append("")
                 heading_lines[len(lines)] = heading_level
                 current_body_level = heading_level
@@ -390,9 +507,7 @@ class Typesetter:
                     is_heading = heading_level > 0
                     if is_heading:
                         line_x = _HEADING_X.get(heading_level, area.x)
-                        line_font_size = (
-                            self.font_size * _HEADING_FONT_SCALES[heading_level]
-                        )
+                        line_font_size = self.font_size * _HEADING_FONT_SCALES[heading_level]
 
                         def width_fn(ch: str) -> float:
                             if ch in math_placeholders:
@@ -406,14 +521,9 @@ class Typesetter:
                                 return self._inline_math_width(math_placeholders[ch])
                             return self._body_char_advance(ch)
 
-                    line_width = (
-                        self._line_right_x(area, is_heading, current_body_level)
-                        - line_x
-                    )
+                    line_width = self._line_right_x(area, is_heading, current_body_level) - line_x
                     broken = break_paragraph_by_width(break_text, line_width, width_fn)
-                    result_lines = self._rebuild_lines_with_math(
-                        part, broken, math_placeholders
-                    )
+                    result_lines = self._rebuild_lines_with_math(part, broken, math_placeholders)
                     if heading_level > 0:
                         for i in range(len(result_lines)):
                             heading_lines[len(lines) + i] = heading_level
@@ -462,18 +572,14 @@ class Typesetter:
             x += self.font_size
 
         if self._augmenter is not None:
-            _, line_y, _ = self._augmenter.augment_char_placement(
-                x, y, self.font_size
-            )
+            _, line_y, _ = self._augmenter.augment_char_placement(x, y, self.font_size)
             density_scale = self._augmenter.get_line_density_scale()
         else:
             line_y = y
             density_scale = 1.0
 
         segments = _split_segments(line_text)
-        neutral_remaining = self._line_neutral_width(
-            segments, is_heading, line_font_size
-        )
+        neutral_remaining = self._line_neutral_width(segments, is_heading, line_font_size)
         line_right_x = self._line_right_x(area, is_heading, body_level)
 
         prev_halfwidth = False
@@ -494,9 +600,7 @@ class Typesetter:
                         char_font_size = line_font_size
                     else:
                         char_font_size = self.font_size * size_scale
-                    char_advance = self._char_advance(
-                        ch, is_heading, line_font_size
-                    )
+                    char_advance = self._char_advance(ch, is_heading, line_font_size)
                     neutral_remaining -= char_advance
 
                     if self._augmenter is not None:
@@ -516,14 +620,28 @@ class Typesetter:
                                 line_right_x - x - neutral_remaining,
                             )
                             char_width = min(char_width, density_width_cap)
-                        output.append(CharPlacement(
-                            char=ch, x=aug_x, y=line_y, font_size=aug_size, page=page_idx,
-                        ))
+                        get_slant = getattr(self._augmenter, "get_char_slant", None)
+                        output.append(
+                            CharPlacement(
+                                char=ch,
+                                x=aug_x,
+                                y=line_y,
+                                font_size=aug_size,
+                                page=page_idx,
+                                slant=get_slant() if get_slant else 0.0,
+                            )
+                        )
                     else:
                         char_width = char_advance
-                        output.append(CharPlacement(
-                            char=ch, x=x, y=y, font_size=char_font_size, page=page_idx,
-                        ))
+                        output.append(
+                            CharPlacement(
+                                char=ch,
+                                x=x,
+                                y=y,
+                                font_size=char_font_size,
+                                page=page_idx,
+                            )
+                        )
 
                     prev_halfwidth = cur_halfwidth
                     x += char_width
@@ -538,6 +656,7 @@ class Typesetter:
         tag 直前 text の末尾空白と直後 text の先頭空白も除去する。
         """
         from src.layout.math_layout import MathElement
+
         result: list = []
         for elem in elements:
             if elem.type == "tag":
@@ -606,8 +725,7 @@ class Typesetter:
 
         # 各グループの寸法を仮配置で測定
         group_boxes = [
-            MathLayoutEngine.layout(g, x=0.0, y=0.0, font_size=self.font_size)
-            for g in groups
+            MathLayoutEngine.layout(g, x=0.0, y=0.0, font_size=self.font_size) for g in groups
         ]
 
         if group_boxes:
@@ -651,9 +769,7 @@ class Typesetter:
 
         if tag_elem is not None:
             tag_y = last_baseline_y if group_boxes else center_y
-            tag_temp = MathLayoutEngine.layout(
-                [tag_elem], x=0, y=tag_y, font_size=self.font_size
-            )
+            tag_temp = MathLayoutEngine.layout([tag_elem], x=0, y=tag_y, font_size=self.font_size)
             tag_x = area.x + area.width - tag_temp.width
             tag_box = MathLayoutEngine.layout(
                 [tag_elem], x=tag_x, y=tag_y, font_size=self.font_size
@@ -687,30 +803,44 @@ class Typesetter:
         """MathPlacement リストを CharPlacement に変換して output に追加。"""
         for mp in placements:
             if not mp.text and mp.line_segment is not None:
-                output.append(CharPlacement(
-                    char="", x=mp.x, y=mp.y,
-                    font_size=mp.font_size, page=page_idx,
-                    role=mp.role, line_segment=mp.line_segment,
-                ))
+                output.append(
+                    CharPlacement(
+                        char="",
+                        x=mp.x,
+                        y=mp.y,
+                        font_size=mp.font_size,
+                        page=page_idx,
+                        role=mp.role,
+                        line_segment=mp.line_segment,
+                    )
+                )
             elif len(mp.text) == 1 or mp.role == "operator":
-                output.append(CharPlacement(
-                    char=mp.text, x=mp.x, y=mp.y,
-                    font_size=mp.font_size, page=page_idx,
-                    role=mp.role, line_segment=mp.line_segment,
-                ))
+                output.append(
+                    CharPlacement(
+                        char=mp.text,
+                        x=mp.x,
+                        y=mp.y,
+                        font_size=mp.font_size,
+                        page=page_idx,
+                        role=mp.role,
+                        line_segment=mp.line_segment,
+                    )
+                )
             else:
                 for i, ch in enumerate(mp.text):
                     role = mp.role if i == 0 else None
                     seg = mp.line_segment if i == 0 else None
-                    output.append(CharPlacement(
-                        char=ch,
-                        x=mp.x + i * mp.font_size * _CHAR_WIDTH_RATIO,
-                        y=mp.y,
-                        font_size=mp.font_size,
-                        page=page_idx,
-                        role=role,
-                        line_segment=seg,
-                    ))
+                    output.append(
+                        CharPlacement(
+                            char=ch,
+                            x=mp.x + i * mp.font_size * _CHAR_WIDTH_RATIO,
+                            y=mp.y,
+                            font_size=mp.font_size,
+                            page=page_idx,
+                            role=role,
+                            line_segment=seg,
+                        )
+                    )
 
     @staticmethod
     def _rebuild_lines_with_math(
@@ -742,7 +872,7 @@ class Typesetter:
         char_to_segment: list[tuple[int, int]] = []  # (seg_idx, char_idx_in_seg)
         for seg_idx, (seg_type, seg_content) in enumerate(segments):
             if seg_type == "math":
-                content_no_space = seg_content.replace(' ', '\x00')
+                content_no_space = seg_content.replace(" ", "\x00")
                 for ci, ch in enumerate(content_no_space):
                     flat_no_dollar.append(ch)
                     char_to_segment.append((seg_idx, ci))
@@ -769,13 +899,13 @@ class Typesetter:
                             line_parts.append("$" + "".join(math_chars) + "$")
                             math_chars = []
                         in_math_seg = seg_idx
-                    math_chars.append(seg_content[ci] if ci < len(seg_content) else '')
+                    math_chars.append(seg_content[ci] if ci < len(seg_content) else "")
                 else:
                     if in_math_seg is not None:
                         line_parts.append("$" + "".join(math_chars) + "$")
                         math_chars = []
                         in_math_seg = None
-                    line_parts.append(seg_content[ci] if ci < len(seg_content) else '')
+                    line_parts.append(seg_content[ci] if ci < len(seg_content) else "")
             if in_math_seg is not None:
                 line_parts.append("$" + "".join(math_chars) + "$")
             result.append("".join(line_parts))

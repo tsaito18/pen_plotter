@@ -1,4 +1,5 @@
 """StrokeRenderer の単体テスト。"""
+
 import json
 
 import numpy as np
@@ -55,6 +56,22 @@ class TestStrokeRendererMethods:
         result = StrokeRenderer._rect_fallback(p)
         assert len(result) == 1
         assert result[0].shape == (5, 2)
+
+    def test_position_strokes_slant_rotates(self):
+        from src.layout.typesetter import CharPlacement
+
+        renderer = StrokeRenderer()
+        strokes = [np.array([[0.0, 0.0], [1.0, 0.0]]), np.array([[0.0, 0.5], [1.0, 0.5]])]
+        straight = renderer._position_strokes(
+            strokes, CharPlacement(char="a", x=10.0, y=20.0, font_size=5.0, slant=0.0)
+        )
+        slanted = renderer._position_strokes(
+            strokes, CharPlacement(char="a", x=10.0, y=20.0, font_size=5.0, slant=0.2)
+        )
+        # 傾きで座標が変わる（文字内の全画が回転）
+        assert not np.allclose(np.concatenate(straight), np.concatenate(slanted))
+        # 点数・本数は不変
+        assert [s.shape for s in straight] == [s.shape for s in slanted]
 
     def test_math_symbol_strokes(self):
         renderer = StrokeRenderer()
@@ -115,9 +132,7 @@ class TestStrokeRendererMethods:
 class TestAsciiMathSymbols:
     """数式で頻出する ASCII 記号は矩形フォールバックではなく幾何で描画する。"""
 
-    @pytest.mark.parametrize(
-        "char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?"]
-    )
+    @pytest.mark.parametrize("char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?"])
     def test_ascii_math_renders_geometric(self, char):
         from src.layout.typesetter import CharPlacement
 
@@ -271,7 +286,10 @@ class TestGeometricFallbackOrder:
 class TestExtendedMathSymbols:
     """LaTeX シンボルマップ追加で頻出する Unicode 記号がストロークになることを確認する。"""
 
-    @pytest.mark.parametrize("char", ["ω", "π", "θ", "α", "β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"])
+    @pytest.mark.parametrize(
+        "char",
+        ["ω", "π", "θ", "α", "β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"],
+    )
     def test_math_symbol_renders(self, char):
         from src.layout.typesetter import CharPlacement
 
@@ -283,7 +301,9 @@ class TestExtendedMathSymbols:
         is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
         assert not is_rect_fallback, f"'{char}' fell back to rect"
 
-    @pytest.mark.parametrize("char", ["β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"])
+    @pytest.mark.parametrize(
+        "char", ["β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"]
+    )
     def test_extended_unicode_in_unit_box(self, char):
         renderer = StrokeRenderer()
         result = renderer._math_symbol_strokes(char)
@@ -307,9 +327,7 @@ class TestKanjiVGReferenceFinishing:
 
     def test_load_reference_strokes_returns_strokes_and_types(self, tmp_path):
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
 
         strokes, types = renderer._load_reference_strokes("ノ")
@@ -348,9 +366,7 @@ class TestKanjiVGReferenceFinishing:
 
     def test_load_kanjivg_json_returns_strokes_and_types(self, tmp_path):
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
         placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
 
@@ -363,9 +379,7 @@ class TestKanjiVGReferenceFinishing:
     def test_safety_net_finishing_changes_harai_terminal(self, tmp_path):
         # inference=None・kanjivg_dir のみ → safety-net 経路 (_load_kanjivg_json)
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         placement = CharPlacement(char="ノ", x=10.0, y=20.0, font_size=8.0, page=0)
 
         renderer_on = StrokeRenderer(kanjivg_dir=kanjivg_dir, enable_finishing=True)
@@ -385,9 +399,7 @@ class TestKanjiVGReferenceFinishing:
 
     def test_finishing_disabled_leaves_strokes_identical(self, tmp_path):
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         placement = CharPlacement(char="ノ", x=10.0, y=20.0, font_size=8.0, page=0)
         renderer_off = StrokeRenderer(kanjivg_dir=kanjivg_dir, enable_finishing=False)
 
@@ -403,9 +415,7 @@ class TestKanjiVGReferenceFinishing:
         kanjivg_dir = tmp_path / "strokes"
         _create_user_stroke_json(user_dir, "ノ", _HARAI_STROKES)
         # KanjiVG にも同字を置くが direct が優先されるので使われない
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         placement = CharPlacement(char="ノ", x=10.0, y=20.0, font_size=8.0, page=0)
         renderer = StrokeRenderer(
             user_strokes_dir=user_dir, kanjivg_dir=kanjivg_dir, enable_finishing=True
@@ -494,9 +504,7 @@ class TestGenerateCharStrokesWithFinishes:
 
     def test_kanjivg_safety_net_emits_harai(self, tmp_path):
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
         placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
 
@@ -509,9 +517,7 @@ class TestGenerateCharStrokesWithFinishes:
 
     def test_backward_compat_generate_char_strokes_returns_strokes_only(self, tmp_path):
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
         placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
 
