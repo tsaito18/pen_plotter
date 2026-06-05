@@ -68,6 +68,18 @@ def _render_formula_unit_strokes(
     return (aspect, tuple(result)) if result else None
 
 
+def formula_draw_width_mm(math_src: str, h_mm: float) -> float:
+    """数式を高さ h_mm で描いたときの実際の描画幅(mm)。式番号の配置に使う。
+
+    render_latex_to_strokes と同じ draw_w = h_mm * aspect を返す。
+    """
+    rendered = _render_formula_unit_strokes(math_src)
+    if not rendered:
+        return 0.0
+    aspect, _ = rendered
+    return h_mm * aspect
+
+
 def render_latex_to_strokes(
     math_src: str,
     bbox_mm: tuple[float, float, float, float],

@@ -1,6 +1,52 @@
 import numpy as np
 import pytest
-from src.layout.table_layout import TableConfig, TableLayout, CellPlacement
+from src.layout.table_layout import (
+    CellPlacement,
+    TableConfig,
+    TableLayout,
+    detect_pipe_table,
+    is_table_separator,
+    split_pipe_row,
+)
+
+
+class TestPipeTableParser:
+    """Markdownパイプ表のパース。"""
+
+    def test_split_pipe_row(self):
+        assert split_pipe_row("| 項目 | 値 |") == ["項目", "値"]
+        assert split_pipe_row("項目 | 値") == ["項目", "値"]  # 端の | は任意
+        assert split_pipe_row("| a |  | c |") == ["a", "", "c"]
+
+    def test_is_table_separator(self):
+        assert is_table_separator("|---|---|")
+        assert is_table_separator("| :--- | ---: |")
+        assert is_table_separator("|:-:|:-:|")
+        assert not is_table_separator("| a | b |")
+        assert not is_table_separator("| --- | x |")  # データ混在は区切りでない
+
+    def test_detect_pipe_table_basic(self):
+        paras = ["前文", "| 項目 | 値 |", "|---|---|", "| 降伏 | 235 |", "| 引張 | 400 |", "後文"]
+        result = detect_pipe_table(paras, 1)
+        assert result is not None
+        rows, consumed = result
+        assert rows == [["項目", "値"], ["降伏", "235"], ["引張", "400"]]
+        assert consumed == 4  # ヘッダ+区切り+データ2行
+
+    def test_detect_requires_separator(self):
+        # 2行目が区切りでなければ表として認識しない
+        assert detect_pipe_table(["| a | b |", "| c | d |"], 0) is None
+
+    def test_detect_non_table_line(self):
+        assert detect_pipe_table(["ふつうの文", "次"], 0) is None
+
+    def test_detect_ragged_cells_padded(self):
+        # 列数が揃わない行は最大列数にパディング
+        paras = ["| a | b | c |", "|---|---|---|", "| 1 | 2 |"]
+        rows, consumed = detect_pipe_table(paras, 0)
+        assert rows[0] == ["a", "b", "c"]
+        assert rows[1] == ["1", "2", ""]
+        assert consumed == 3
 
 
 class TestTableConfig:

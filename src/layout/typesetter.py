@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from src.layout.line_breaking import break_paragraph_by_width, is_halfwidth
@@ -13,6 +13,7 @@ from src.layout.math_layout import (
     _CHAR_WIDTH_RATIO,
 )
 from src.layout.page_layout import PageConfig, PageLayout
+from src.layout.table_layout import detect_pipe_table
 
 _SMALL_KANA = set("っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ")
 _SMALL_PUNCT = set("・、。，．")
@@ -207,6 +208,9 @@ _BLOCK_MATH_RE = re.compile(r"\$\$(.*?)\$\$", re.DOTALL)
 _BLOCK_MATH_PLACEHOLDER_PREFIX = "\x00BLK\x00"
 _BLOCK_MATH_PLACEHOLDER_SUFFIX = "\x00BLK\x00"
 _INLINE_MATH_PLACEHOLDER_BASE = 0xE000
+# パイプ表を段落処理前に1段落へ畳むためのプレースホルダ（NULL文字で衝突回避）
+_TABLE_PLACEHOLDER_PREFIX = "\x00TBL\x00"
+_TABLE_PLACEHOLDER_SUFFIX = "\x00TBL\x00"
 
 # 数式内の . は変換しない（小数点は LaTeX で . のまま使う）
 _MATH_OR_BLOCK_RE = re.compile(r"\$\$.*?\$\$|\$[^$]+?\$", re.DOTALL)
@@ -273,6 +277,8 @@ class ParsedDocument:
     line_body_level: dict[int, int]  # global_line_idx → body indent level
     para_start_indices: set[int]
     block_math_lines: dict[int, str]  # global_line_idx → math source
+    # global_line_idx → 表の行データ（先頭ヘッダ）。パイプ表ブロックの起点行に登録。
+    table_blocks: dict[int, list[list[str]]] = field(default_factory=dict)
 
 
 class Typesetter:
@@ -399,6 +405,24 @@ class Typesetter:
                 line_idx += consumed
                 continue
 
+            if global_line_idx in doc.table_blocks:
+                rows = doc.table_blocks[global_line_idx]
+                consumed = self._place_table(
+                    rows, line_idx, line_positions, area, page_idx, current_page
+                )
+                if consumed == -1:
+                    pages.append(current_page)
+                    current_page = []
+                    page_idx += 1
+                    line_idx = 0
+                    consumed = self._place_table(
+                        rows, 0, line_positions, area, page_idx, current_page
+                    )
+                    if consumed == -1:
+                        consumed = 1  # 1ページに収まらない巨大表は無限ループ回避
+                line_idx += consumed
+                continue
+
             is_heading = global_line_idx in doc.heading_lines
             h_level = doc.heading_lines.get(global_line_idx, 0)
             body_level = doc.line_body_level.get(global_line_idx, 0)
@@ -471,14 +495,48 @@ class Typesetter:
                     continue
             cleaned.append(p)
         paragraphs = cleaned
+
+        # パイプ表を検出して 1 プレースホルダ段落へ畳む（複数行表を後段で一括配置）
+        stashed_tables: list[list[list[str]]] = []
+        collapsed: list[str] = []
+        ti = 0
+        while ti < len(paragraphs):
+            tbl = detect_pipe_table(paragraphs, ti)
+            if tbl is not None:
+                rows, consumed = tbl
+                stashed_tables.append(rows)
+                collapsed.append(
+                    _TABLE_PLACEHOLDER_PREFIX
+                    + str(len(stashed_tables) - 1)
+                    + _TABLE_PLACEHOLDER_SUFFIX
+                )
+                ti += consumed
+            else:
+                collapsed.append(paragraphs[ti])
+                ti += 1
+        paragraphs = collapsed
+        table_placeholder_re = re.compile(
+            re.escape(_TABLE_PLACEHOLDER_PREFIX) + r"(\d+)" + re.escape(_TABLE_PLACEHOLDER_SUFFIX)
+        )
+
         lines: list[str] = []
         para_start_indices: set[int] = set()
         block_math_lines: dict[int, str] = {}
+        table_blocks: dict[int, list[list[str]]] = {}
         heading_lines: dict[int, int] = {}
         line_body_level: dict[int, int] = {}
         current_body_level: int = 0
 
         for para in paragraphs:
+            # パイプ表プレースホルダ: 表ブロック起点行として登録
+            table_match = table_placeholder_re.fullmatch(para.strip())
+            if table_match is not None:
+                para_start_indices.add(len(lines))
+                table_blocks[len(lines)] = stashed_tables[int(table_match.group(1))]
+                line_body_level[len(lines)] = current_body_level
+                lines.append("")
+                continue
+
             # プレースホルダ単独段落を先に処理: ブロック数式行として登録
             placeholder_match = placeholder_re.fullmatch(para.strip())
             if placeholder_match is not None:
@@ -558,6 +616,7 @@ class Typesetter:
             line_body_level=line_body_level,
             para_start_indices=para_start_indices,
             block_math_lines=block_math_lines,
+            table_blocks=table_blocks,
         )
 
     def _place_line(
@@ -717,6 +776,92 @@ class Typesetter:
             groups.append(current)
         return groups
 
+    def _place_table(
+        self,
+        rows: list[list[str]],
+        line_idx: int,
+        line_positions: list[float],
+        area: object,
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> int:
+        """パイプ表を罫線(line_segment)＋セル文字として配置する。
+
+        1 表行 = line_positions の 1 行を占有する。列幅は各列の最大文字数から決め、
+        合計が本文幅を超える場合は一律縮小して収める。残り行が足りなければ -1
+        （呼び出し側で次ページ送り）。
+
+        Returns:
+            消費した行数（= 表の行数）。残り行不足なら -1。
+        """
+        n_rows = len(rows)
+        if n_rows == 0:
+            return 1
+        n_cols = max(len(r) for r in rows)
+        remaining = len(line_positions) - line_idx
+        if remaining < n_rows:
+            return -1
+
+        fs = self.font_size
+        pad = fs * 0.3
+        # 列幅: 各列の最大文字数 × 文字送り + 左右パディング
+        col_w: list[float] = []
+        for c in range(n_cols):
+            max_chars = max(len(rows[r][c]) for r in range(n_rows)) if n_cols > 0 else 1
+            col_w.append(max(max_chars, 1) * fs + 2 * pad)
+        total_w = sum(col_w)
+        scale = min(1.0, area.width / total_w) if total_w > 0 else 1.0
+        col_w = [w * scale for w in col_w]
+
+        row_h = self._config.line_spacing
+        # 行境界 y（Y-UP: 上端が大きい値）。確保行範囲の上端から row_h 刻みで下る。
+        top_y = line_positions[line_idx] + row_h / 2
+        ys = [top_y - i * row_h for i in range(n_rows + 1)]
+        xs = [area.x]
+        for w in col_w:
+            xs.append(xs[-1] + w)
+
+        # 横罫線（行境界）
+        for y in ys:
+            output.append(
+                CharPlacement(
+                    char="",
+                    x=area.x,
+                    y=y,
+                    font_size=fs,
+                    page=page_idx,
+                    line_segment=(area.x, y, xs[-1], y),
+                )
+            )
+        # 縦罫線（列境界）
+        for x in xs:
+            output.append(
+                CharPlacement(
+                    char="",
+                    x=x,
+                    y=ys[0],
+                    font_size=fs,
+                    page=page_idx,
+                    line_segment=(x, ys[0], x, ys[-1]),
+                )
+            )
+        # セル文字（左寄せ、行中央のベースライン）。字送りも scale して列内に収める。
+        cell_fs = fs * scale
+        for r in range(n_rows):
+            baseline = (ys[r] + ys[r + 1]) / 2 - cell_fs * 0.35
+            for c in range(n_cols):
+                text = rows[r][c]
+                cx = xs[c] + pad * scale
+                for ch in text:
+                    if ch != " ":
+                        output.append(
+                            CharPlacement(
+                                char=ch, x=cx, y=baseline, font_size=cell_fs, page=page_idx
+                            )
+                        )
+                    cx += self._body_char_advance(ch) * scale
+        return n_rows
+
     def _place_block_math(
         self,
         math_src: str,
@@ -734,6 +879,9 @@ class Typesetter:
         Returns:
             消費した行数（>=2）。残り行数が足りない場合は -1（呼び出し側で次ページ送り）。
         """
+        # 層の逆依存を避けるため遅延 import（layout → ui）
+        from src.ui.math_skeletonize import formula_draw_width_mm
+
         elements = MathParser.parse(math_src)
         # 本体中心位置を tag 幅から独立させるため、tag と tag 周辺の空白テキストを除外する
         tag_elem = next((e for e in elements if e.type == "tag"), None)
@@ -779,6 +927,7 @@ class Typesetter:
         # 上から下へ並ぶよう、index 0 が最上段（最大の +offset）。
         group_count = len(group_boxes)
         last_baseline_y = center_y
+        last_body_right = area.x + area.width  # 本体右端（tag をこの直後に置く）
         for i, (g_elems, g_box) in enumerate(zip(groups, group_boxes)):
             offset = (group_count - 1) / 2 * line_spacing - i * line_spacing
             baseline_y = center_y + offset
@@ -790,18 +939,25 @@ class Typesetter:
             )
             # グループ単位の bbox を求めて skeletonize レンダラに渡す
             # 複数グループ時は各グループの math_src を再構築できないため body_src 全体を渡す
+            g_h = placed.ascent + placed.descent
             g_bbox = (
                 center_x,
                 baseline_y - placed.descent,
                 placed.width,
-                placed.ascent + placed.descent,
+                g_h,
             )
             self._convert_math_placements(placed.placements, page_idx, output, body_src, g_bbox)
+            # 数式画像は bbox 中心に draw_w(=g_h*aspect)幅で描かれる。実描画右端を式番号配置に使う
+            draw_w = formula_draw_width_mm(body_src, g_h)
+            last_body_right = (center_x + placed.width / 2) + draw_w / 2
 
         if tag_elem is not None:
             tag_y = last_baseline_y if group_boxes else center_y
             tag_temp = MathLayoutEngine.layout([tag_elem], x=0, y=tag_y, font_size=self.font_size)
-            tag_x = area.x + area.width - tag_temp.width
+            # 式番号は数式本体の直後（1文字分あけて）に置く。紙右端を超える場合のみ右端へ。
+            tag_x = last_body_right + self.font_size
+            max_x = area.x + area.width - tag_temp.width
+            tag_x = min(tag_x, max_x)
             tag_box = MathLayoutEngine.layout(
                 [tag_elem], x=tag_x, y=tag_y, font_size=self.font_size
             )
