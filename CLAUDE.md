@@ -154,6 +154,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - ストローク単位の幾何バリエーション（回転・スケール・シフト）で自然さ追加
 - 局所曲率特徴追加でストロークの曲がり角に大きなオフセット許容
 - augmentation設定（baseline_drift=0.3, spacing=0.2, size=0.05）＋文字単位の傾き(slant_variation=0.02)有効 — 手書きの揺らぎ。slantはCharPlacement.slant経由で_position_strokesが文字中心回転
+- **汚さスライダー（GUI）**: `UISettings.messiness`（0=整った字, 1=標準=上記の素値, 2=大きく乱れる）で baseline_drift/字間/サイズ/傾きを一括スケール。`web_app._scaled_augment_config()` が単一ソース。GUIの「温度」（=ML per-point offsetの字形揺らぎ）とは別軸
 - ストローク太さ変化はプレビューのみ。実機は終端Zリフト（contact_profile, 距離mmベース）で払い・はねを表現
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 
@@ -172,7 +173,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - レポート用紙背景プレビュー（data/report_paper.jpg自動ロード）
 - リファクタリング済み: HTML分離、StrokeRenderer/PreviewRenderer分割、BaseFinetuner
 - **xDraw A4 ペンプロッタ実機テスト成功**（ホーミング・ペン制御・描画動作確認済み）
-- 幾何ストローク生成: 、。・（）
+- 幾何ストローク生成: 、。・（）／ASCII数式記号(+,-,=,<,>,*,/,%,:,;,!,?)は`_ascii_math_strokes`で幾何描画（矩形フォールバック回避）
 - 訓練サーバー: homesrv (i5-9600K, GTX 1050 Ti 4GB, CUDA 12.1, PyTorch 2.5.1) — mise + uv でパッケージ管理
 - Colab Pro: A100 40GB, AMP対応
 
