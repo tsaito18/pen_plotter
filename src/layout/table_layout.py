@@ -36,9 +36,7 @@ def is_table_separator(line: str) -> bool:
     return all(_TABLE_SEP_CELL_RE.match(c) is not None for c in cells)
 
 
-def detect_pipe_table(
-    paragraphs: list[str], start: int
-) -> tuple[list[list[str]], int] | None:
+def detect_pipe_table(paragraphs: list[str], start: int) -> tuple[list[list[str]], int] | None:
     """``paragraphs[start]`` から始まるパイプ表を検出して (行データ, 消費行数) を返す。
 
     表の条件: ``start`` 行がパイプ行、``start+1`` 行が区切り行。以降 ``|`` を含む行を

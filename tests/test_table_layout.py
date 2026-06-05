@@ -49,6 +49,32 @@ class TestPipeTableParser:
         assert consumed == 3
 
 
+class TestTypesetterTableIntegration:
+    """typeset() がパイプ表を罫線＋セル文字として配置する。"""
+
+    def _ts(self):
+        from src.layout.page_layout import PageConfig
+        from src.layout.typesetter import Typesetter
+
+        return Typesetter(PageConfig(), font_size=7.0)
+
+    def test_table_emits_borders_and_cells(self):
+        text = "| 項目 | 値 |\n|---|---|\n| 降伏 | 235 |\n| 引張 | 400 |"
+        pages = self._ts().typeset(text)
+        ph = pages[0]
+        segs = [p for p in ph if p.line_segment is not None]
+        chars = [p.char for p in ph if p.char and p.line_segment is None]
+        # 3行×2列 → 横罫線4本 + 縦罫線3本 = 7本
+        assert len(segs) == 7
+        for ch in ["降", "伏", "2", "3", "5", "4", "0"]:
+            assert ch in chars
+
+    def test_non_table_text_unaffected(self):
+        pages = self._ts().typeset("ふつうの文章です。")
+        ph = pages[0]
+        assert [p for p in ph if p.line_segment is not None] == []
+
+
 class TestTableConfig:
     def test_defaults(self):
         cfg = TableConfig(rows=3, cols=4)
