@@ -848,11 +848,12 @@ class Typesetter:
                     line_segment=(x, y_top, x, y_bot),
                 )
             )
-        # セル文字（左寄せ）。各行のベースラインは下罫線 L[idx+r] の少し上に置き、
-        # 通常本文と同じ「罫線の上に乗る」見え方にする。字送りも scale。
+        # セル文字（左寄せ）。ベースライン=下罫線 L[idx+r]。_position_strokes が
+        # placement.y を帯下端として line_spacing 帯の中央へ glyph を置くため、
+        # これでセル帯（L[idx+r]〜L[idx+r]+row_h）のちょうど中央に収まる。字送りも scale。
         cell_fs = fs * scale
         for r in range(n_rows):
-            baseline = line_positions[line_idx + r] + row_h * 0.18
+            baseline = line_positions[line_idx + r]
             for c in range(n_cols):
                 text = rows[r][c]
                 cx = xs[c] + pad * scale
