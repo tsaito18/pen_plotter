@@ -11,6 +11,7 @@ from src.layout.line_breaking import is_halfwidth
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement
 from src.model.augmentation import HandwritingAugmenter
+from src.ui.math_skeletonize import render_latex_to_strokes
 from src.model.stroke_finishing import (
     FinishingConfig,
     apply_finishing,
@@ -233,6 +234,19 @@ class StrokeRenderer:
         """
         cov = self._last_coverage
 
+        # skeletonize レンダリング: 先頭文字が math_source を持つ場合
+        if getattr(placement, "math_source", None) is not None:
+            bbox = placement.math_bbox  # (x, y_bottom, width, height) mm
+            strokes = render_latex_to_strokes(placement.math_source, bbox)
+            if strokes:
+                cov.geometric.append(placement.char or "math")
+                return strokes, ["none"] * len(strokes)
+            # フォールバック: skeletonize 失敗時は既存パスで処理（math_source をクリア）
+
+        # skeletonize でスキップ済みの文字（先頭以外）
+        if getattr(placement, "math_skip", False):
+            return [], []
+
         # 分数線・根号の屋根線などの補助線分は文字ではなく単一ストロークとして描画する
         if placement.line_segment is not None:
             x1, y1, x2, y2 = placement.line_segment
@@ -299,7 +313,11 @@ class StrokeRenderer:
 
         reference, ref_types = self._load_reference_strokes(placement.char)
 
-        if self._inference is not None and reference is not None:
+        if (
+            self._inference is not None
+            and reference is not None
+            and self._is_ml_deformable(placement.char)
+        ):
             try:
                 raw = self._inference.generate(
                     self._style_sample,
@@ -624,9 +642,7 @@ class StrokeRenderer:
         if char in ("\u3001", ","):
             return [np.array([[0.6, 0.2], [0.3, 0.8]])]
         elif char in ("\u3002", "."):
-            angles = np.linspace(0, 2 * np.pi, 16)
-            r = 0.3
-            return [np.stack([0.5 + r * np.cos(angles), 0.5 + r * np.sin(angles)], axis=1)]
+            return [self._small_dot(0.5, 0.5, r=0.12)]
         elif char == "\u30fb":
             angles = np.linspace(0, 2 * np.pi, 12)
             r = 0.15
@@ -1102,6 +1118,16 @@ class StrokeRenderer:
                 strokes.append(arr)
                 types.append(raw_types[i] if i < len(raw_types) else "")
         return strokes, types
+
+    @staticmethod
+    def _is_ml_deformable(char: str) -> bool:
+        """ML変形(per-point offset)を適用してよい字か判定する。
+
+        本番モデルはユーザーの CJK（漢字・かな）のみで訓練されており、数字に
+        per-point offset を当てると下の横線等が歪んで字形が壊れる。数字は素の
+        参照字形（KanjiVG フォント由来）をそのまま使う方が正確なため除外する。
+        """
+        return char not in "0123456789"
 
     def _load_reference_strokes(self, char: str) -> tuple[list[Stroke] | None, list[str]]:
         if self._kanjivg_dir is None:

@@ -174,6 +174,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - リファクタリング済み: HTML分離、StrokeRenderer/PreviewRenderer分割、BaseFinetuner
 - **xDraw A4 ペンプロッタ実機テスト成功**（ホーミング・ペン制御・描画動作確認済み）
 - 幾何ストローク生成: 、。・（）／ASCII数式記号(+,-,=,<,>,*,/,%,:,;,!,?)は`_ascii_math_strokes`で幾何描画（矩形フォールバック回避）
+- 数字(0-9)はML変形を**スキップ**しKanjiVG素の参照字形を直接使う（`_is_ml_deformable`）。モデルはCJKのみ訓練のため数字にper-point offsetを当てると字形が壊れる（例: 「2」の下の横線が崩れる）
 - 訓練サーバー: homesrv (i5-9600K, GTX 1050 Ti 4GB, CUDA 12.1, PyTorch 2.5.1) — mise + uv でパッケージ管理
 - Colab Pro: A100 40GB, AMP対応
 

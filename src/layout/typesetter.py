@@ -243,6 +243,10 @@ class CharPlacement:
     role: str | None = None
     line_segment: tuple[float, float, float, float] | None = None
     slant: float = 0.0  # 文字単位の微小傾き角(rad)。手書きの揺らぎ表現。
+    # skeletonize レンダリング用: 先頭文字のみ設定、残りは math_skip=True
+    math_source: str | None = None  # LaTeX ソース文字列
+    math_bbox: tuple[float, float, float, float] | None = None  # (x, y, width_mm, height_mm)
+    math_skip: bool = False  # True の文字はスキップ（先頭がまとめて描画済み）
 
 
 @dataclass
@@ -767,7 +771,15 @@ class Typesetter:
             placed = MathLayoutEngine.layout(
                 g_elems, x=center_x, y=baseline_y, font_size=self.font_size
             )
-            self._convert_math_placements(placed.placements, page_idx, output)
+            # グループ単位の bbox を求めて skeletonize レンダラに渡す
+            # 複数グループ時は各グループの math_src を再構築できないため math_src 全体を渡す
+            g_bbox = (
+                center_x,
+                baseline_y - placed.descent,
+                placed.width,
+                placed.ascent + placed.descent,
+            )
+            self._convert_math_placements(placed.placements, page_idx, output, math_src, g_bbox)
 
         if tag_elem is not None:
             tag_y = last_baseline_y if group_boxes else center_y
@@ -793,7 +805,9 @@ class Typesetter:
         # インライン数式中の \tag{} は配置しない（仕様: ブロック数式専用）
         elements = [e for e in elements if e.type != "tag"]
         box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
-        self._convert_math_placements(box.placements, page_idx, output)
+        # skeletonize レンダリング用 bbox: (x_left, y_bottom, width, height) mm Y-UP
+        math_bbox = (x, y - box.descent, box.width, box.ascent + box.descent)
+        self._convert_math_placements(box.placements, page_idx, output, math_src, math_bbox)
         return x + box.width
 
     @staticmethod
@@ -801,48 +815,63 @@ class Typesetter:
         placements: list[MathPlacement],
         page_idx: int,
         output: list[CharPlacement],
+        math_source: str | None = None,
+        math_bbox: tuple[float, float, float, float] | None = None,
     ) -> None:
-        """MathPlacement リストを CharPlacement に変換して output に追加。"""
+        """MathPlacement リストを CharPlacement に変換して output に追加。
+
+        math_source/math_bbox が指定されたとき、先頭の文字配置にセットし残りを
+        math_skip=True でマークする（skeletonize レンダラが一括描画するため）。
+        """
+        first_placed = False
+
+        def make_cp(**kwargs: object) -> CharPlacement:
+            nonlocal first_placed
+            if math_source is not None and not first_placed:
+                first_placed = True
+                return CharPlacement(
+                    math_source=math_source,
+                    math_bbox=math_bbox,
+                    **kwargs,  # type: ignore[arg-type]
+                )
+            if math_source is not None:
+                return CharPlacement(math_skip=True, **kwargs)  # type: ignore[arg-type]
+            return CharPlacement(**kwargs)  # type: ignore[arg-type]
+
         for mp in placements:
             if not mp.text and mp.line_segment is not None:
-                output.append(
-                    CharPlacement(
-                        char="",
-                        x=mp.x,
-                        y=mp.y,
-                        font_size=mp.font_size,
-                        page=page_idx,
-                        role=mp.role,
-                        line_segment=mp.line_segment,
-                    )
-                )
+                output.append(make_cp(
+                    char="",
+                    x=mp.x,
+                    y=mp.y,
+                    font_size=mp.font_size,
+                    page=page_idx,
+                    role=mp.role,
+                    line_segment=mp.line_segment,
+                ))
             elif len(mp.text) == 1 or mp.role == "operator":
-                output.append(
-                    CharPlacement(
-                        char=mp.text,
-                        x=mp.x,
-                        y=mp.y,
-                        font_size=mp.font_size,
-                        page=page_idx,
-                        role=mp.role,
-                        line_segment=mp.line_segment,
-                    )
-                )
+                output.append(make_cp(
+                    char=mp.text,
+                    x=mp.x,
+                    y=mp.y,
+                    font_size=mp.font_size,
+                    page=page_idx,
+                    role=mp.role,
+                    line_segment=mp.line_segment,
+                ))
             else:
                 for i, ch in enumerate(mp.text):
                     role = mp.role if i == 0 else None
                     seg = mp.line_segment if i == 0 else None
-                    output.append(
-                        CharPlacement(
-                            char=ch,
-                            x=mp.x + i * mp.font_size * _CHAR_WIDTH_RATIO,
-                            y=mp.y,
-                            font_size=mp.font_size,
-                            page=page_idx,
-                            role=role,
-                            line_segment=seg,
-                        )
-                    )
+                    output.append(make_cp(
+                        char=ch,
+                        x=mp.x + i * mp.font_size * _CHAR_WIDTH_RATIO,
+                        y=mp.y,
+                        font_size=mp.font_size,
+                        page=page_idx,
+                        role=role,
+                        line_segment=seg,
+                    ))
 
     @staticmethod
     def _rebuild_lines_with_math(

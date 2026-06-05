@@ -270,6 +270,28 @@ class TestGeometricFallbackOrder:
         assert renderer._last_coverage.ml_inference == []
         assert renderer._last_coverage.rect_fallback == []
 
+    def test_is_ml_deformable_excludes_digits(self):
+        # モデルはCJK(漢字/かな)のみ訓練。数字はML変形で字形が壊れるため除外。
+        for d in "0123456789":
+            assert StrokeRenderer._is_ml_deformable(d) is False
+        assert StrokeRenderer._is_ml_deformable("永") is True
+        assert StrokeRenderer._is_ml_deformable("あ") is True
+
+    def test_digits_bypass_ml_use_reference(self):
+        from pathlib import Path
+
+        renderer = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        fake = _FailingInference()
+        renderer._inference = fake
+        placement = CharPlacement(char="2", x=0.0, y=0.0, font_size=20.0, page=0)
+
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert fake.calls == 0  # 数字はML変形を呼ばない
+        assert renderer._last_coverage.ml_inference == []
+        assert "2" in renderer._last_coverage.kanjivg
+        assert len(strokes) >= 1
+
     @pytest.mark.parametrize("word", ["cos", "sin", "log", "dx"])
     def test_math_words_render_geometric(self, word):
         renderer = StrokeRenderer()
