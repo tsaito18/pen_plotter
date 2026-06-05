@@ -738,6 +738,8 @@ class Typesetter:
         # 本体中心位置を tag 幅から独立させるため、tag と tag 周辺の空白テキストを除外する
         tag_elem = next((e for e in elements if e.type == "tag"), None)
         body_elements = self._strip_tag_and_adjacent_spaces(elements)
+        # 画像レンダラに渡すソースから \tag{} を除去（matplotlib は \tag 非対応）
+        body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src).strip()
 
         # \\ 改行でグループ分割。linebreak が無いときは 1 グループ＝従来挙動。
         groups = self._split_by_linebreak(body_elements)
@@ -787,14 +789,14 @@ class Typesetter:
                 g_elems, x=center_x, y=baseline_y, font_size=self.font_size
             )
             # グループ単位の bbox を求めて skeletonize レンダラに渡す
-            # 複数グループ時は各グループの math_src を再構築できないため math_src 全体を渡す
+            # 複数グループ時は各グループの math_src を再構築できないため body_src 全体を渡す
             g_bbox = (
                 center_x,
                 baseline_y - placed.descent,
                 placed.width,
                 placed.ascent + placed.descent,
             )
-            self._convert_math_placements(placed.placements, page_idx, output, math_src, g_bbox)
+            self._convert_math_placements(placed.placements, page_idx, output, body_src, g_bbox)
 
         if tag_elem is not None:
             tag_y = last_baseline_y if group_boxes else center_y
