@@ -120,32 +120,34 @@ def _render_to_gray(math_src: str) -> np.ndarray | None:
         return None
 
     try:
-        fig = plt.figure(figsize=(8, 2), dpi=_RENDER_DPI)
-        fig.patch.set_facecolor("white")
-        ax = fig.add_axes([0, 0, 1, 1])
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_axis_off()
-        # 未エスケープの % だけ \% にする（既に \% になってるものは二重化しない）
-        safe_src = re.sub(r"(?<!\\)%", r"\\%", math_src)
-        ax.text(
-            0.5,
-            0.5,
-            f"${safe_src}$",
-            fontsize=_FONT_SIZE_PT,
-            ha="center",
-            va="center",
-            color="black",
-        )
-        buf = io.BytesIO()
-        fig.savefig(
-            buf,
-            format="png",
-            dpi=_RENDER_DPI,
-            bbox_inches="tight",
-            pad_inches=_PAD_INCHES,
-        )
-        plt.close(fig)
+        # Computer Modern（LaTeX 標準書体）でレンダリング。LaTeX 本体は不要。
+        with plt.rc_context({"mathtext.fontset": "cm"}):
+            fig = plt.figure(figsize=(8, 2), dpi=_RENDER_DPI)
+            fig.patch.set_facecolor("white")
+            ax = fig.add_axes([0, 0, 1, 1])
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.set_axis_off()
+            # 未エスケープの % だけ \% にする（既に \% になってるものは二重化しない）
+            safe_src = re.sub(r"(?<!\\)%", r"\\%", math_src)
+            ax.text(
+                0.5,
+                0.5,
+                f"${safe_src}$",
+                fontsize=_FONT_SIZE_PT,
+                ha="center",
+                va="center",
+                color="black",
+            )
+            buf = io.BytesIO()
+            fig.savefig(
+                buf,
+                format="png",
+                dpi=_RENDER_DPI,
+                bbox_inches="tight",
+                pad_inches=_PAD_INCHES,
+            )
+            plt.close(fig)
         buf.seek(0)
         return np.array(Image.open(buf).convert("L"))
     except Exception:
