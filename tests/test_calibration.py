@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from src.gcode.calibration import build_calibration_gcode
+from src.gcode.calibration import build_calibration_gcode, build_pen_z_calibration
 from src.gcode.config import PlotterConfig
 
 
@@ -90,3 +90,69 @@ class TestBuildCalibrationGcode:
         one = _g1_lines(build_calibration_gcode(strokes, ["harai"], [2.0]))
         three = _g1_lines(build_calibration_gcode(strokes, ["harai"], [2.0, 2.2, 2.4]))
         assert len(three) == 3 * len(one)
+
+
+def _horizontal_z_lines(lines):
+    """水平移動(X 含む) G1 行ごとの Z 値を順に返す。"""
+    zs = []
+    for ln in lines:
+        if ln.startswith("G1 X") and " Z" in f" {ln}":
+            for part in ln.split():
+                if part.startswith("Z"):
+                    zs.append(float(part[1:]))
+    return zs
+
+
+def _y_of_horizontal_lines(lines):
+    ys = []
+    for ln in lines:
+        if ln.startswith("G1 X") and " Z" in f" {ln}":
+            for part in ln.split():
+                if part.startswith("Y"):
+                    ys.append(float(part[1:]))
+    return ys
+
+
+class TestBuildPenZCalibration:
+    def test_header_footer_once(self):
+        lines = build_pen_z_calibration([3.5, 3.0, 2.5])
+        text = "\n".join(lines)
+        assert text.count("$H") == 1
+        assert text.count("G92") == 1
+
+    def test_one_line_per_z(self):
+        zs = [3.5, 3.0, 2.5, 2.0]
+        lines = build_pen_z_calibration(zs)
+        drawn = _horizontal_z_lines(lines)
+        assert drawn == zs  # 各Zで1本ずつ、指定順
+
+    def test_rows_descend_in_y(self):
+        lines = build_pen_z_calibration([3.5, 3.0, 2.5], y_top=270.0, row_spacing=12.0)
+        ys = _y_of_horizontal_lines(lines)
+        assert ys == sorted(ys, reverse=True)  # 上から下へ
+        assert ys[0] <= 270.0
+
+    def test_lines_are_horizontal(self):
+        """各校正線は水平（始点 Y と終点 Y が同じ）。"""
+        x0, length = 40.0, 80.0
+        lines = build_pen_z_calibration([3.0], x_origin=x0, line_length=length, y_top=200.0)
+        horiz = [ln for ln in lines if ln.startswith("G1 X") and " Z" in f" {ln}"]
+        assert len(horiz) == 1
+        x_val = float(horiz[0].split("X")[1].split()[0])
+        assert abs(x_val - (x0 + length)) < 1e-6
+
+    def test_empty_z_values_only_header_footer(self):
+        lines = build_pen_z_calibration([])
+        assert _horizontal_z_lines(lines) == []
+        assert "$H" in "\n".join(lines)
+
+    def test_within_paper(self):
+        cfg = PlotterConfig()
+        zs = [3.5 - 0.2 * i for i in range(15)]
+        lines = build_pen_z_calibration(zs, base_config=cfg)
+        for ln in lines:
+            if ln.startswith(("G0 X", "G1 X")):
+                x = float(ln.split("X")[1].split()[0])
+                y = float(ln.split("Y")[1].split()[0]) if "Y" in ln else 0.0
+                assert 0 <= x <= cfg.paper_width
+                assert 0 <= y <= cfg.paper_height
