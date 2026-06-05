@@ -176,6 +176,7 @@ def contact_profile(
     lift_length: float,
     harai_min: float = 0.0,
     hane_min: float = 0.0,
+    max_lift_fraction: float = 0.5,
 ) -> np.ndarray:
     """各点の接触率 ``contact ∈ [0, 1]`` 列を距離(mm)ベースで返す。
 
@@ -183,6 +184,12 @@ def contact_profile(
     無次元プロファイル。``1.0`` が完全接触（太く/濃く）、``0.0`` が完全リフト
     （細く/消える）。終端から ``lift_length`` mm 以内をリフト区間とし、終端で 0、
     境界で 1.0 へ。点数でなく**距離**で決めるため文字サイズに依らず同じ抜けになる。
+
+    ただしリフト区間がストローク全長を食い尽くすと画全体が薄くなる（短い画・
+    小さい字で「めっちゃ薄い」かすれの原因）。これを避けるため、実効リフト長を
+    ``全長 * max_lift_fraction`` で頭打ちにし、始点側に必ず完全接触（濃い）部分を
+    残す。全長が ``lift_length / max_lift_fraction`` を超える十分長い画では
+    ``lift_length`` がそのまま効き、サイズ非依存の固定 mm リフトになる。
 
     払い＝線形、はね＝二乗カーブ（終端付近で急峻）。とめ・none は全点 ``1.0``。
 
@@ -192,6 +199,8 @@ def contact_profile(
         lift_length: 終端リフト区間の長さ(mm)。``<=0`` でリフトなし。
         harai_min: 払い終端の最小接触率（``0`` で完全リフト）。
         hane_min: はね終端の最小接触率（``0`` で完全リフト）。
+        max_lift_fraction: リフト区間が占めてよい全長の最大割合（``0.5`` で
+            最大でも終端側半分のみリフト、始点側半分は完全接触を保つ）。
 
     Returns:
         ``arc_from_end`` と同長の接触率配列。先頭1.0寄り、終端へ単調非増加。
@@ -200,8 +209,13 @@ def contact_profile(
     contact = np.ones(len(arc), dtype=float)
     if len(arc) < 2 or finish not in (HARAI, HANE) or lift_length <= 0:
         return contact
+    # 実効リフト長: 全長の max_lift_fraction で頭打ち（短い画の全体かすれを防ぐ）
+    total = float(arc.max())
+    eff_lift = min(lift_length, total * max_lift_fraction)
+    if eff_lift <= 0:
+        return contact
     # 終端からの正規化位置 t: 終端0 → 境界1.0（境界より手前は1.0で頭打ち）
-    t = np.clip(arc / lift_length, 0.0, 1.0)
+    t = np.clip(arc / eff_lift, 0.0, 1.0)
     if finish == HARAI:
         contact = harai_min + (1.0 - harai_min) * t
     else:  # HANE: 終端付近で急峻

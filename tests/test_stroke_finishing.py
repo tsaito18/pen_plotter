@@ -176,8 +176,9 @@ class TestContactProfile:
         assert np.allclose(prof[arc > 5.0 + 1e-9], 1.0)
 
     def test_size_independent(self):
-        # 同じ lift_length(mm) なら、点数や全長が違っても終端付近の contact は一致。
-        small = contact_profile(HARAI, self._arc(8, 4.5), lift_length=2.5)
+        # 全長が lift_length/max_lift_fraction(=5mm) を超える「十分長い画」なら、
+        # 点数や全長が違っても終端付近の contact は一致（固定 mm のリフト区間）。
+        small = contact_profile(HARAI, self._arc(12, 6.0), lift_length=2.5)
         large = contact_profile(HARAI, self._arc(40, 20.0), lift_length=2.5)
         # 終端から 2.5mm 地点(=リフト境界)で両者 contact≈1.0、終端で 0
         assert np.isclose(small[-1], 0.0, atol=1e-9)
@@ -188,9 +189,9 @@ class TestContactProfile:
             # arc は終端0→始点全長で降順。np.interp 用に昇順化して補間。
             return float(np.interp(d, arc[::-1], prof[::-1]))
 
-        cs = contact_at(small, self._arc(8, 4.5), 1.25)
+        cs = contact_at(small, self._arc(12, 6.0), 1.25)
         cl = contact_at(large, self._arc(40, 20.0), 1.25)
-        assert abs(cs - cl) < 1e-6  # サイズ非依存（式は arc/lift_length のみ）
+        assert abs(cs - cl) < 1e-6  # サイズ非依存（十分長い画では arc/lift_length のみ）
         assert abs(cs - 0.5) < 1e-6
 
     def test_hane_steeper_than_harai(self):
@@ -201,12 +202,25 @@ class TestContactProfile:
         i = int(np.argmin(np.abs(arc - 2.5)))
         assert hane[i] < harai[i]
 
-    def test_lift_length_exceeds_stroke_safe(self):
+    def test_short_stroke_keeps_solid_head(self):
+        # 短い画(全長2mm)に長いlift_lengthを与えても、リフトは全長の
+        # max_lift_fraction(=50%)で頭打ち。始点側は完全接触を保ち「全体が
+        # 薄くなる」のを防ぐ（はね・払い分類された短画のかすれ対策）。
         arc = self._arc(5, 2.0)
         prof = contact_profile(HARAI, arc, lift_length=10.0)
         assert len(prof) == 5
-        assert np.isclose(prof[-1], 0.0, atol=1e-9)
-        assert prof[0] < 1.0  # 全体がリフト区間に入る
+        assert np.isclose(prof[-1], 0.0, atol=1e-9)  # 終端は完全リフト
+        assert np.isclose(prof[0], 1.0, atol=1e-9)  # 始点は完全接触（濃い）
+        # 始点側ほぼ半分は接触1.0（全長2mmの内、終端1mmのみリフト）
+        assert np.allclose(prof[arc >= 1.0 + 1e-9], 1.0)
+
+    def test_short_stroke_not_faint_over_whole_length(self):
+        # 回帰: lift_length より短い画でも、平均接触が高く保たれる
+        # （旧実装は始点から薄くなり字が「めっちゃうすく」なっていた）。
+        arc = self._arc(10, 1.5)
+        prof = contact_profile(HARAI, arc, lift_length=2.5)
+        assert prof[0] == 1.0
+        assert float(prof.mean()) > 0.6
 
     def test_short_stroke_guard(self):
         prof = contact_profile(HARAI, np.array([0.0]), lift_length=5.0)
