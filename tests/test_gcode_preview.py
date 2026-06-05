@@ -149,8 +149,9 @@ class TestComputeStrokeWidthsFinish:
             mid_from_end = length - (xs[:-1] + xs[1:]) / 2.0
             return float(np.interp(d, mid_from_end[::-1], np.array(w)[::-1]))
 
-        coarse = width_at(16.0, 9, 1.25)
-        fine = width_at(16.0, 33, 1.25)
+        # 二乗イーズインの曲線を解像できる現実的な密度で比較（実ストロークは~32点）。
+        coarse = width_at(16.0, 17, 1.25)
+        fine = width_at(16.0, 65, 1.25)
         assert abs(coarse - fine) < 0.05  # 同じmm距離なら点数によらず一致
 
     def test_unknown_finish_falls_back_to_none(self):

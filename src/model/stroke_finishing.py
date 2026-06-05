@@ -191,7 +191,9 @@ def contact_profile(
     残す。全長が ``lift_length / max_lift_fraction`` を超える十分長い画では
     ``lift_length`` がそのまま効き、サイズ非依存の固定 mm リフトになる。
 
-    払い＝線形、はね＝二乗カーブ（終端付近で急峻）。とめ・none は全点 ``1.0``。
+    払い＝二乗イーズイン（終端直前まで接触を高く保ち先端だけ抜く＝``x^2`` 状に
+    上がる）、はね＝二乗イーズアウト（境界側から早く抜けて終端で跳ねる）。
+    とめ・none は全点 ``1.0``。
 
     Args:
         finish: :data:`TOME` / :data:`HANE` / :data:`HARAI` / :data:`NONE`。
@@ -217,8 +219,10 @@ def contact_profile(
     # 終端からの正規化位置 t: 終端0 → 境界1.0（境界より手前は1.0で頭打ち）
     t = np.clip(arc / eff_lift, 0.0, 1.0)
     if finish == HARAI:
-        contact = harai_min + (1.0 - harai_min) * t
-    else:  # HANE: 終端付近で急峻
+        # 二乗イーズイン: 終端直前まで接触≈1（濃い）を保ち、先端だけ曲線的に抜く。
+        # lift量 = (1-t)^2 ＝終端からの距離の二乗 →「x^2 みたいに上がる」。
+        contact = harai_min + (1.0 - harai_min) * (1.0 - (1.0 - t) ** 2)
+    else:  # HANE: 二乗イーズアウト（境界側から早く抜けて終端で跳ねる）
         contact = hane_min + (1.0 - hane_min) * t**2
     return contact
 

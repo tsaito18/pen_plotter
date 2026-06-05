@@ -178,21 +178,41 @@ class TestContactProfile:
     def test_size_independent(self):
         # 全長が lift_length/max_lift_fraction(=5mm) を超える「十分長い画」なら、
         # 点数や全長が違っても終端付近の contact は一致（固定 mm のリフト区間）。
-        small = contact_profile(HARAI, self._arc(12, 6.0), lift_length=2.5)
-        large = contact_profile(HARAI, self._arc(40, 20.0), lift_length=2.5)
+        # 曲線(イーズイン)の補間誤差を抑えるため十分密にサンプリングする。
+        small_arc, large_arc = self._arc(97, 6.0), self._arc(161, 20.0)
+        small = contact_profile(HARAI, small_arc, lift_length=2.5)
+        large = contact_profile(HARAI, large_arc, lift_length=2.5)
         # 終端から 2.5mm 地点(=リフト境界)で両者 contact≈1.0、終端で 0
         assert np.isclose(small[-1], 0.0, atol=1e-9)
         assert np.isclose(large[-1], 0.0, atol=1e-9)
 
-        # 終端から 1.25mm(リフト中間)地点の contact が一致(線形なら≈0.5)
+        # 終端から 1.25mm(リフト中間)地点の contact が一致
         def contact_at(prof, arc, d):
             # arc は終端0→始点全長で降順。np.interp 用に昇順化して補間。
             return float(np.interp(d, arc[::-1], prof[::-1]))
 
-        cs = contact_at(small, self._arc(12, 6.0), 1.25)
-        cl = contact_at(large, self._arc(40, 20.0), 1.25)
-        assert abs(cs - cl) < 1e-6  # サイズ非依存（十分長い画では arc/lift_length のみ）
-        assert abs(cs - 0.5) < 1e-6
+        cs = contact_at(small, small_arc, 1.25)
+        cl = contact_at(large, large_arc, 1.25)
+        # サイズ非依存（式は arc/eff_lift のみ）。差は補間サンプル密度の違いのみ。
+        assert abs(cs - cl) < 2e-3
+        # 払いは二乗イーズイン contact=1-(1-t)^2。t=0.5 → 1-0.25=0.75
+        assert abs(cs - 0.75) < 2e-3
+
+    def test_harai_ease_in_quadratic(self):
+        # 払いの上がりは線形でなく二乗カーブ（イーズイン）: 終端付近まで接触を
+        # 高く保ち、終端直前で曲線的に抜ける。lift=(1-t)^2 で「x^2 みたいに上がる」。
+        # 全長(12) > lift_length/max_lift_fraction(=10) なので eff_lift=lift_length=5。
+        arc = self._arc(241, 12.0)
+        prof = contact_profile(HARAI, arc, lift_length=5.0)
+
+        def contact_at(d):
+            return float(np.interp(d, arc[::-1], prof[::-1]))
+
+        # 終端0・境界1、各 t での値が 1-(1-t)^2 に一致
+        for d, t in [(0.0, 0.0), (1.25, 0.25), (2.5, 0.5), (3.75, 0.75), (5.0, 1.0)]:
+            assert abs(contact_at(d) - (1.0 - (1.0 - t) ** 2)) < 1e-3
+        # 線形(=t)より各中間点で接触が高い（=上がりが緩やか・遅い）
+        assert contact_at(2.5) > 0.5
 
     def test_hane_steeper_than_harai(self):
         arc = self._arc(20, 19.0)

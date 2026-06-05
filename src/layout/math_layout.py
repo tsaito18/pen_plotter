@@ -481,7 +481,7 @@ class MathLayoutEngine:
     def _layout_script(
         elem: MathElement, x: float, y: float, font_size: float, *, is_sup: bool
     ) -> MathBox:
-        script_font = font_size * 0.65
+        script_font = font_size * 0.75
         if is_sup:
             offset_y = font_size * 0.4
             role = "superscript"
