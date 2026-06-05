@@ -28,8 +28,9 @@ class PlotterConfig:
     # pen_down_z は補間の基準となる接触高さ。pen_down_command の Z 値と一致させること。
     pen_down_z: float = 3.5
     # 終端で芯を持ち上げる到達高さ。pen_up_z(0.5) < finish_lift_z < pen_down_z(3.5)。
-    # 芯が完全に離れない手前。実機計測で浮き始め≈2.6、払いが最も自然なのは 2.2。
-    finish_lift_z: float = 2.2
+    # 実機計測で芯の浮き始め≈2.7。それより下げると余計に持ち上がる（上がりが急・
+    # 過大）だけで線は変わらないため、浮き始め直下の 2.6 に留める＝最小リフト。
+    finish_lift_z: float = 2.6
     # 終端のリフト区間長(mm)。終端からこの距離でZを接触→finish_lift_zへ漸減する。
     # 点数でなく実距離なので文字サイズに依らず同じ抜けになる（小さい字でも先細る）。
     finish_lift_length_mm: float = 2.5

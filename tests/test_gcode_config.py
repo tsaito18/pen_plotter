@@ -27,7 +27,7 @@ class TestPlotterConfigDefaults:
     def test_finish_lift_params(self, plotter_config: PlotterConfig):
         # 終端Zリフト（払い・はねの接触圧抜き）パラメータ。
         assert plotter_config.pen_down_z == 3.5
-        assert plotter_config.finish_lift_z == 2.2
+        assert plotter_config.finish_lift_z == 2.6
         assert plotter_config.finish_lift_length_mm == 2.5
         assert plotter_config.harai_speed_factor == 0.5
         assert plotter_config.hane_speed_factor == 1.3

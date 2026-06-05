@@ -478,10 +478,10 @@ class StrokeRenderer:
             arch = np.stack([0.5 + 0.3 * np.cos(t), 0.55 + 0.15 * np.sin(t)], axis=1)
             stem_right = np.array([[0.8, 0.7], [0.8, 0.2]], dtype=np.float64)
             return [stem_left, arch, stem_right]
-        elif char == "\u03bb":  # \u03bb: \u659c\u3081\u306e\u00d7 \uff08/ + \u77ed\u3044 \\uff09
-            main = np.array([[0.15, 0.05], [0.85, 0.95]], dtype=np.float64)
-            cross = np.array([[0.3, 0.55], [0.1, 0.95]], dtype=np.float64)
-            return [main, cross]
+        elif char == "\u03bb":  # \u03bb: \u9006V\u5b57\uff08\u5de6\u811a\u304c\u4e0a\u4e2d\u592e\u3078\u3001\u53f3\u811a\u304c\u53f3\u4e0b\u3078\uff09
+            left_leg = np.array([[0.15, 0.05], [0.45, 0.90]], dtype=np.float64)
+            right_leg = np.array([[0.45, 0.90], [0.85, 0.05]], dtype=np.float64)
+            return [left_leg, right_leg]
         elif (
             char == "\u03bc"
         ):  # \u03bc: u\u5b57\u578b + \u5de6\u811a\u304c\u30d9\u30fc\u30b9\u30e9\u30a4\u30f3\u4e0b\u307e\u3067\u5ef6\u3073\u308b
