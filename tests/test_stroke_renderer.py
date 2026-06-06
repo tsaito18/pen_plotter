@@ -1,4 +1,5 @@
 """StrokeRenderer の単体テスト。"""
+
 import json
 
 import numpy as np
@@ -56,6 +57,22 @@ class TestStrokeRendererMethods:
         assert len(result) == 1
         assert result[0].shape == (5, 2)
 
+    def test_position_strokes_slant_rotates(self):
+        from src.layout.typesetter import CharPlacement
+
+        renderer = StrokeRenderer()
+        strokes = [np.array([[0.0, 0.0], [1.0, 0.0]]), np.array([[0.0, 0.5], [1.0, 0.5]])]
+        straight = renderer._position_strokes(
+            strokes, CharPlacement(char="a", x=10.0, y=20.0, font_size=5.0, slant=0.0)
+        )
+        slanted = renderer._position_strokes(
+            strokes, CharPlacement(char="a", x=10.0, y=20.0, font_size=5.0, slant=0.2)
+        )
+        # 傾きで座標が変わる（文字内の全画が回転）
+        assert not np.allclose(np.concatenate(straight), np.concatenate(slanted))
+        # 点数・本数は不変
+        assert [s.shape for s in straight] == [s.shape for s in slanted]
+
     def test_math_symbol_strokes(self):
         renderer = StrokeRenderer()
         result = renderer._math_symbol_strokes("π")
@@ -74,6 +91,23 @@ class TestStrokeRendererMethods:
         p = CharPlacement(char="(", x=10.0, y=20.0, font_size=5.0)
         result = renderer._simple_paren_strokes("(", p)
         assert result is not None
+
+    def test_paren_open_direction(self):
+        # 「(」は中央が左に凸（開口は右向き）、「)」は中央が右に凸（開口は左向き）。
+        # 単位セル(0..1)の生座標で膨らみの向きを検証する。
+        from src.layout.typesetter import CharPlacement
+
+        renderer = StrokeRenderer()
+        p = CharPlacement(char="(", x=0.0, y=0.0, font_size=5.0)
+
+        open_pts = renderer._simple_paren_strokes("（", p)[0]
+        close_pts = renderer._simple_paren_strokes("）", p)[0]
+        open_mid_x = open_pts[len(open_pts) // 2][0]
+        open_end_x = open_pts[0][0]
+        close_mid_x = close_pts[len(close_pts) // 2][0]
+        close_end_x = close_pts[0][0]
+        assert open_mid_x < open_end_x  # 「(」: 中央が端より左
+        assert close_mid_x > close_end_x  # 「)」: 中央が端より右
 
     def test_renders_line_segment(self):
         from src.layout.typesetter import CharPlacement
@@ -98,9 +132,7 @@ class TestStrokeRendererMethods:
 class TestAsciiMathSymbols:
     """数式で頻出する ASCII 記号は矩形フォールバックではなく幾何で描画する。"""
 
-    @pytest.mark.parametrize(
-        "char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?"]
-    )
+    @pytest.mark.parametrize("char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%"])
     def test_ascii_math_renders_geometric(self, char):
         from src.layout.typesetter import CharPlacement
 
@@ -120,7 +152,7 @@ class TestAsciiMathSymbols:
     def test_ascii_math_internal_unit_box(self):
         """_ascii_math_strokes は単位正方形 (0,0)-(1,1) 内に座標を返す。"""
         renderer = StrokeRenderer()
-        for char in ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?"]:
+        for char in ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%"]:
             result = renderer._ascii_math_strokes(char)
             assert result is not None, f"'{char}' returned None"
             assert len(result) >= 1
@@ -151,6 +183,29 @@ class TestAsciiMathSymbols:
         assert result is not None
         assert len(result) == 2
 
+    def test_percent_has_diagonal_and_two_circles(self):
+        """`%` は斜線 1 本＋左上・右下の小円 2 本の計 3 ストローク。"""
+        renderer = StrokeRenderer()
+        result = renderer._ascii_math_strokes("%")
+        assert result is not None
+        assert len(result) == 3
+        # 斜線は右上がり（始点が左下・終点が右上）
+        diag = result[0]
+        assert diag[0][0] < diag[-1][0] and diag[0][1] < diag[-1][1]
+        # 小円 2 本は閉じている（始点≈終点）
+        for circle in result[1:]:
+            assert np.allclose(circle[0], circle[-1], atol=1e-6)
+
+    @pytest.mark.parametrize("char", ["S", "s"])
+    def test_s_not_mirrored(self, char):
+        """S/s は上が左・下が右に膨らむ正しい向き（左右反転 Ƨ でない）。"""
+        renderer = StrokeRenderer()
+        stroke = renderer._ascii_letter_strokes(char)[0]
+        # 最も左へ張り出す点は上側(yが大)、最も右は下側(yが小)
+        left_pt = stroke[np.argmin(stroke[:, 0])]
+        right_pt = stroke[np.argmax(stroke[:, 0])]
+        assert left_pt[1] > right_pt[1]
+
     def test_fullwidth_normalized_to_ascii(self):
         """全角プラスも幾何ルートで処理される（_CHAR_SUBSTITUTIONS 経由）。"""
         renderer = StrokeRenderer()
@@ -168,6 +223,86 @@ class _FailingInference:
     def generate(self, *args, **kwargs):
         self.calls += 1
         raise self.exc
+
+
+class _RecordingInference:
+    """deform_scale を記録し、参照ストロークをそのまま返すフェイク。"""
+
+    def __init__(self) -> None:
+        self.deform_scales: list[float] = []
+
+    def generate(self, style_sample, *, reference_strokes=None, deform_scale=1.0, **kwargs):
+        self.deform_scales.append(deform_scale)
+        return [np.asarray(s, dtype=float) for s in (reference_strokes or [])]
+
+
+class TestWaverScaleByStrokeCount:
+    """画数が多い字ほど揺らぎ(distortion/ML offset)を落として固まりを防ぐ。"""
+
+    def test_waver_scale_decreasing_and_clamped(self):
+        f = StrokeRenderer._waver_scale
+        assert f(1) == pytest.approx(1.0)
+        assert f(10) == pytest.approx(1.0)  # 閾値以下は満額
+        assert f(30) == pytest.approx(0.3)  # 高画数は下限
+        # 単調非増加
+        vals = [f(n) for n in range(1, 31)]
+        assert all(b <= a + 1e-9 for a, b in zip(vals, vals[1:]))
+        # 中間(15画)は 1.0 と 0.3 の間
+        assert 0.3 < f(15) < 1.0
+
+    def test_apply_distortion_zero_scale_is_identity(self):
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        r = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
+        s = [np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 1.0]], dtype=float)]
+        out = r._apply_distortion(s, waver_scale=0.0)
+        assert np.allclose(out[0], s[0])  # 揺らぎ0なら不変
+
+    def test_instance_variation_makes_repeats_differ(self):
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        r = StrokeRenderer(
+            augmenter=HandwritingAugmenter(AugmentConfig(), seed=0),
+            instance_variation=0.6,
+        )
+        s = [np.array([[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], dtype=float)]
+        a = r._apply_instance_variation([s[0].copy()])
+        b = r._apply_instance_variation([s[0].copy()])
+        assert not np.allclose(a[0], b[0])  # RNG が進み毎回違う
+
+    def test_instance_variation_zero_is_identity(self):
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        r = StrokeRenderer(
+            augmenter=HandwritingAugmenter(AugmentConfig(), seed=0),
+            instance_variation=0.0,
+        )
+        s = np.array([[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], dtype=float)
+        out = r._apply_instance_variation([s.copy()])
+        assert np.allclose(out[0], s)  # 強度0は恒等
+
+    def test_instance_variation_disabled_aug_is_identity(self):
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        r = StrokeRenderer(
+            augmenter=HandwritingAugmenter(AugmentConfig(enabled=False), seed=0),
+            instance_variation=0.6,
+        )
+        s = np.array([[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], dtype=float)
+        out = r._apply_instance_variation([s.copy()])
+        assert np.allclose(out[0], s)  # クリーンモード(aug無効)は変動なし
+
+    def test_dense_char_gets_smaller_deform_scale(self):
+        from pathlib import Path
+
+        r = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        rec = _RecordingInference()
+        r._inference = rec
+        for ch in ["一", "機"]:  # 1画 vs 16画
+            r.generate_char_strokes(CharPlacement(char=ch, x=0.0, y=0.0, font_size=4.5, page=0))
+        simple, dense = rec.deform_scales
+        assert simple == pytest.approx(1.0)
+        assert dense < simple  # 多画字はML変形を縮小
 
 
 class TestGeometricFallbackOrder:
@@ -225,6 +360,28 @@ class TestGeometricFallbackOrder:
         assert renderer._last_coverage.ml_inference == []
         assert renderer._last_coverage.rect_fallback == []
 
+    def test_is_ml_deformable_excludes_digits(self):
+        # モデルはCJK(漢字/かな)のみ訓練。数字はML変形で字形が壊れるため除外。
+        for d in "0123456789":
+            assert StrokeRenderer._is_ml_deformable(d) is False
+        assert StrokeRenderer._is_ml_deformable("永") is True
+        assert StrokeRenderer._is_ml_deformable("あ") is True
+
+    def test_digits_bypass_ml_use_reference(self):
+        from pathlib import Path
+
+        renderer = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        fake = _FailingInference()
+        renderer._inference = fake
+        placement = CharPlacement(char="2", x=0.0, y=0.0, font_size=20.0, page=0)
+
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert fake.calls == 0  # 数字はML変形を呼ばない
+        assert renderer._last_coverage.ml_inference == []
+        assert "2" in renderer._last_coverage.kanjivg
+        assert len(strokes) >= 1
+
     @pytest.mark.parametrize("word", ["cos", "sin", "log", "dx"])
     def test_math_words_render_geometric(self, word):
         renderer = StrokeRenderer()
@@ -254,7 +411,10 @@ class TestGeometricFallbackOrder:
 class TestExtendedMathSymbols:
     """LaTeX シンボルマップ追加で頻出する Unicode 記号がストロークになることを確認する。"""
 
-    @pytest.mark.parametrize("char", ["ω", "π", "θ", "α", "β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"])
+    @pytest.mark.parametrize(
+        "char",
+        ["ω", "π", "θ", "α", "β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"],
+    )
     def test_math_symbol_renders(self, char):
         from src.layout.typesetter import CharPlacement
 
@@ -266,7 +426,9 @@ class TestExtendedMathSymbols:
         is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
         assert not is_rect_fallback, f"'{char}' fell back to rect"
 
-    @pytest.mark.parametrize("char", ["β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"])
+    @pytest.mark.parametrize(
+        "char", ["β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"]
+    )
     def test_extended_unicode_in_unit_box(self, char):
         renderer = StrokeRenderer()
         result = renderer._math_symbol_strokes(char)
@@ -290,9 +452,7 @@ class TestKanjiVGReferenceFinishing:
 
     def test_load_reference_strokes_returns_strokes_and_types(self, tmp_path):
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
 
         strokes, types = renderer._load_reference_strokes("ノ")
@@ -331,9 +491,7 @@ class TestKanjiVGReferenceFinishing:
 
     def test_load_kanjivg_json_returns_strokes_and_types(self, tmp_path):
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
         placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
 
@@ -346,9 +504,7 @@ class TestKanjiVGReferenceFinishing:
     def test_safety_net_finishing_changes_harai_terminal(self, tmp_path):
         # inference=None・kanjivg_dir のみ → safety-net 経路 (_load_kanjivg_json)
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         placement = CharPlacement(char="ノ", x=10.0, y=20.0, font_size=8.0, page=0)
 
         renderer_on = StrokeRenderer(kanjivg_dir=kanjivg_dir, enable_finishing=True)
@@ -368,9 +524,7 @@ class TestKanjiVGReferenceFinishing:
 
     def test_finishing_disabled_leaves_strokes_identical(self, tmp_path):
         kanjivg_dir = tmp_path / "strokes"
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         placement = CharPlacement(char="ノ", x=10.0, y=20.0, font_size=8.0, page=0)
         renderer_off = StrokeRenderer(kanjivg_dir=kanjivg_dir, enable_finishing=False)
 
@@ -386,9 +540,7 @@ class TestKanjiVGReferenceFinishing:
         kanjivg_dir = tmp_path / "strokes"
         _create_user_stroke_json(user_dir, "ノ", _HARAI_STROKES)
         # KanjiVG にも同字を置くが direct が優先されるので使われない
-        _create_user_stroke_json(
-            kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES
-        )
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
         placement = CharPlacement(char="ノ", x=10.0, y=20.0, font_size=8.0, page=0)
         renderer = StrokeRenderer(
             user_strokes_dir=user_dir, kanjivg_dir=kanjivg_dir, enable_finishing=True
@@ -401,3 +553,103 @@ class TestKanjiVGReferenceFinishing:
         # direct 経路は加工で点が増えていない（元の点数を維持）
         for s in strokes:
             assert s.shape[0] == 5
+
+
+class TestGenerateCharStrokesWithFinishes:
+    """generate_char_strokes_with_finishes の (strokes, finishes) 並走契約。"""
+
+    def test_returns_strokes_and_finishes_len_match_geometric(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="+", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == len(finishes)
+        assert finishes == ["none"] * len(strokes)
+
+    def test_geometric_paths_all_none(self):
+        renderer = StrokeRenderer()
+        # 句読点 / ASCII数式 / 括弧 / 数式記号 / ASCIIレター / 数式ワード
+        for char in ("、", "=", "(", "×", "A", "α"):
+            placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+            strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+            assert len(strokes) == len(finishes), f"{char}: len mismatch"
+            assert set(finishes) <= {"none"}, f"{char}: non-none finish leaked"
+
+    def test_math_word_all_none(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="cos", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == len(finishes)
+        assert finishes == ["none"] * len(strokes)
+
+    def test_line_segment_returns_none_finish(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(
+            char="", x=0.0, y=0.0, font_size=8.0, page=0, line_segment=(0.0, 0.0, 1.0, 1.0)
+        )
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == 1
+        assert finishes == ["none"]
+
+    def test_skip_render_returns_empty_pair(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char=" ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert strokes == []
+        assert finishes == []
+
+    def test_rect_fallback_returns_none_finish(self):
+        # 参照なし・推論なし → 矩形フォールバック
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="漢", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == len(finishes)
+        assert finishes == ["none"] * len(strokes)
+
+    def test_direct_stroke_all_none(self, tmp_path):
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(user_dir, "ノ", _HARAI_STROKES)
+        renderer = StrokeRenderer(user_strokes_dir=user_dir)
+        placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert renderer._last_coverage.user_strokes == ["ノ"]
+        assert len(strokes) == len(finishes)
+        assert finishes == ["none"] * len(strokes)
+
+    def test_kanjivg_safety_net_emits_harai(self, tmp_path):
+        kanjivg_dir = tmp_path / "strokes"
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
+        renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
+        placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert renderer._last_coverage.kanjivg == ["ノ"]
+        assert len(strokes) == len(finishes)
+        # 第1画=横画(㇐)→tome, 第2画=左払い(㇒)→harai
+        assert finishes == ["tome", "harai"]
+
+    def test_backward_compat_generate_char_strokes_returns_strokes_only(self, tmp_path):
+        kanjivg_dir = tmp_path / "strokes"
+        _create_user_stroke_json(kanjivg_dir, "ノ", _HARAI_STROKES, stroke_types=_HARAI_TYPES)
+        renderer = StrokeRenderer(kanjivg_dir=kanjivg_dir)
+        placement = CharPlacement(char="ノ", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        result = renderer.generate_char_strokes(placement)
+
+        # ラッパーは strokes（list[Stroke]）のみ返す（タプルではない）
+        assert isinstance(result, list)
+        assert not isinstance(result, tuple)
+        strokes, _ = renderer.generate_char_strokes_with_finishes(placement)
+        assert len(result) == len(strokes)

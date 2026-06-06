@@ -75,6 +75,21 @@ _EXAMPLE_ESSAY = """\
 社会全体で議論を深めていく必要があるだろう。
 """
 
+_EXAMPLE_TABLE = """\
+# 引張試験結果
+
+各供試材の機械的性質を表に示す。
+
+| 材料 | 降伏応力 | 引張強さ | 伸び |
+|---|---|---|---|
+| SS400 | 245 | 400 | 28 |
+| S35C | 305 | 510 | 23 |
+| SUS304 | 205 | 520 | 40 |
+: 表1 各材料の機械的性質
+
+降伏応力は SUS304 が最も低く、引張強さは S35C と SUS304 が高い。
+"""
+
 _HELP_MARKDOWN = """\
 ### 書式リファレンス
 
@@ -86,6 +101,8 @@ _HELP_MARKDOWN = """\
 | 分数 | `$\\frac{a}{b}$` | 分子/分母を上下に配置 |
 | 上付き・下付き | `$x^2$` / `$f_0$` | 指数・添字 |
 | ギリシャ文字 | `$\\alpha$` `$\\beta$` `$\\omega$` | 主要なギリシャ文字に対応 |
+| 表 | `\\| 列1 \\| 列2 \\|`<br>`\\|---\\|---\\|`<br>`\\| a \\| b \\|` | パイプ表（2行目の区切り必須）。中央寄せで描画 |
+| 表キャプション | 表の直後に `: 表1 タイトル` | 表の下に中央寄せで配置 |
 | 段落区切り | 空行 | 空行で段落を分割 |
 
 ### 対応文字
@@ -189,6 +206,29 @@ def _cleanup_paths(paths: Iterable[str | Path] | None) -> None:
             logger.debug("temp cleanup failed for %s: %s", p, exc)
 
 
+def _resolve_restored_profile(
+    stored_profile: str | None,
+    profile_ids: list[str],
+    default_profile: str | None,
+) -> str | None:
+    """永続化された profile_id を現在の選択肢に照合して解決する。
+
+    保存後にプロファイルが削除/リネームされていた場合に備え、
+    現在の選択肢に存在しない値はデフォルトへフォールバックする。
+
+    Args:
+        stored_profile: localStorage から復元した profile_id。
+        profile_ids: 現在利用可能な profile_id 一覧。
+        default_profile: フォールバック先（通常は先頭プロファイル）。
+
+    Returns:
+        有効な profile_id、または default_profile。
+    """
+    if stored_profile is not None and stored_profile in profile_ids:
+        return stored_profile
+    return default_profile
+
+
 def _validation_status(errors: list[str]) -> str:
     """validate() の戻り値を赤色 HTML で表示するためのフラグメント。"""
     if not errors:
@@ -258,6 +298,10 @@ def create_app(
 
     with gr.Blocks(title="Pen Plotter") as app:
         settings_state = gr.State(value=default_settings)
+        # ブラウザ localStorage への永続化。同一ブラウザで再訪時に設定を復元する。
+        # storage_key にバージョン接尾辞を付け、将来の構造変更時に破棄しやすくする。
+        persisted_settings = gr.BrowserState(None, storage_key="pen_plotter_settings_v1")
+        persisted_profile = gr.BrowserState(None, storage_key="pen_plotter_profile_v1")
         # stale=True なら「設定が変わったがプレビュー未更新」状態
         preview_stale = gr.State(value=False)
         # 旧プレビューの一時パスを保持し、再生成時に確実にクリーンアップする
@@ -287,6 +331,7 @@ def create_app(
                         ex_report_btn = gr.Button("レポートヘッダー", size="sm")
                         ex_math_btn = gr.Button("数式レポート", size="sm")
                         ex_essay_btn = gr.Button("小論文", size="sm")
+                        ex_table_btn = gr.Button("表サンプル", size="sm")
 
             # ========== 中央カラム: プレビュー ==========
             with gr.Column(scale=3):
@@ -373,6 +418,46 @@ def create_app(
                     label="温度",
                     info="高いほど文字の揺らぎが大きくなります",
                 )
+                messiness = gr.Slider(
+                    0.0,
+                    2.0,
+                    value=default_settings.messiness,
+                    step=0.1,
+                    label="汚さ",
+                    info="行内の上下動・字間・サイズ・傾きのばらつき。0=整った字、2=大きく乱れる",
+                )
+                pressure_variation = gr.Slider(
+                    0.0,
+                    1.0,
+                    value=default_settings.pressure_variation,
+                    step=0.05,
+                    label="筆圧変化",
+                    info="画の中の濃淡（プレビュー演出用）。実機は描画中Zが振れて点線化するため0推奨",
+                )
+                instance_variation = gr.Slider(
+                    0.0,
+                    1.0,
+                    value=default_settings.instance_variation,
+                    step=0.05,
+                    label="字のばらつき",
+                    info="同じ字を毎回少し変える。0=毎回同じ形、大=書くたびに違う",
+                )
+                entry_taper = gr.Slider(
+                    0.0,
+                    1.0,
+                    value=default_settings.entry_taper,
+                    step=0.05,
+                    label="入筆",
+                    info="始筆を軽く入れて立ち上げる筆の入り。実機は始筆がかすれ得るため0推奨",
+                )
+                connection_strength = gr.Slider(
+                    0.0,
+                    1.0,
+                    value=default_settings.connection_strength,
+                    step=0.05,
+                    label="連綿（続け字）",
+                    info="同じ字の近い画を薄い線で続ける。近いほど高確率＋乱数。Z一定で点線化しない",
+                )
 
                 reset_btn = gr.Button("デフォルトに戻す", size="sm")
                 validation_md = gr.HTML(value="", visible=False)
@@ -391,6 +476,11 @@ def create_app(
             travel_speed,
             pen_delay,
             temperature,
+            messiness,
+            pressure_variation,
+            instance_variation,
+            entry_taper,
+            connection_strength,
         ]
 
         # ===== コールバック =====
@@ -426,6 +516,7 @@ def create_app(
                     gr.update(value=_validation_status(errors), visible=has_err),
                     gr.update(interactive=not has_err),
                     gr.update(interactive=not has_err),
+                    new_settings.to_dict(),  # ブラウザ永続化
                 )
 
             return _update
@@ -441,6 +532,11 @@ def create_app(
             travel_speed: "travel_speed",
             pen_delay: "pen_delay",
             temperature: "temperature",
+            messiness: "messiness",
+            pressure_variation: "pressure_variation",
+            instance_variation: "instance_variation",
+            entry_taper: "entry_taper",
+            connection_strength: "connection_strength",
         }
         for slider, field in slider_field_map.items():
             slider.change(
@@ -453,19 +549,21 @@ def create_app(
                     validation_md,
                     preview_btn,
                     gcode_btn,
+                    persisted_settings,
                 ],
             )
 
-        def _on_profile_change(_profile_id: str | None):
+        def _on_profile_change(profile_id: str | None):
             return (
                 True,
                 gr.update(value=_STALE_BANNER_HTML, visible=True),
+                profile_id,  # ブラウザ永続化
             )
 
         profile_select.change(
             _on_profile_change,
             inputs=[profile_select],
-            outputs=[preview_stale, stale_banner],
+            outputs=[preview_stale, stale_banner, persisted_profile],
         )
 
         def _on_preview(
@@ -669,6 +767,12 @@ def create_app(
                 d.travel_speed,
                 d.pen_delay,
                 d.temperature,
+                d.messiness,
+                d.pressure_variation,
+                d.instance_variation,
+                d.entry_taper,
+                d.connection_strength,
+                d.to_dict(),  # ブラウザ永続化もデフォルトへ
             )
 
         reset_btn.click(
@@ -681,11 +785,59 @@ def create_app(
                 preview_btn,
                 gcode_btn,
                 *slider_components,
+                persisted_settings,
             ],
         )
 
         ex_report_btn.click(lambda: _EXAMPLE_REPORT_HEADER, outputs=[text_input])
         ex_math_btn.click(lambda: _EXAMPLE_MATH_REPORT, outputs=[text_input])
         ex_essay_btn.click(lambda: _EXAMPLE_ESSAY, outputs=[text_input])
+        ex_table_btn.click(lambda: _EXAMPLE_TABLE, outputs=[text_input])
+
+        # ページロード時にブラウザ localStorage から設定を復元する。
+        # 永続値が無ければ UISettings.from_dict(None) が default() を返すため、
+        # 初回訪問時は通常のデフォルト表示になる。
+        profile_ids = [pid for pid, _ in profile_options]
+
+        def _on_load(stored_settings: dict | None, stored_profile: str | None):
+            settings = UISettings.from_dict(stored_settings)
+            errors = settings.validate()
+            has_err = bool(errors)
+            prof = _resolve_restored_profile(stored_profile, profile_ids, default_profile)
+            return (
+                settings,
+                settings.font_size,
+                settings.line_spacing,
+                settings.margin_top,
+                settings.margin_bottom,
+                settings.margin_left,
+                settings.margin_right,
+                settings.draw_speed,
+                settings.travel_speed,
+                settings.pen_delay,
+                settings.temperature,
+                settings.messiness,
+                settings.pressure_variation,
+                settings.instance_variation,
+                settings.entry_taper,
+                settings.connection_strength,
+                gr.update(value=prof) if profile_options else gr.update(),
+                gr.update(value=_validation_status(errors), visible=has_err),
+                gr.update(interactive=not has_err),
+                gr.update(interactive=not has_err),
+            )
+
+        app.load(
+            _on_load,
+            inputs=[persisted_settings, persisted_profile],
+            outputs=[
+                settings_state,
+                *slider_components,
+                profile_select,
+                validation_md,
+                preview_btn,
+                gcode_btn,
+            ],
+        )
 
     return app

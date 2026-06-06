@@ -78,9 +78,7 @@ class TestStrokesToDeltas:
         result = strokes_to_deltas(strokes)
 
         assert result.shape == (1, 3)
-        torch.testing.assert_close(
-            result, torch.tensor([[0, 0, 1]], dtype=torch.float32)
-        )
+        torch.testing.assert_close(result, torch.tensor([[0, 0, 1]], dtype=torch.float32))
 
     def test_with_pressure_ignored(self) -> None:
         strokes = [
@@ -171,23 +169,17 @@ class TestNormalization:
         assert stats["std_y"] >= 1e-6
 
     def test_normalize_denormalize_roundtrip(self) -> None:
-        t = torch.tensor(
-            [[1.0, 2.0, 0], [3.0, 4.0, 1], [-1.0, 5.0, 0]], dtype=torch.float32
-        )
+        t = torch.tensor([[1.0, 2.0, 0], [3.0, 4.0, 1], [-1.0, 5.0, 0]], dtype=torch.float32)
         stats = compute_normalization_stats([t])
 
         normalized = normalize_deltas(t, stats)
         for i in range(t.shape[0]):
-            dx, dy = denormalize_point(
-                normalized[i, 0].item(), normalized[i, 1].item(), stats
-            )
+            dx, dy = denormalize_point(normalized[i, 0].item(), normalized[i, 1].item(), stats)
             assert dx == pytest.approx(t[i, 0].item(), abs=1e-5)
             assert dy == pytest.approx(t[i, 1].item(), abs=1e-5)
 
     def test_normalize_preserves_pen_state(self) -> None:
-        t = torch.tensor(
-            [[1.0, 2.0, 0], [3.0, 4.0, 1], [5.0, 6.0, 0]], dtype=torch.float32
-        )
+        t = torch.tensor([[1.0, 2.0, 0], [3.0, 4.0, 1], [5.0, 6.0, 0]], dtype=torch.float32)
         stats = compute_normalization_stats([t])
         normalized = normalize_deltas(t, stats)
 
@@ -232,9 +224,7 @@ class TestNormalization2D:
         stats = compute_normalization_stats_2d([t])
         normalized = normalize_deltas_2d(t, stats)
         for i in range(t.shape[0]):
-            dx, dy = denormalize_point(
-                normalized[i, 0].item(), normalized[i, 1].item(), stats
-            )
+            dx, dy = denormalize_point(normalized[i, 0].item(), normalized[i, 1].item(), stats)
             assert dx == pytest.approx(t[i, 0].item(), abs=1e-5)
             assert dy == pytest.approx(t[i, 1].item(), abs=1e-5)
 
@@ -314,10 +304,12 @@ class TestReferenceNormalization:
         assert normalized[0, 0].item() != t[0, 0].item()
 
     def test_normalize_reference_batch(self) -> None:
-        batch = torch.tensor([
-            [[1.0, 2.0], [-1.0, -1.0], [3.0, 4.0]],
-            [[5.0, 6.0], [7.0, 8.0], [-1.0, -1.0]],
-        ])
+        batch = torch.tensor(
+            [
+                [[1.0, 2.0], [-1.0, -1.0], [3.0, 4.0]],
+                [[5.0, 6.0], [7.0, 8.0], [-1.0, -1.0]],
+            ]
+        )
         stats = compute_reference_stats([batch[0], batch[1]])
         normalized = normalize_reference(batch, stats)
 
@@ -329,8 +321,10 @@ class TestReferenceNormalization:
 
 class TestResampleStroke:
     def test_basic(self) -> None:
-        points = np.array([[0, 0], [1, 0], [2, 0], [3, 0], [4, 0],
-                           [5, 0], [6, 0], [7, 0], [8, 0], [9, 0]], dtype=np.float32)
+        points = np.array(
+            [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0], [8, 0], [9, 0]],
+            dtype=np.float32,
+        )
         result = resample_stroke(points, 32)
         assert result.shape == (32, 2)
         assert result.dtype == np.float32

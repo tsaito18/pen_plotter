@@ -18,6 +18,11 @@ import matplotlib.pyplot as plt
 from src.collector.data_format import StrokeSample
 from src.layout.typesetter import CharPlacement
 from src.model.augmentation import HandwritingAugmenter
+from src.model.stroke_finishing import (
+    FinishingConfig,
+    apply_finishing,
+    classify_finishes,
+)
 from src.ui.stroke_renderer import StrokeRenderer
 
 Stroke = np.ndarray
@@ -63,23 +68,34 @@ def _default_user_strokes_dir() -> Path:
     return Path("data/user_strokes")
 
 
-def _load_reference_strokes(kanjivg_dir: Path, char: str) -> list[Stroke] | None:
+def _load_reference_strokes(
+    kanjivg_dir: Path, char: str
+) -> tuple[list[Stroke] | None, list[str]]:
+    """KanjiVG 参照ストロークと筆画タイプ(kvg:type)を返す。
+
+    strokes と types は同じ ``len>=2`` 条件で同期フィルタするため index が
+    対応する（本番 StrokeRenderer・推論バッチ化と同条件）。
+    """
     char_dir = kanjivg_dir / char
     if not char_dir.is_dir():
-        return None
+        return None, []
     json_files = sorted(char_dir.glob(f"{char}_*.json"))
     if not json_files:
         json_files = sorted(char_dir.glob("*.json"))
     if not json_files:
-        return None
+        return None, []
 
     sample = StrokeSample.load(json_files[0])
     strokes: list[Stroke] = []
-    for stroke_points in sample.strokes:
+    types: list[str] = []
+    for index, stroke_points in enumerate(sample.strokes):
         stroke = np.array([[p.x, p.y] for p in stroke_points], dtype=np.float64)
         if len(stroke) >= 2:
             strokes.append(stroke)
-    return strokes or None
+            types.append(
+                sample.stroke_types[index] if index < len(sample.stroke_types) else ""
+            )
+    return (strokes or None, types)
 
 
 def _bbox(strokes: list[Stroke]) -> tuple[float, float, float, float] | None:
@@ -167,7 +183,7 @@ def _build_renderer(args: argparse.Namespace) -> StrokeRenderer:
 
 
 def dump_char(args: argparse.Namespace, renderer: StrokeRenderer, char: str) -> None:
-    reference = _load_reference_strokes(args.kanjivg_dir, char)
+    reference, ref_types = _load_reference_strokes(args.kanjivg_dir, char)
     if reference is None:
         print(f"char={char} skip: reference not found in {args.kanjivg_dir}")
         return
@@ -193,7 +209,16 @@ def dump_char(args: argparse.Namespace, renderer: StrokeRenderer, char: str) -> 
     positioned = renderer._position_strokes(source_for_position, placement)
     _emit_stage(args.output_dir, char, positioned_stage, positioned)
 
-    distorted = renderer._apply_distortion(positioned)
+    # とめ・はね・払いの終端加工（本番と同じ _position_strokes 後・distortion 前）。
+    # 加工前(positioned)と並べて目視できるよう finished ステージを出力する。
+    finishes = classify_finishes(ref_types)
+    print(f"char={char} finishes={finishes}")
+    finished = apply_finishing(
+        positioned, finishes, scale=placement.font_size, config=FinishingConfig()
+    )
+    _emit_stage(args.output_dir, char, "finished", finished)
+
+    distorted = renderer._apply_distortion(finished)
     _emit_stage(args.output_dir, char, "distorted", distorted)
 
 

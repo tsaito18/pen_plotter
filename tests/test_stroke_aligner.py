@@ -10,6 +10,7 @@ from src.model.stroke_aligner import AlignmentResult, StrokeAligner
 # テストデータヘルパー
 # ---------------------------------------------------------------------------
 
+
 def _horizontal() -> np.ndarray:
     """水平線: (0,5) → (10,5)"""
     return np.array([[i, 5.0] for i in range(11)], dtype=np.float32)
@@ -28,6 +29,7 @@ def _diagonal() -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Modified Hausdorff Distance
 # ---------------------------------------------------------------------------
+
 
 class TestModifiedHausdorffDistance:
     def setup_method(self):
@@ -56,6 +58,7 @@ class TestModifiedHausdorffDistance:
 # コスト行列
 # ---------------------------------------------------------------------------
 
+
 class TestCostMatrix:
     def setup_method(self):
         self.aligner = StrokeAligner()
@@ -80,6 +83,7 @@ class TestCostMatrix:
 # ---------------------------------------------------------------------------
 # Hungarian 割り当て
 # ---------------------------------------------------------------------------
+
 
 class TestHungarianAssignment:
     def setup_method(self):
@@ -118,6 +122,7 @@ class TestHungarianAssignment:
 # 品質フィルタリング
 # ---------------------------------------------------------------------------
 
+
 class TestQualityFiltering:
     def test_high_cost_rejected(self):
         aligner = StrokeAligner(quality_threshold=0.1)
@@ -136,6 +141,7 @@ class TestQualityFiltering:
 # ---------------------------------------------------------------------------
 # End-to-end
 # ---------------------------------------------------------------------------
+
 
 class TestFullAlignment:
     def setup_method(self):
@@ -170,6 +176,7 @@ class TestFullAlignment:
 # ---------------------------------------------------------------------------
 # マージ検出（ユーザーが複数参照ストロークを1本で書いた場合）
 # ---------------------------------------------------------------------------
+
 
 class TestMergeDetection:
     def setup_method(self):
@@ -223,6 +230,7 @@ class TestMergeDetection:
 # スプリット検出（ユーザーが1参照ストロークを複数に分けて書いた場合）
 # ---------------------------------------------------------------------------
 
+
 class TestSplitDetection:
     def test_user_split_one_stroke(self):
         """3 user strokes vs 2 ref — two halves should join to match one ref."""
@@ -241,6 +249,7 @@ class TestSplitDetection:
 # ---------------------------------------------------------------------------
 # 既存コード統合
 # ---------------------------------------------------------------------------
+
 
 class TestIntegration:
     def test_compute_stroke_offsets_with_aligner(self):

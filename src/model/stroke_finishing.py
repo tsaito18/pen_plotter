@@ -20,6 +20,10 @@ TOME = "tome"
 HANE = "hane"
 HARAI = "harai"
 NONE = "none"
+# 連綿（続け字）のつなぎ画。一定の薄い接触で前後の画を結ぶ（Z一定＝点線化しない）。
+CONNECT = "connect"
+# つなぎ画の接触率（薄さ）。pen_down と finish_lift の間の一定値で、芯は触れたまま。
+CONNECT_CONTACT = 0.45
 
 # CJK Strokes (kvg:type) → 筆法。終筆の性質で分類する:
 #   鉤(hook)を含む          → はね
@@ -59,6 +63,7 @@ KVG_TYPE_TO_FINISH: dict[str, str] = {
     "㇅": TOME,  # HZZ 横折折
     "㇍": TOME,  # HZW 横折弯
     "㇎": TOME,  # HZZZ 横折折折
+    "㇄": TOME,  # SW  竖弯（鉤なしの折れ。実データで頻出するため明示マップ）
     "㇘": TOME,  # SWZ 竖弯
     "㇞": TOME,  # SZZ 竖折折
     "㇛": TOME,  # PD  撇点（終端が点）
@@ -94,6 +99,260 @@ def classify_finishes(kvg_types: list[str]) -> list[str]:
     return [classify_finish(t) for t in kvg_types]
 
 
+# 軌跡からの筆法推定（かな等 kvg:type が無い字向け）の閾値。Y-UP 前提。
+_INFER_HANE_UP = 0.45  # 終端接線の上向き成分がこれ超で「跳ね上げ」=はね
+_INFER_HARAI_TURN_DEG = 35.0  # 終端の曲がりがこれ未満で「滑らか」
+_INFER_HARAI_DIAG = 0.40  # 斜め度(min/max成分比)がこれ超で「斜めに流れる」
+
+
+def _unit(v: np.ndarray) -> np.ndarray | None:
+    norm = float(np.linalg.norm(v))
+    return v / norm if norm > 1e-9 else None
+
+
+def infer_finish_from_stroke(stroke: np.ndarray) -> str:
+    """ストロークの軌跡形状から筆法（とめ/はね/払い）を推定する。
+
+    KanjiVG の ``kvg:type`` を持たない字（ひらがな・カタカナ）向けのロジック判定。
+    終端の接線・曲がり方から、跳ね上げ＝はね、斜めに滑らかに流れる＝払い、
+    それ以外＝とめ とみなす。Y-UP 座標前提（上が +Y）。
+
+    Args:
+        stroke: ``(N, 2)`` の点列（mm 座標、Y-UP）。
+
+    Returns:
+        :data:`HANE` / :data:`HARAI` / :data:`TOME` のいずれか。判定不能は TOME。
+    """
+    pts = np.asarray(stroke, dtype=float)
+    n = len(pts)
+    if n < 3:
+        return TOME
+    v_end = _unit(pts[-1] - pts[-3])
+    if v_end is None:
+        return TOME
+    # 終端より少し手前の進行方向（曲がり量の算出用）
+    back = min(6, n - 1)
+    v_pre = _unit(pts[-3] - pts[-1 - back])
+    if v_pre is None:
+        v_pre = v_end
+    cos_turn = float(np.clip(np.dot(v_pre, v_end), -1.0, 1.0))
+    turn_deg = float(np.degrees(np.arccos(cos_turn)))
+
+    # はね: 終端が上向きに跳ねる（縦画下端からの跳ね上げ等）
+    if v_end[1] > _INFER_HANE_UP:
+        return HANE
+    # 払い: 斜め下方向へ滑らかに流れて抜ける
+    diag = min(abs(v_end[0]), abs(v_end[1])) / max(abs(v_end[0]), abs(v_end[1]), 1e-9)
+    if turn_deg < _INFER_HARAI_TURN_DEG and v_end[1] < -0.1 and diag > _INFER_HARAI_DIAG:
+        return HARAI
+    return TOME
+
+
+def infer_finishes(strokes: list[np.ndarray]) -> list[str]:
+    """各ストロークの筆法を軌跡から推定する（かな等向け）。"""
+    return [infer_finish_from_stroke(s) for s in strokes]
+
+
+def arc_length_from_end(points: np.ndarray) -> np.ndarray:
+    """各点の「終端までの弧長(mm)」配列を返す。
+
+    終端（末尾点）が ``0``、始点が全長。終端へ向かって単調減少する。Zリフトを
+    点数ではなく実距離(mm)で設計し、文字サイズ非依存にするための基礎量。
+
+    Args:
+        points: ``(N, 2)`` の点列（mm 座標）。
+
+    Returns:
+        長さ ``N`` の弧長配列（終端 0）。``N < 2`` なら ``[0.0]*N``。
+    """
+    n = len(points)
+    if n < 2:
+        return np.zeros(n, dtype=float)
+    diffs = np.diff(points, axis=0)
+    seg = np.sqrt((diffs**2).sum(axis=1))
+    cum_from_start = np.concatenate([[0.0], np.cumsum(seg)])
+    return cum_from_start[-1] - cum_from_start
+
+
+def contact_profile(
+    finish: str,
+    arc_from_end: np.ndarray,
+    lift_length: float,
+    harai_min: float = 0.0,
+    hane_min: float = 0.0,
+    max_lift_fraction: float = 0.5,
+) -> np.ndarray:
+    """各点の接触率 ``contact ∈ [0, 1]`` 列を距離(mm)ベースで返す。
+
+    実機の終端Zリフト（芯の接触圧抜き）とプレビューの線幅を同一ソースから導く
+    無次元プロファイル。``1.0`` が完全接触（太く/濃く）、``0.0`` が完全リフト
+    （細く/消える）。終端から ``lift_length`` mm 以内をリフト区間とし、終端で 0、
+    境界で 1.0 へ。点数でなく**距離**で決めるため文字サイズに依らず同じ抜けになる。
+
+    ただしリフト区間がストローク全長を食い尽くすと画全体が薄くなる（短い画・
+    小さい字で「めっちゃ薄い」かすれの原因）。これを避けるため、実効リフト長を
+    ``全長 * max_lift_fraction`` で頭打ちにし、始点側に必ず完全接触（濃い）部分を
+    残す。全長が ``lift_length / max_lift_fraction`` を超える十分長い画では
+    ``lift_length`` がそのまま効き、サイズ非依存の固定 mm リフトになる。
+
+    払い＝二乗イーズイン（終端直前まで接触を高く保ち先端だけ抜く＝``x^2`` 状に
+    上がる）、はね＝二乗イーズアウト（境界側から早く抜けて終端で跳ねる）。
+    とめ・none は全点 ``1.0``。
+
+    Args:
+        finish: :data:`TOME` / :data:`HANE` / :data:`HARAI` / :data:`NONE`。
+        arc_from_end: 各点の終端までの弧長(mm)。:func:`arc_length_from_end` の出力。
+        lift_length: 終端リフト区間の長さ(mm)。``<=0`` でリフトなし。
+        harai_min: 払い終端の最小接触率（``0`` で完全リフト）。
+        hane_min: はね終端の最小接触率（``0`` で完全リフト）。
+        max_lift_fraction: リフト区間が占めてよい全長の最大割合（``0.5`` で
+            最大でも終端側半分のみリフト、始点側半分は完全接触を保つ）。
+
+    Returns:
+        ``arc_from_end`` と同長の接触率配列。先頭1.0寄り、終端へ単調非増加。
+    """
+    arc = np.asarray(arc_from_end, dtype=float)
+    contact = np.ones(len(arc), dtype=float)
+    if finish == CONNECT:
+        # 連綿のつなぎ画は全長一定の薄い接触（Z一定＝点線化しない）
+        return np.full(len(arc), CONNECT_CONTACT, dtype=float)
+    if len(arc) < 2 or finish not in (HARAI, HANE) or lift_length <= 0:
+        return contact
+    # 実効リフト長: 全長の max_lift_fraction で頭打ち（短い画の全体かすれを防ぐ）
+    total = float(arc.max())
+    eff_lift = min(lift_length, total * max_lift_fraction)
+    if eff_lift <= 0:
+        return contact
+    # 終端からの正規化位置 t: 終端0 → 境界1.0（境界より手前は1.0で頭打ち）
+    t = np.clip(arc / eff_lift, 0.0, 1.0)
+    if finish == HARAI:
+        # 二乗イーズイン: 終端直前まで接触≈1（濃い）を保ち、先端だけ曲線的に抜く。
+        # lift量 = (1-t)^2 ＝終端からの距離の二乗 →「x^2 みたいに上がる」。
+        contact = harai_min + (1.0 - harai_min) * (1.0 - (1.0 - t) ** 2)
+    else:  # HANE: 二乗イーズアウト（境界側から早く抜けて終端で跳ねる）
+        contact = hane_min + (1.0 - hane_min) * t**2
+    return contact
+
+
+def insert_connections(
+    strokes: list[np.ndarray],
+    finishes: list[str],
+    strength: float,
+    scale: float,
+    rng: np.random.Generator,
+) -> tuple[list[np.ndarray], list[str]]:
+    """同じ字の連続する画を、近さに応じた確率で薄いつなぎ画（連綿）で結ぶ。
+
+    前の画の終端と次の画の始端の距離 ``gap`` が ``max_gap = strength*0.6*scale``
+    以内のとき、``prob = strength*(1 - gap/max_gap)``（近いほど高い）で :data:`CONNECT`
+    画（2点）を間に挿入する。``rng`` で確率判定するので毎回揺れる（人の続け方の
+    ばらつき）。終端で抜ける画（:data:`HARAI`/:data:`HANE`）や既存のつなぎ画の
+    後ろには付けない。``strength<=0`` で何もしない。
+
+    Args:
+        strokes: 配置後の画（mm 座標）。1 文字分を想定。
+        finishes: 各画の筆法（``strokes`` と同数）。
+        strength: 連綿の強さ ∈[0,1]。0=なし。大きいほど遠い画もつなぎ高確率。
+        scale: 文字サイズ（mm）。``max_gap`` の基準。
+        rng: 乱数生成器（augmenter の RNG を共有）。
+
+    Returns:
+        ``(new_strokes, new_finishes)``。つなぎ画が間に挿入された新リスト。
+    """
+    if strength <= 0 or len(strokes) < 2:
+        return strokes, finishes
+    max_gap = strength * 0.6 * scale
+    if max_gap <= 0:
+        return strokes, finishes
+    out_s: list[np.ndarray] = []
+    out_f: list[str] = []
+    for i in range(len(strokes)):
+        out_s.append(strokes[i])
+        out_f.append(finishes[i])
+        if i + 1 >= len(strokes):
+            continue
+        if finishes[i] in (HARAI, HANE, CONNECT):
+            continue  # 抜ける画・つなぎ画の後ろには連綿しない
+        a = np.asarray(strokes[i], dtype=float)[-1]
+        b = np.asarray(strokes[i + 1], dtype=float)[0]
+        gap = float(np.hypot(b[0] - a[0], b[1] - a[1]))
+        if gap <= 1e-9 or gap > max_gap:
+            continue
+        prob = strength * (1.0 - gap / max_gap)  # 近いほど高確率
+        if rng.random() < prob:
+            out_s.append(np.array([a, b], dtype=float))
+            out_f.append(CONNECT)
+    return out_s, out_f
+
+
+def pressure_modulation(stroke: np.ndarray, amplitude: float) -> np.ndarray:
+    """画内の筆圧（濃淡）を進行方向と弧長から決定論的に変調する倍率列を返す。
+
+    実機は単線シャーペンで線幅を出せないが、Z（接触圧＝濃さ）は画の途中でも
+    変えられる。本関数は contact に掛ける ``[1-amplitude, 1]`` の倍率を返し、
+    定幅ペンのような均一な線を避けて人の筆圧リズムを与える。``contact_profile``
+    と同じく **純粋関数**なので、プレビュー線幅と G-code の Z 補間が一致する。
+
+    濃淡の決め方（Y-UP 前提）:
+      - 進行方向の縦成分: 下ろし(dy<0)で濃く、上げ(dy>0)で薄く（筆圧の基本）。
+      - 弧長位置の低周波サイン（位相は始点座標から決定的）で有機的な揺らぎ。
+    最大値は 1.0（＝完全接触より濃くはしない。薄くする方向のみ）。
+
+    Args:
+        stroke: ``(N, 2)`` の点列（mm 座標、Y-UP）。
+        amplitude: 変調の深さ ``∈ [0, 1]``。``0`` で恒等（全点 1.0）。
+
+    Returns:
+        長さ ``N`` の接触倍率配列。``N < 2`` または ``amplitude <= 0`` で全 1.0。
+    """
+    pts = np.asarray(stroke, dtype=float)
+    n = len(pts)
+    out = np.ones(n, dtype=float)
+    if n < 2 or amplitude <= 0:
+        return out
+    d = np.diff(pts, axis=0)
+    seg_len = np.sqrt((d**2).sum(axis=1)) + 1e-9
+    dir_y = -d[:, 1] / seg_len  # +1=下ろし(濃) / -1=上げ(薄)
+    dir_pt = np.concatenate([[dir_y[0]], dir_y])
+    arc = np.concatenate([[0.0], np.cumsum(seg_len)])
+    total = float(arc[-1])
+    if total < 1e-9:
+        return out
+    phase = pts[0, 0] * 0.7 + pts[0, 1] * 1.3
+    wave = np.sin(2.0 * np.pi * 1.5 * arc / total + phase)
+    combined = 0.6 * dir_pt + 0.4 * wave  # ∈ [-1, 1]
+    mult = 1.0 - amplitude * (1.0 - (combined + 1.0) / 2.0)
+    return np.clip(mult, 1.0 - amplitude, 1.0)
+
+
+def entry_modulation(stroke: np.ndarray, entry_length: float, strength: float) -> np.ndarray:
+    """入筆: 始筆の接触を軽く（薄く）入れて満額へランプさせる倍率列を返す。
+
+    始点から ``entry_length`` mm の区間で contact を ``1 - strength`` から ``1.0``
+    へ線形に上げる。人の筆が「すっと入って」線が立ち上がる感じを与える。終端の
+    リフト（収筆）と対になり、画が両端で締まる。:func:`contact_profile` と同じく
+    純粋関数で preview と G-code が一致する。
+
+    Args:
+        stroke: ``(N, 2)`` の点列（mm 座標）。
+        entry_length: 入筆ランプ区間長(mm)。``<=0`` で恒等。
+        strength: 始点の薄さ ``∈ [0, 1]``。``0`` で恒等（全点 1.0）。
+
+    Returns:
+        長さ ``N`` の接触倍率配列。``N < 2`` 等で全 1.0。
+    """
+    pts = np.asarray(stroke, dtype=float)
+    n = len(pts)
+    out = np.ones(n, dtype=float)
+    if n < 2 or strength <= 0 or entry_length <= 0:
+        return out
+    d = np.diff(pts, axis=0)
+    seg = np.sqrt((d**2).sum(axis=1))
+    arc_from_start = np.concatenate([[0.0], np.cumsum(seg)])
+    t = np.clip(arc_from_start / entry_length, 0.0, 1.0)
+    return (1.0 - strength) + strength * t
+
+
 @dataclass
 class FinishingConfig:
     """終端加工のパラメータ設定。
@@ -105,10 +364,8 @@ class FinishingConfig:
         enabled: ``False`` で :func:`apply_finishing` を完全バイパス（A/B・回帰用）。
         harai_ext_ratio: 払いの延長長さ / ``scale``。
         harai_points: 払いで末尾に追加する点数。
-        hane_hook_ratio: はねフック長 / ``scale``。
-        hane_points: はねフックで末尾に追加する点数。
-        hane_angle_deg: 接線からの回転角（度）。Y-UP で時計回りが負。
-            縦画なら左上、横画なら左下方向のフックになる。
+        hane_hook_ratio: はねの延長長さ / ``scale``。
+        hane_points: はねで末尾に追加する点数。
         tangent_window: 終端接線の算出に使う終端点数。
         tome_setback_ratio: とめ打ち込み量 / ``scale``。初期 0 は恒等。
     """
@@ -118,7 +375,6 @@ class FinishingConfig:
     harai_points: int = 5
     hane_hook_ratio: float = 0.12
     hane_points: int = 4
-    hane_angle_deg: float = -135.0
     tangent_window: int = 3
     tome_setback_ratio: float = 0.0
 
@@ -175,16 +431,18 @@ def apply_harai(stroke: np.ndarray, scale: float, config: FinishingConfig) -> np
 
 
 def apply_hane(stroke: np.ndarray, scale: float, config: FinishingConfig) -> np.ndarray:
-    """はね: 終端接線を回転させた方向へ小フックを付ける。
+    """はね: 既存フック方向（終端接線）へ短く延長して跳ねを強調する。
 
-    終端接線を ``hane_angle_deg`` だけ回転（回転行列
-    ``[[cos, -sin], [sin, cos]]``）してフック方向を作り、
-    ``hook_len = scale * hane_hook_ratio`` で ``hane_points`` 点のフックを末尾へ
-    追加する。接線が定義できない場合は ``stroke`` をそのまま返す。
+    KanjiVG の鈎（はね）ストロークは**既にフック形状を経路に含む**ため、終端接線は
+    そのままフックの向き（縦画なら左上など）を指す。ここで接線を回転させると二重
+    フックになって逆向きに飛ぶため、回転はせず終端接線方向へ ``hook_len = scale *
+    hane_hook_ratio`` だけ ``hane_points`` 点を延長する。実機ではこの延長区間で Z を
+    持ち上げ（:func:`contact_profile`）、跳ねが細く抜ける。接線が定義できない場合は
+    ``stroke`` をそのまま返す。
 
     Args:
         stroke: ``(N, 2)`` の配置後点列。
-        scale: 配置時の ``font_size``（mm）。フック長の基準。
+        scale: 配置時の ``font_size``（mm）。延長長さの基準。
         config: 加工パラメータ。
 
     Returns:
@@ -193,18 +451,14 @@ def apply_hane(stroke: np.ndarray, scale: float, config: FinishingConfig) -> np.
     tangent = _terminal_tangent(stroke, config.tangent_window)
     if tangent is None:
         return stroke
-    theta = np.deg2rad(config.hane_angle_deg)
-    cos, sin = np.cos(theta), np.sin(theta)
-    rot = np.array([[cos, -sin], [sin, cos]], dtype=float)
-    hook_dir = rot @ tangent
     n = config.hane_points
     hook_len = scale * config.hane_hook_ratio
     end = stroke[-1]
-    hook = np.array(
-        [end + hook_dir * (hook_len * i / n) for i in range(1, n + 1)],
+    ext = np.array(
+        [end + tangent * (hook_len * i / n) for i in range(1, n + 1)],
         dtype=float,
     )
-    return np.vstack([stroke, hook])
+    return np.vstack([stroke, ext])
 
 
 def apply_tome(stroke: np.ndarray, scale: float, config: FinishingConfig) -> np.ndarray:

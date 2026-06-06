@@ -5,7 +5,12 @@ import numpy as np
 import numpy.typing as npt
 
 from src.gcode.config import PlotterConfig
-
+from src.model.stroke_finishing import (
+    arc_length_from_end,
+    contact_profile,
+    entry_modulation,
+    pressure_modulation,
+)
 
 # ストローク = (N, 2) の numpy配列。各行は (x, y) 座標 (mm)
 Stroke = npt.NDArray[np.float64]
@@ -44,21 +49,60 @@ class GCodeGenerator:
         factor = 0.7 + 0.6 * math.sin(math.pi * t)
         return int(self.config.draw_speed * factor)
 
+    def _finish_speed_factor(self, finish: str) -> float:
+        """終端リフト区間の速度倍率（払い=ゆっくり抜く、はね=速く跳ねる）。"""
+        if finish == "harai":
+            return self.config.harai_speed_factor
+        if finish == "hane":
+            return self.config.hane_speed_factor
+        return 1.0
+
+    def _lift_z(self, contact: float) -> float:
+        """接触率を終端Z高さへ変換（安全域にクランプ）。
+
+        ``contact=1.0`` で ``pen_down_z``（完全接触）、低いほど ``finish_lift_z``
+        へ近づく（芯を持ち上げて接触圧を抜く）。
+        """
+        cfg = self.config
+        z = cfg.pen_down_z - (cfg.pen_down_z - cfg.finish_lift_z) * (1.0 - contact)
+        return min(cfg.pen_down_z, max(cfg.finish_lift_z, z))
+
     def _stroke_to_gcode(
-        self, stroke: Stroke, vary_speed: bool = True
+        self,
+        stroke: Stroke,
+        finish: str = "none",
+        vary_speed: bool = True,
+        continue_from_prev: bool = False,
     ) -> list[str]:
-        """単一ストロークをG-codeに変換"""
+        """単一ストロークをG-codeに変換。
+
+        ``finish`` が払い/はねのときは終端区間で Z を漸減（芯を持ち上げ）し、
+        速度も倍率調整する。とめ/none は従来どおり Z 一定で出力する。
+        ``continue_from_prev=True`` のときはペンを上げず（pen_up/G0/pen_down を出さず）
+        現在位置 ``stroke[0]`` から続けて描く（連綿のつなぎ画・その直後の画用）。
+        この場合は Z が前画から引き継がれるため、全点で Z を明示して復帰させる。
+        """
         if len(stroke) < 2:
             return []
 
         lines: list[str] = []
-        lines.append(self.config.pen_up_command)
-        x0, y0 = stroke[0]
-        lines.append(
-            f"G0 X{self._format_coord(x0)} Y{self._format_coord(y0)} F{self.config.travel_speed:.0f}"
-        )
-        lines.append(self.config.pen_down_command)
+        if not continue_from_prev:
+            lines.append(self.config.pen_up_command)
+            x0, y0 = stroke[0]
+            lines.append(
+                f"G0 X{self._format_coord(x0)} Y{self._format_coord(y0)} "
+                f"F{self.config.travel_speed:.0f}"
+            )
+            lines.append(self.config.pen_down_command)
 
+        arc = arc_length_from_end(stroke)
+        contact = contact_profile(finish, arc, self.config.finish_lift_length_mm)
+        # 画内の筆圧変調（濃淡）と入筆ランプを乗算。終端リフトと同じ contact 系で Z へ。
+        contact = contact * pressure_modulation(stroke, self.config.pressure_variation)
+        contact = contact * entry_modulation(
+            stroke, self.config.entry_length_mm, self.config.entry_taper
+        )
+        speed_factor = self._finish_speed_factor(finish)
         n_draw_points = len(stroke) - 1
         for i, point in enumerate(stroke[1:]):
             x, y = point
@@ -67,19 +111,53 @@ class GCodeGenerator:
                 feed = self._compute_feed_rate(t)
             else:
                 feed = self.config.draw_speed
-            lines.append(
-                f"G1 X{self._format_coord(x)} Y{self._format_coord(y)} F{feed:.0f}"
-            )
+            c = float(contact[i + 1])
+            # 連綿継続時は Z を引き継ぐので、接触一定の区間でも Z を明示して復帰させる
+            if c < 1.0 - 1e-9 or continue_from_prev:
+                if c < 1.0 - 1e-9:
+                    feed = int(feed * speed_factor)
+                z = self._lift_z(c)
+                lines.append(
+                    f"G1 X{self._format_coord(x)} Y{self._format_coord(y)} "
+                    f"Z{self._format_coord(z)} F{feed:.0f}"
+                )
+            else:
+                lines.append(f"G1 X{self._format_coord(x)} Y{self._format_coord(y)} F{feed:.0f}")
 
         return lines
 
     def generate(
-        self, strokes: list[Stroke], vary_speed: bool = True
+        self,
+        strokes: list[Stroke],
+        finishes: list[str] | None = None,
+        vary_speed: bool = True,
     ) -> list[str]:
-        """ストローク列からG-code全体を生成"""
+        """ストローク列からG-code全体を生成。
+
+        Args:
+            strokes: 描画するストローク列。
+            finishes: 各ストロークの筆法（``"harai"``/``"hane"``/``"tome"``/
+                ``"none"``）。``None`` なら全 ``"none"``（従来挙動）。strokes より
+                短い場合、不足分は ``"none"`` 扱い。
+            vary_speed: S字フィードレート変調の有効化。
+        """
         lines = self._header()
-        for stroke in strokes:
-            lines.extend(self._stroke_to_gcode(stroke, vary_speed=vary_speed))
+
+        def _finish_at(idx: int) -> str:
+            return finishes[idx] if finishes is not None and idx < len(finishes) else "none"
+
+        for i, stroke in enumerate(strokes):
+            finish = _finish_at(i)
+            # 連綿: つなぎ画、またはつなぎ画の直後の画は、ペンを上げず継続する
+            continue_from_prev = finish == "connect" or (i > 0 and _finish_at(i - 1) == "connect")
+            lines.extend(
+                self._stroke_to_gcode(
+                    stroke,
+                    finish=finish,
+                    vary_speed=vary_speed,
+                    continue_from_prev=continue_from_prev,
+                )
+            )
         lines.extend(self._footer())
         return lines
 

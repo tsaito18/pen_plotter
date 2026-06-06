@@ -48,9 +48,7 @@ def list_profiles(root_dir: Path) -> list[StrokeProfile]:
             continue
         if list(profile_dir.glob("*.json")):
             continue
-        char_dirs = [
-            d for d in profile_dir.iterdir() if d.is_dir() and list(d.glob("*.json"))
-        ]
+        char_dirs = [d for d in profile_dir.iterdir() if d.is_dir() and list(d.glob("*.json"))]
         sample_count = sum(len(list(d.glob("*.json"))) for d in char_dirs)
         profiles.append(
             StrokeProfile(

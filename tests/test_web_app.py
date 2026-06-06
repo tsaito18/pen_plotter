@@ -112,6 +112,69 @@ class TestPlotterPipeline:
         assert preview_path.exists()
 
 
+def _create_kanjivg_json_with_type(base_dir, char, kvg_type):
+    """単一の斜めストローク + 指定 kvg:type を持つ KanjiVG JSON を作る。"""
+    char_dir = base_dir / char
+    char_dir.mkdir(parents=True, exist_ok=True)
+    pts = [(0, 0), (8, 8), (16, 16), (24, 24), (32, 32), (40, 40), (48, 48), (56, 56)]
+    stroke = [{"x": float(x), "y": float(y), "pressure": 1.0, "timestamp": 0.0} for x, y in pts]
+    data = {
+        "character": char,
+        "strokes": [stroke],
+        "stroke_types": [kvg_type],
+        "metadata": {"source": "kanjivg"},
+    }
+    (char_dir / f"{char}_0.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def _g1_has_z(gcode_text: str) -> bool:
+    for line in gcode_text.splitlines():
+        if line.startswith("G1 ") and " Z" in f" {line}":
+            return True
+    return False
+
+
+class TestGcodeFinishWiring:
+    """G-code 生成経路に finishes（終端Zリフト）が届くかのテスト。"""
+
+    def test_gcode_file_emits_z_for_harai(self, tmp_path):
+        _create_kanjivg_json_with_type(tmp_path, "永", "㇒")  # 払い
+        pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
+        gcode_path = tmp_path / "out.gcode"
+        paths = pipeline.generate_gcode_file("永", save_path=gcode_path)
+        content = paths[0].read_text()
+        assert _g1_has_z(content), "払いなのに G1 に Z リフトが出ていない"
+
+    def test_gcode_file_no_z_for_tome(self, tmp_path):
+        from dataclasses import replace
+
+        from src.gcode.config import PlotterConfig
+
+        _create_kanjivg_json_with_type(tmp_path, "二", "㇐")  # とめ（横）
+        # 終端加工の単独検証: 画内筆圧変調・入筆を 0 にして切り分ける
+        cfg = replace(PlotterConfig(), pressure_variation=0.0, entry_taper=0.0)
+        pipeline = PlotterPipeline(kanjivg_dir=tmp_path, plotter_config=cfg)
+        gcode_path = tmp_path / "out.gcode"
+        paths = pipeline.generate_gcode_file("二", save_path=gcode_path)
+        content = paths[0].read_text()
+        assert not _g1_has_z(content), "とめなのに Z リフトが出ている"
+
+    def test_strokes_to_gcode_emits_z_for_harai(self, tmp_path):
+        _create_kanjivg_json_with_type(tmp_path, "永", "㇒")
+        pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
+        placements = pipeline.text_to_placements("永")
+        strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements[0])
+        assert len(strokes) == len(finishes)
+        gcode = pipeline.strokes_to_gcode(strokes, finishes)
+        assert _g1_has_z("\n".join(gcode))
+
+    def test_empty_text_still_safe(self, tmp_path):
+        pipeline = PlotterPipeline()
+        gcode_path = tmp_path / "empty.gcode"
+        paths = pipeline.generate_gcode_file("", save_path=gcode_path)
+        assert paths[0].exists()
+
+
 class TestFallbackStrokes:
     """3段階フォールバックのテスト。"""
 
@@ -137,13 +200,16 @@ class TestFallbackStrokes:
         for s in strokes:
             assert isinstance(s, np.ndarray)
             assert s.ndim == 2
-            assert s.shape[0] == 8
+            # かなは軌跡推定で finish が付き、払い/はねは終端が延長され点数が増える
+            assert s.shape[0] >= 8
 
         all_pts = np.concatenate(strokes, axis=0)
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
         rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
-        assert rendered_w <= placement.font_size + 0.01
-        assert rendered_h <= placement.font_size + 0.01
+        # 配置はセル内。ただし払い/はねの終端延長(≈harai_ext_ratio*font_size)分は超える
+        margin = placement.font_size * 0.3
+        assert rendered_w <= placement.font_size + margin
+        assert rendered_h <= placement.font_size + margin
 
     def test_pipeline_kanjivg_missing_char_falls_to_rect(self, tmp_path):
         """KanjiVGにファイルがない文字は矩形フォールバック。"""
@@ -938,6 +1004,56 @@ class TestFractionLine:
         # 矩形のみ（各5点）
         for s in strokes:
             assert s.shape[0] != 2 or abs(s[1, 0] - s[0, 0]) < 0.5
+
+
+class TestPlacementsToStrokesWithFinishes:
+    """placements_to_strokes_with_finishes の配線テスト。"""
+
+    @pytest.fixture
+    def pipeline(self):
+        return PlotterPipeline()
+
+    def test_returns_strokes_and_finishes_len_match(self, pipeline):
+        """(strokes, finishes) を返し、長さが常に一致する。"""
+        placements = pipeline.text_to_placements("あい")
+        strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements[0])
+        assert isinstance(strokes, list)
+        assert isinstance(finishes, list)
+        assert len(strokes) == len(finishes)
+        for s in strokes:
+            assert isinstance(s, np.ndarray)
+            assert s.ndim == 2
+        for f in finishes:
+            assert isinstance(f, str)
+
+    def test_backward_compat_wrapper_returns_only_strokes(self, pipeline):
+        """placements_to_strokes は後方互換で strokes のみ返す。"""
+        placements = pipeline.text_to_placements("あい")
+        strokes = pipeline.placements_to_strokes(placements[0])
+        with_finishes, _ = pipeline.placements_to_strokes_with_finishes(placements[0])
+        assert isinstance(strokes, list)
+        assert len(strokes) == len(with_finishes)
+
+    def test_fraction_line_finish_is_none(self):
+        """分数線など補助ストロークの finish は 'none' で長さ整合する。"""
+        pipeline = PlotterPipeline()
+        placements = [
+            CharPlacement(char="1", x=10.0, y=15.0, font_size=4.0, role="numerator"),
+            CharPlacement(char="2", x=10.0, y=25.0, font_size=4.0, role="denominator"),
+        ]
+        strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements)
+        assert len(strokes) == len(finishes)
+        # 分数線（水平・2点）に対応する finish が "none" であること
+        for s, f in zip(strokes, finishes):
+            if s.shape[0] == 2 and abs(s[1, 0] - s[0, 0]) > 0.5 and abs(s[1, 1] - s[0, 1]) < 0.5:
+                assert f == "none"
+
+    def test_generate_preview_with_finishes_produces_png(self, pipeline, tmp_path):
+        """finishes 対応経路でプレビュー描画が落ちず PNG を生成する。"""
+        preview_path = tmp_path / "preview_finishes.png"
+        result = pipeline.generate_preview("テスト漢字", save_path=preview_path)
+        assert isinstance(result, list)
+        assert preview_path.exists()
 
 
 class TestMultiPagePreview:

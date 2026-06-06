@@ -12,11 +12,11 @@ Stroke = NDArray[np.float64]
 class AugmentConfig:
     """リアルさパラメータ。値は標準偏差（mm単位）。"""
 
-    baseline_drift: float = 0.15
-    size_variation: float = 0.02
+    baseline_drift: float = 0.3
+    size_variation: float = 0.05
     slant_variation: float = 0.02
     jitter_amplitude: float = 0.03
-    spacing_variation: float = 0.05
+    spacing_variation: float = 0.2
     line_density_variation: float = 0.05
     char_density_variation: float = 0.02
     enabled: bool = True
@@ -39,18 +39,20 @@ class HandwritingAugmenter:
         if not self._config.enabled:
             return 1.0
         cfg = self._config
-        return 1.0 + self._rng.uniform(
-            -cfg.line_density_variation, cfg.line_density_variation
-        )
+        return 1.0 + self._rng.uniform(-cfg.line_density_variation, cfg.line_density_variation)
 
     def get_char_density_scale(self) -> float:
         """文字ごとの密度スケールを返す。"""
         if not self._config.enabled:
             return 1.0
         cfg = self._config
-        return 1.0 + self._rng.uniform(
-            -cfg.char_density_variation, cfg.char_density_variation
-        )
+        return 1.0 + self._rng.uniform(-cfg.char_density_variation, cfg.char_density_variation)
+
+    def get_char_slant(self) -> float:
+        """文字ごとの微小傾き角(rad)を返す。手書きの一文字単位の傾き揺らぎ。"""
+        if not self._config.enabled:
+            return 0.0
+        return float(self._rng.normal(0, self._config.slant_variation))
 
     def augment_char_placement(
         self, x: float, y: float, font_size: float

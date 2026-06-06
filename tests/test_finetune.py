@@ -158,8 +158,10 @@ class TestFinetuneDataset:
         ref_dir = tmp_path / "ref"
         d = user_dir / ch
         d.mkdir(parents=True, exist_ok=True)
-        stroke = [{"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": 0.0}
-                  for j in range(5)]
+        stroke = [
+            {"x": float(j), "y": float(j) * 0.5, "pressure": 1.0, "timestamp": 0.0}
+            for j in range(5)
+        ]
         data = {"character": ch, "strokes": [stroke], "metadata": {}}
         (d / f"{ch}_0.json").write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
         s1 = [{"x": float(j), "y": float(j)} for j in range(3)]
@@ -167,7 +169,9 @@ class TestFinetuneDataset:
         ref_data = {"character": ch, "strokes": [s1, s2], "metadata": {}}
         rd = ref_dir / ch
         rd.mkdir(parents=True, exist_ok=True)
-        (rd / f"{ch}_ref.json").write_text(_json.dumps(ref_data, ensure_ascii=False), encoding="utf-8")
+        (rd / f"{ch}_ref.json").write_text(
+            _json.dumps(ref_data, ensure_ascii=False), encoding="utf-8"
+        )
         ds = FinetuneDataset(user_dir, ref_dir)
         item = ds[0]
         ref = item["ref_strokes"]
@@ -388,11 +392,13 @@ def _make_v3_checkpoint(path: Path, config: dict | None = None) -> Path:
     deformer_type = cfg.get("deformer_type", "offset")
     if deformer_type == "affine":
         deformer = AffineStrokeDeformer(
-            style_dim=cfg["style_dim"], hidden_dim=cfg["hidden_dim"],
+            style_dim=cfg["style_dim"],
+            hidden_dim=cfg["hidden_dim"],
         )
     else:
         deformer = StrokeDeformer(
-            style_dim=cfg["style_dim"], hidden_dim=cfg["hidden_dim"],
+            style_dim=cfg["style_dim"],
+            hidden_dim=cfg["hidden_dim"],
         )
     style_enc = StyleEncoder(style_dim=cfg["style_dim"])
     norm_stats = {"mean_x": 0.0, "mean_y": 0.0, "std_x": 1.0, "std_y": 1.0}
@@ -615,6 +621,7 @@ class TestUserDeformationTrainer:
             return orig_loss(predicted, target)
 
         import src.model.stroke_deformer as sd_mod
+
         old_loss = sd_mod.deformation_loss
         sd_mod.deformation_loss = capturing_loss
         try:

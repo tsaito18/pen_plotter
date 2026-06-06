@@ -39,7 +39,13 @@ class PageLayout:
         x = cfg.margin_left
         y = cfg.margin_bottom + cfg.footer_height
         width = cfg.paper_size[0] - cfg.margin_left - cfg.margin_right
-        height = cfg.paper_size[1] - cfg.margin_top - cfg.margin_bottom - cfg.header_height - cfg.footer_height
+        height = (
+            cfg.paper_size[1]
+            - cfg.margin_top
+            - cfg.margin_bottom
+            - cfg.header_height
+            - cfg.footer_height
+        )
         return ContentArea(x=x, y=y, width=width, height=height)
 
     def line_positions(self) -> list[float]:
@@ -63,7 +69,4 @@ class PageLayout:
         pw = self._config.paper_size[0]
         x_left = 0.0
         x_right = pw
-        return [
-            np.array([[x_left, y], [x_right, y]])
-            for y in lines
-        ]
+        return [np.array([[x_left, y], [x_right, y]]) for y in lines]

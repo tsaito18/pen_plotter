@@ -11,6 +11,12 @@ from src.gcode.generator import Stroke
 from src.gcode.preview import preview_gcode, preview_strokes
 
 
+def _line_stroke_mm(length: float, n_points: int) -> np.ndarray:
+    """長さ length mm の水平直線を n_points 点で。距離mmベースのテスト用。"""
+    xs = np.linspace(0.0, length, n_points)
+    return np.column_stack([xs, np.zeros_like(xs)])
+
+
 class TestPreviewStrokes:
     def test_saves_image_file(self, tmp_path: Path, square_stroke: Stroke):
         save_path = tmp_path / "preview_strokes.png"
@@ -55,15 +61,17 @@ class TestPreviewStrokesVaryWidth:
             assert mock_lc.called
 
     def test_vary_width_linewidths_decrease(self, tmp_path: Path):
-        """太さが始点で太く終点で細い（減衰する）"""
+        """none は実機Z一定に連動して幅一定、払いは終端で細る。"""
         from src.gcode.preview import compute_stroke_widths
 
-        n_segments = 10
-        widths = compute_stroke_widths(n_segments)
-        assert len(widths) == n_segments
-        assert widths[0] > widths[-1]
-        assert widths[0] > 0.9
-        assert widths[-1] < 0.8
+        stroke = _line_stroke_mm(16.0, 11)
+        # 終端Zリフトの無い none は接触一定＝幅一定（実機の単線に忠実）
+        widths = compute_stroke_widths(stroke)
+        assert len(widths) == len(stroke) - 1
+        assert all(abs(w - widths[0]) < 1e-9 for w in widths)
+        # 払いは終端で細る（接触圧が抜ける）
+        harai = compute_stroke_widths(stroke, "harai")
+        assert harai[0] > harai[-1]
 
     def test_vary_width_with_single_point_stroke(self, tmp_path: Path):
         """1点ストロークでもクラッシュしない"""
@@ -78,3 +86,77 @@ class TestPreviewStrokesVaryWidth:
         preview_strokes([line_stroke], save_path=save_path, vary_width=True)
         assert save_path.exists()
         assert save_path.stat().st_size > 0
+
+
+class TestComputeStrokeWidthsFinish:
+    """筆画タイプ別の太さプロファイルのテスト（距離mmベース）。"""
+
+    def test_default_finish_matches_none(self):
+        """finish引数省略時は finish='none' と一致する（後方互換）。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        s = _line_stroke_mm(16.0, 9)
+        assert compute_stroke_widths(s) == compute_stroke_widths(s, "none")
+
+    def test_short_stroke_returns_empty_all_finishes(self):
+        """点数2未満はどの finish でも空リスト。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        one = np.array([[0.0, 0.0]])
+        for finish in ("none", "tome", "hane", "harai"):
+            assert compute_stroke_widths(one, finish) == []
+
+    def test_harai_thinner_at_end_than_none(self):
+        """払い: 終端が none より細い（強く細くなる）。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        s = _line_stroke_mm(16.0, 17)
+        harai = compute_stroke_widths(s, "harai")
+        none = compute_stroke_widths(s, "none")
+        assert harai[-1] < none[-1]
+
+    def test_harai_end_less_than_start(self):
+        """払い: 末尾 < 始点。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        harai = compute_stroke_widths(_line_stroke_mm(16.0, 17), "harai")
+        assert harai[-1] < harai[0]
+
+    def test_hane_end_less_than_start(self):
+        """はね: 末尾 < 始点（細め）。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        hane = compute_stroke_widths(_line_stroke_mm(16.0, 17), "hane")
+        assert hane[-1] < hane[0]
+
+    def test_tome_constant(self):
+        """とめ: 全要素が一定値 0.9（接触一定）。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        tome = compute_stroke_widths(_line_stroke_mm(16.0, 17), "tome")
+        assert len(tome) == 16
+        assert all(abs(w - 0.9) < 1e-9 for w in tome)
+
+    def test_size_independent_taper(self):
+        """同じ長さmmなら点数が違っても、終端から同距離の太さが一致（サイズ非依存）。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        def width_at(length, n, d):
+            s = _line_stroke_mm(length, n)
+            w = compute_stroke_widths(s, "harai")
+            # 各セグメント中点の終端からの距離
+            xs = np.linspace(0.0, length, n)
+            mid_from_end = length - (xs[:-1] + xs[1:]) / 2.0
+            return float(np.interp(d, mid_from_end[::-1], np.array(w)[::-1]))
+
+        # 二乗イーズインの曲線を解像できる現実的な密度で比較（実ストロークは~32点）。
+        coarse = width_at(16.0, 17, 1.25)
+        fine = width_at(16.0, 65, 1.25)
+        assert abs(coarse - fine) < 0.05  # 同じmm距離なら点数によらず一致
+
+    def test_unknown_finish_falls_back_to_none(self):
+        """未知の finish は none と同じプロファイル。"""
+        from src.gcode.preview import compute_stroke_widths
+
+        s = _line_stroke_mm(16.0, 11)
+        assert compute_stroke_widths(s, "bogus") == compute_stroke_widths(s, "none")

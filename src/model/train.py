@@ -29,9 +29,7 @@ class TrainConfig:
 
 
 class Trainer:
-    def __init__(
-        self, config: TrainConfig, data_dir: Path | list[Path], output_dir: Path
-    ) -> None:
+    def __init__(self, config: TrainConfig, data_dir: Path | list[Path], output_dir: Path) -> None:
         self.config = config
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -61,9 +59,7 @@ class Trainer:
             list(self.generator.parameters()) + list(self.style_encoder.parameters()),
             lr=config.learning_rate,
         )
-        self.scheduler = torch.optim.lr_scheduler.StepLR(
-            self.optimizer, step_size=20, gamma=0.5
-        )
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
 
     def train(self) -> dict:
         history: dict[str, list[float]] = {"losses": []}
@@ -90,7 +86,9 @@ class Trainer:
                 target_eos = eos[:, 1:]
 
                 output = self.generator(
-                    x, style, stroke_index=stroke_indices,
+                    x,
+                    style,
+                    stroke_index=stroke_indices,
                 )
 
                 min_len = min(output["pi"].shape[1], target_xy.shape[1])
@@ -104,8 +102,7 @@ class Trainer:
                 self.optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
-                    list(self.generator.parameters())
-                    + list(self.style_encoder.parameters()),
+                    list(self.generator.parameters()) + list(self.style_encoder.parameters()),
                     self.config.grad_clip_norm,
                 )
                 self.optimizer.step()

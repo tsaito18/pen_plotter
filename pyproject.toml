@@ -11,6 +11,8 @@ dependencies = [
     "numpy",
     "matplotlib",
     "pyserial",
+    "scikit-image>=0.26.0",
+    "cairosvg",
 ]
 
 [project.optional-dependencies]

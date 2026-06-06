@@ -1,6 +1,63 @@
+from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
+
+from src.gcode.config import PlotterConfig
 from src.gcode.generator import GCodeGenerator, Stroke
+
+
+def _finish_only_generator() -> GCodeGenerator:
+    """終端加工を単独検証するための、画内筆圧変調・入筆を 0 にした generator。"""
+    return GCodeGenerator(replace(PlotterConfig(), pressure_variation=0.0, entry_taper=0.0))
+
+
+def _g1_lines(lines: list[str]) -> list[str]:
+    return [line for line in lines if line.startswith("G1 ")]
+
+
+def _z_values(g1_lines: list[str]) -> list[float]:
+    zs = []
+    for line in g1_lines:
+        for part in line.split():
+            if part.startswith("Z"):
+                zs.append(float(part[1:]))
+    return zs
+
+
+def _long_stroke() -> Stroke:
+    """終端リフトが見えるだけの点数を持つ右向き直線(11点)。"""
+    xs = np.linspace(0.0, 50.0, 11)
+    return np.column_stack([xs, np.zeros_like(xs)])
+
+
+class TestConnectFinish:
+    """連綿(つなぎ画 finish='connect')はペンを上げず継続して描く。"""
+
+    def _pen_up_count(self, lines: list[str], cfg) -> int:
+        return sum(1 for line in lines if line == cfg.pen_up_command)
+
+    def test_connect_skips_pen_up_for_connection_and_next(self):
+        g = _finish_only_generator()
+        s0 = np.array([[0.0, 0.0], [5.0, 0.0]])
+        conn = np.array([[5.0, 0.0], [6.0, 1.0]])  # つなぎ画
+        s1 = np.array([[6.0, 1.0], [10.0, 1.0]])
+        connected = g.generate([s0, conn, s1], finishes=["tome", "connect", "tome"])
+        plain = g.generate([s0, conn, s1], finishes=["tome", "tome", "tome"])
+        # 連綿では つなぎ画＋直後の画 がペンを上げず継続 → pen_up が2回少ない
+        assert self._pen_up_count(connected, g.config) == self._pen_up_count(plain, g.config) - 2
+
+    def test_connect_emits_constant_faint_z(self):
+        g = _finish_only_generator()
+        s0 = np.array([[0.0, 0.0], [5.0, 0.0]])
+        conn = np.array([[5.0, 0.0], [6.0, 0.0]])
+        s1 = np.array([[6.0, 0.0], [10.0, 0.0]])
+        lines = g.generate([s0, conn, s1], finishes=["tome", "connect", "tome"])
+        # つなぎ画は接触 < 1 ＝ Z 付き（薄い）。Z は finish_lift_z〜pen_down_z 内
+        zs = _z_values(_g1_lines(lines))
+        assert len(zs) > 0
+        for z in zs:
+            assert g.config.finish_lift_z - 1e-6 <= z <= g.config.pen_down_z + 1e-6
 
 
 class TestGCodeGeneratorSquare:
@@ -60,16 +117,10 @@ class TestGCodeGeneratorSquare:
             assert idx < len(lines) - 1, "pen_down が末尾行にある"
             prev_line = lines[idx - 1]
             next_line = lines[idx + 1]
-            assert prev_line.startswith("G0 X"), (
-                f"pen_down の直前が G0 X ではない: {prev_line!r}"
-            )
-            assert next_line.startswith("G1"), (
-                f"pen_down の直後が G1 ではない: {next_line!r}"
-            )
+            assert prev_line.startswith("G0 X"), f"pen_down の直前が G0 X ではない: {prev_line!r}"
+            assert next_line.startswith("G1"), f"pen_down の直後が G1 ではない: {next_line!r}"
 
-    def test_pen_up_in_final_section(
-        self, gcode_generator: GCodeGenerator, square_stroke: Stroke
-    ):
+    def test_pen_up_in_final_section(self, gcode_generator: GCodeGenerator, square_stroke: Stroke):
         """退避前にペンを上げるため、最終3行以内に pen_up_command が現れる"""
         lines = gcode_generator.generate([square_stroke])
         pen_up = gcode_generator.config.pen_up_command
@@ -91,9 +142,7 @@ class TestGCodeGeneratorSquare:
         for idx in g0_indices[1:]:
             assert idx > 0
             prev_line = lines[idx - 1]
-            assert prev_line == pen_up, (
-                f"G0 トラベル直前が pen_up_command ではない: {prev_line!r}"
-            )
+            assert prev_line == pen_up, f"G0 トラベル直前が pen_up_command ではない: {prev_line!r}"
 
 
 class TestGCodeGeneratorEmpty:
@@ -214,3 +263,72 @@ class TestGCodeGeneratorVarySpeed:
         lines = gcode_generator.generate([line_stroke], vary_speed=True)
         g1_lines = [line for line in lines if line.startswith("G1 ")]
         assert len(g1_lines) == 1
+
+
+class TestGCodeGeneratorFinishLift:
+    """終端Zリフト（払い・はねの接触圧抜き）テスト"""
+
+    def test_finishes_none_matches_legacy(self, gcode_generator: GCodeGenerator):
+        """finishes 無し/None/["none"] は従来出力と完全一致（後方互換）"""
+        stroke = _long_stroke()
+        legacy = gcode_generator.generate([stroke])
+        assert gcode_generator.generate([stroke], finishes=None) == legacy
+        assert gcode_generator.generate([stroke], finishes=["none"]) == legacy
+
+    def test_tome_matches_legacy(self):
+        """とめは終端加工なし（筆圧変調を切れば Z 付き G1 を出さず従来と一致）"""
+        gen = _finish_only_generator()
+        stroke = _long_stroke()
+        legacy = gen.generate([stroke])
+        tome = gen.generate([stroke], finishes=["tome"])
+        assert tome == legacy
+        assert _z_values(_g1_lines(tome)) == []
+
+    def test_harai_emits_z_in_terminal_g1(self, gcode_generator: GCodeGenerator):
+        """払いは終端の G1 に Z を含む"""
+        stroke = _long_stroke()
+        lines = gcode_generator.generate([stroke], finishes=["harai"])
+        zs = _z_values(_g1_lines(lines))
+        assert len(zs) > 0
+
+    def test_harai_z_within_safe_range(self, gcode_generator: GCodeGenerator):
+        """Z は finish_lift_z 〜 pen_down_z の範囲内"""
+        cfg = gcode_generator.config
+        stroke = _long_stroke()
+        lines = gcode_generator.generate([stroke], finishes=["harai"])
+        zs = _z_values(_g1_lines(lines))
+        for z in zs:
+            assert cfg.finish_lift_z - 1e-6 <= z <= cfg.pen_down_z + 1e-6
+
+    def test_harai_z_monotonic_toward_lift(self):
+        """終端へ向かって Z が単調に持ち上がる（筆圧変調を切った単独検証）"""
+        gen = _finish_only_generator()
+        cfg = gen.config
+        stroke = _long_stroke()
+        lines = gen.generate([stroke], finishes=["harai"])
+        zs = _z_values(_g1_lines(lines))
+        assert all(b <= a + 1e-9 for a, b in zip(zs, zs[1:]))  # 単調非増加
+        assert zs[-1] < cfg.pen_down_z  # 接触高さから持ち上がっている
+        # 先端でも接触を残す設計なので少なくとも半分は持ち上がる
+        assert zs[-1] <= cfg.pen_down_z - 0.5 * (cfg.pen_down_z - cfg.finish_lift_z)
+
+    def test_hane_emits_z(self, gcode_generator: GCodeGenerator):
+        """はねも終端 G1 に Z を含む"""
+        stroke = _long_stroke()
+        lines = gcode_generator.generate([stroke], finishes=["hane"])
+        assert len(_z_values(_g1_lines(lines))) > 0
+
+    def test_finishes_shorter_than_strokes_safe(self, gcode_generator: GCodeGenerator):
+        """finishes が strokes より短い場合、不足分は none 扱いで落ちない"""
+        stroke = _long_stroke()
+        lines = gcode_generator.generate([stroke, stroke], finishes=["harai"])
+        assert isinstance(lines, list)
+
+    def test_harai_terminal_feed_slower(self, gcode_generator: GCodeGenerator):
+        """払いの終端区間は速度倍率で減速する"""
+        cfg = gcode_generator.config
+        stroke = _long_stroke()
+        lines = gcode_generator.generate([stroke], finishes=["harai"], vary_speed=False)
+        g1 = _g1_lines(lines)
+        last_feed = float(g1[-1].split("F")[1])
+        assert last_feed < cfg.draw_speed

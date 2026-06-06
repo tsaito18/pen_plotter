@@ -149,9 +149,7 @@ _KVG_TYPE_RE = re.compile(r'\bkvg:type="([^"]*)"')
 class KanjiVGParser:
     """KanjiVG形式のSVGからストローク座標列を抽出する。"""
 
-    def parse_svg_with_types(
-        self, svg_string: str
-    ) -> tuple[list[NDArray[np.float64]], list[str]]:
+    def parse_svg_with_types(self, svg_string: str) -> tuple[list[NDArray[np.float64]], list[str]]:
         """SVG文字列からストロークと筆画タイプ(kvg:type)を抽出。
 
         Args:

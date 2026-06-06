@@ -7,7 +7,7 @@ PlotterPipeline は UISettings を介して構築されることで、
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields, replace
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,20 @@ class UISettings:
         draw_speed: 描画速度 (mm/min)。
         travel_speed: 移動速度 (mm/min)。
         pen_delay: ペン昇降後の待機 (s)。
-        temperature: ML モデル温度（揺らぎの強度）。
+        temperature: ML モデル温度（字形そのものの揺らぎの強度）。
+        messiness: レイアウトの汚さ倍率。baseline_drift/字間/サイズ/傾きを
+            一括スケール。1.0=標準、0=整った字、2=大きく乱れる。temperature
+            （字形の揺らぎ）とは別軸。
+        pressure_variation: 画内の筆圧（濃淡）変調の深さ ∈[0,1]。0=均一な定幅
+            ペン感、大=人の筆圧リズム（下ろし濃く・上げ薄く）。【実機注意】描画中に
+            Z を振るため単線シャーペンでは点線化する。実機では 0、プレビュー演出用。
+        instance_variation: 同一字の繰り返しで形を変える強度 ∈[0,1]。0=毎回同じ、
+            大=書くたびに微妙に違う（人が同じ字を書いても揺れる）。Z は動かさない。
+        entry_taper: 入筆（始筆を軽く入れて立ち上げる）の強度 ∈[0,1]。0=なし。
+            【実機注意】始筆で Z を動かすためかすれ得る。実機では 0 推奨。
+        connection_strength: 連綿（続け字）の強さ ∈[0,1]。0=なし。同じ字の近い画を、
+            近いほど高確率＋乱数で薄いつなぎ線で結ぶ（ペンを上げずに継続）。Z 一定の
+            つなぎなので点線化しない。
         paper_width: 用紙幅 (mm)。デフォルト A4。
         paper_height: 用紙高 (mm)。デフォルト A4。
     """
@@ -43,6 +56,11 @@ class UISettings:
     travel_speed: float
     pen_delay: float
     temperature: float
+    messiness: float = 1.0
+    pressure_variation: float = 0.0
+    instance_variation: float = 0.5
+    entry_taper: float = 0.0
+    connection_strength: float = 0.0
     paper_width: float = 210.0
     paper_height: float = 297.0
 
@@ -61,10 +79,15 @@ class UISettings:
             margin_bottom=34.0,
             margin_left=5.0,
             margin_right=5.0,
-            draw_speed=1000.0,
+            draw_speed=3000.0,
             travel_speed=5000.0,
             pen_delay=0.0,
             temperature=1.0,
+            messiness=1.0,
+            pressure_variation=0.0,
+            instance_variation=0.5,
+            entry_taper=0.0,
+            connection_strength=0.0,
         )
 
     def validate(self) -> list[str]:
@@ -103,5 +126,42 @@ class UISettings:
             errors.append(f"travel_speed は正の値である必要があります (現在: {self.travel_speed})")
         if self.temperature <= 0:
             errors.append(f"temperature は正の値である必要があります (現在: {self.temperature})")
+        if self.messiness < 0:
+            errors.append(f"messiness は 0 以上である必要があります (現在: {self.messiness})")
 
         return errors
+
+    def to_dict(self) -> dict[str, float]:
+        """ブラウザ永続化（gr.BrowserState）用の plain dict へ変換する。
+
+        Returns:
+            全フィールドを float 値で持つ dict。JSON シリアライズ可能。
+        """
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> UISettings:
+        """to_dict() / 永続化された dict から UISettings を復元する。
+
+        default() をベースに既知フィールドのみを上書きするため、
+        フィールドの増減やストレージ破損に強い（前方/後方互換）。
+
+        Args:
+            data: 復元元 dict。None・空・未知キーは無視され、欠損は default 値で補完。
+
+        Returns:
+            復元された UISettings。data が None/空なら default()。
+        """
+        base = cls.default()
+        if not data:
+            return base
+        valid = {f.name for f in fields(cls)}
+        updates: dict[str, float] = {}
+        for key, value in data.items():
+            if key not in valid or value is None:
+                continue
+            try:
+                updates[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return replace(base, **updates)

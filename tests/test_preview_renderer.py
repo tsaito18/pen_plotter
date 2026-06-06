@@ -1,4 +1,5 @@
 """PreviewRenderer の単体テスト。"""
+
 import numpy as np
 
 from src.gcode.config import PlotterConfig
@@ -48,3 +49,68 @@ class TestPreviewWithRuledLines:
             [], [], save_path, page_number=5, page_number_strokes=pn_strokes
         )
         assert save_path.exists()
+
+    def test_finishes_none_default_saves_image(self, tmp_path):
+        """finishes 省略（None）で従来通り画像が生成される。"""
+        renderer = PreviewRenderer(
+            plotter_config=PlotterConfig(),
+            page_config=PageConfig(),
+        )
+        save_path = tmp_path / "no_finishes.png"
+        strokes = [
+            np.array([[10.0, 10.0], [20.0, 20.0]]),
+            np.array([[30.0, 30.0], [40.0, 40.0]]),
+        ]
+        renderer.preview_with_ruled_lines(strokes, [], save_path, finishes=None)
+        assert save_path.exists()
+
+    def test_finishes_passed_saves_image(self, tmp_path):
+        """finishes を渡しても落ちず画像が生成される。"""
+        renderer = PreviewRenderer(
+            plotter_config=PlotterConfig(),
+            page_config=PageConfig(),
+        )
+        save_path = tmp_path / "with_finishes.png"
+        strokes = [
+            np.array([[10.0, 10.0], [20.0, 20.0]]),
+            np.array([[30.0, 30.0], [40.0, 40.0]]),
+        ]
+        finishes = ["harai", "tome"]
+        renderer.preview_with_ruled_lines(strokes, [], save_path, finishes=finishes)
+        assert save_path.exists()
+
+    def test_finishes_length_mismatch_no_indexerror(self, tmp_path):
+        """finishes が strokes より短くても IndexError にならない。"""
+        renderer = PreviewRenderer(
+            plotter_config=PlotterConfig(),
+            page_config=PageConfig(),
+        )
+        save_path = tmp_path / "mismatch.png"
+        strokes = [
+            np.array([[10.0, 10.0], [20.0, 20.0]]),
+            np.array([[30.0, 30.0], [40.0, 40.0]]),
+            np.array([[50.0, 50.0], [60.0, 60.0]]),
+        ]
+        finishes = ["harai"]  # strokes より短い
+        renderer.preview_with_ruled_lines(strokes, [], save_path, finishes=finishes)
+        assert save_path.exists()
+
+    def test_finishes_passed_to_draw_stroke(self, tmp_path):
+        """finishes の各要素が _draw_stroke_with_width に finish として渡る。"""
+        from unittest.mock import patch
+
+        renderer = PreviewRenderer(
+            plotter_config=PlotterConfig(),
+            page_config=PageConfig(),
+        )
+        save_path = tmp_path / "dispatch.png"
+        strokes = [
+            np.array([[10.0, 10.0], [20.0, 20.0]]),
+            np.array([[30.0, 30.0], [40.0, 40.0]]),
+        ]
+        finishes = ["harai", "tome"]
+        with patch("src.ui.preview_renderer._draw_stroke_with_width") as mock_draw:
+            renderer.preview_with_ruled_lines(strokes, [], save_path, finishes=finishes)
+        passed = [call.kwargs.get("finish") for call in mock_draw.call_args_list]
+        assert "harai" in passed
+        assert "tome" in passed

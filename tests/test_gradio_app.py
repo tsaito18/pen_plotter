@@ -17,6 +17,7 @@ from src.ui.gradio_app import (
     _EXAMPLE_REPORT_HEADER,
     _HELP_MARKDOWN,
     _format_coverage,
+    _resolve_restored_profile,
     create_app,
 )
 from src.ui.settings import UISettings
@@ -122,3 +123,28 @@ class TestAppSmoke:
         # UISettings 用と stale フラグ用に最低 2 つの State を期待する
         states = [b for b in app.blocks.values() if isinstance(b, gr.State)]
         assert len(states) >= 2
+
+    def test_has_browser_state(self, app):
+        # 設定・プロファイルの localStorage 永続化に BrowserState を 2 つ期待する
+        bs = [b for b in app.blocks.values() if isinstance(b, gr.BrowserState)]
+        assert len(bs) >= 2
+
+
+class TestResolveRestoredProfile:
+    """_resolve_restored_profile() のテスト（永続プロファイルの照合解決）。"""
+
+    def test_valid_stored_profile_kept(self):
+        """選択肢に存在する保存値はそのまま採用する。"""
+        assert _resolve_restored_profile("b", ["a", "b"], "a") == "b"
+
+    def test_missing_stored_profile_falls_back(self):
+        """選択肢に無い保存値（削除/リネーム後）はデフォルトへ。"""
+        assert _resolve_restored_profile("z", ["a", "b"], "a") == "a"
+
+    def test_none_stored_falls_back(self):
+        """保存値 None はデフォルトへ。"""
+        assert _resolve_restored_profile(None, ["a", "b"], "a") == "a"
+
+    def test_empty_options_returns_default(self):
+        """選択肢が空なら default（None）を返す。"""
+        assert _resolve_restored_profile("x", [], None) is None

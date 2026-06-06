@@ -52,12 +52,16 @@ def _limit_style_sample(
     """Keep inference style sequences within GPU LSTM limits."""
     if style_sample.ndim != 3 or style_sample.shape[1] <= max_points:
         return style_sample.contiguous()
-    indices = torch.linspace(
-        0,
-        style_sample.shape[1] - 1,
-        max_points,
-        device=style_sample.device,
-    ).round().long()
+    indices = (
+        torch.linspace(
+            0,
+            style_sample.shape[1] - 1,
+            max_points,
+            device=style_sample.device,
+        )
+        .round()
+        .long()
+    )
     return style_sample.index_select(1, indices).contiguous()
 
 
@@ -222,10 +226,17 @@ class StrokeInference:
         temperature: float = 1.0,
         reference_strokes: list[NDArray[np.float64]] | None = None,
         noise_scale: float = 0.02,
+        deform_scale: float = 1.0,
     ) -> list[np.ndarray]:
-        """スタイルサンプルからストロークを生成する。V3はデフォーメーション方式。"""
+        """スタイルサンプルからストロークを生成する。V3はデフォーメーション方式。
+
+        deform_scale: per-point offset（V3変形量）の倍率。``1.0`` で通常、``<1`` で
+            参照字形へ近づける。多画字の固まり防止に画数で逓減して渡す。
+        """
         if self.version == 3:
-            return self._generate_v3(style_sample, reference_strokes, noise_scale)
+            return self._generate_v3(
+                style_sample, reference_strokes, noise_scale, deform_scale=deform_scale
+            )
 
         if self.norm_stats is not None:
             from src.model.data_utils import normalize_deltas
@@ -405,8 +416,12 @@ class StrokeInference:
         style_sample: torch.Tensor,
         reference_strokes: list[NDArray[np.float64]] | None,
         noise_scale: float = 0.3,
+        deform_scale: float = 1.0,
     ) -> list[np.ndarray]:
-        """V3: Deform reference strokes using predicted offsets (batched)."""
+        """V3: Deform reference strokes using predicted offsets (batched).
+
+        deform_scale<1 で変形量を縮め、参照字形へ近づける（多画字の固まり対策）。
+        """
         from src.model.data_utils import normalize_deltas, resample_stroke
         from src.model.finetune import OFFSET_CLAMP, smooth_offsets
 
@@ -439,6 +454,9 @@ class StrokeInference:
 
         if self.deformer_type == "affine":
             transformed, _params = self.deformer(ref_batch, style_batch, idx_batch)
+            # deform_scale<1 は参照(ref_batch)へ線形にブレンドして変形量を縮める
+            if deform_scale != 1.0:
+                transformed = ref_batch + (transformed - ref_batch) * deform_scale
             deformed_batch = transformed.detach().cpu().numpy()
         else:
             offsets = self.deformer(ref_batch, style_batch, idx_batch)
@@ -446,7 +464,7 @@ class StrokeInference:
             # to remove high-frequency offset noise that creates visible jaggedness
             if self.deformer_type != "affine":
                 offsets = smooth_offsets(offsets)
-            offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
+            offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP) * deform_scale
             deformed_batch = (ref_batch + offsets).detach().cpu().numpy()
 
         all_strokes: list[np.ndarray] = []

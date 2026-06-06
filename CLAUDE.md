@@ -153,8 +153,15 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - オフセットクランプ±1.2 + スムージングkernel=11（訓練/推論で統一）
 - ストローク単位の幾何バリエーション（回転・スケール・シフト）で自然さ追加
 - 局所曲率特徴追加でストロークの曲がり角に大きなオフセット許容
-- augmentation控えめ設定（baseline_drift=0.3, spacing=0.2, size=0.05）— 整然さ重視
-- ストローク太さ変化は控えめ（width=0.7+0.3*exp(-2t)）
+- augmentation設定（baseline_drift=0.3, spacing=0.2, size=0.05）＋文字単位の傾き(slant_variation=0.02)有効 — 手書きの揺らぎ。slantはCharPlacement.slant経由で_position_strokesが文字中心回転
+- **汚さスライダー（GUI）**: `UISettings.messiness`（0=整った字, 1=標準=上記の素値, 2=大きく乱れる）で baseline_drift/字間/サイズ/傾きを一括スケール。`web_app._scaled_augment_config()` が単一ソース。GUIの「温度」（=ML per-point offsetの字形揺らぎ）とは別軸
+- **人らしさ3スライダー（GUI）**: 定幅ペン感を消し「人が書いた」感を出す調整軸。すべて実機キャリブ前提でデフォルトは控えめ。
+  - `pressure_variation`(筆圧変化, 既定0.35): 画内の濃淡を `stroke_finishing.pressure_modulation()` で変調（下ろし濃く・上げ薄く＋低周波揺らぎ）。contact に乗算するので preview線幅と実機Zが連動。0=均一(定幅ペン感)
+  - `instance_variation`(字のばらつき, 既定0.5): 同一字の繰り返しで形を変える per-stroke ランダムaffine（`StrokeRenderer._apply_instance_variation`）。`augmenter.enabled` と多画字の `_waver_scale` に従う
+  - `entry_taper`(入筆, 実機既定0): 始筆を軽く入れて立ち上げる `stroke_finishing.entry_modulation()`。収筆(はらい/はね)と対。**実機注意**: 始筆でZを動かすためかすれ得る→実機は0
+  - `connection_strength`(連綿, 既定0): 同字の近い画を確率的に薄いつなぎ画(`CONNECT`)で結ぶ `stroke_finishing.insert_connections()`。**近いほど高確率＋乱数**(`prob=strength*(1-gap/max_gap)`, `max_gap=strength*0.6*scale`)。generatorは`continue_from_prev`でペンを上げず継続=真の連綿。つなぎ画はZ一定(`CONNECT_CONTACT`)なので点線化しない。はらい/はねの後ろには付けない
+  - **実機の制約**: 単線シャーペンは描画中にZを上下に振るとペンがバウンドして点線化する。よって筆圧変化・入筆(描画中Z変動)は実機デフォルト0。連綿はZ一定なのでOK。終端リフト(はらい/はね)は単調変化なのでOK
+- ストローク太さ変化はプレビューのみ。実機は終端Zリフト（contact_profile, 距離mmベース）で払い・はねを表現
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 
 ### 全体進捗（2026-04-01時点）
@@ -167,12 +174,15 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - レポート用紙実測レイアウト: 罫線7.16mm、余白48/34/5/5mm、font_size 4.5mm
 - 文字バランス: 漢字100%、ひらがな/カタカナ個別調整（85%-68%）、半角70%、小書き55%
 - 数式レイアウト統合: インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線, ^/_ブレースなし記法
+- **表（Markdownパイプ表）**: `| a | b |`＋区切り`|---|---|`＋データ行を `table_layout.detect_pipe_table()` で検出し、`typesetter._place_table()` が罫線(line_segment)＋手書きセル文字に組版（ブロック数式と同じ「複数行消費＋次ページ送り」方式、`ParsedDocument.table_blocks`）。列幅は中身の最大文字数から決め本文幅に収める。**本文幅の中央寄せ**。横罫線は用紙の罫線(line_positions)に一致。表の直後の `: タイトル` 行はキャプションとして表の下に中央寄せ描画（`table_captions`）
 - セクション見出し: #/##/### → 階層インデント（15/25/35/45/55mm）
+- **入力書式の総まとめ**: [docs/書式リファレンス.md](docs/書式リファレンス.md)（見出し・数式・表・キャプション・記号・スライダー）。アプリ内ヘルプ（`gradio_app._HELP_MARKDOWN`）とも同期
 - マルチページプレビュー + 手書きページ番号
 - レポート用紙背景プレビュー（data/report_paper.jpg自動ロード）
 - リファクタリング済み: HTML分離、StrokeRenderer/PreviewRenderer分割、BaseFinetuner
 - **xDraw A4 ペンプロッタ実機テスト成功**（ホーミング・ペン制御・描画動作確認済み）
-- 幾何ストローク生成: 、。・（）
+- 幾何ストローク生成: 、。・（）／ASCII数式記号(+,-,=,<,>,*,/,%,:,;,!,?)は`_ascii_math_strokes`で幾何描画（矩形フォールバック回避）
+- 数字(0-9)はML変形を**スキップ**しKanjiVG素の参照字形を直接使う（`_is_ml_deformable`）。モデルはCJKのみ訓練のため数字にper-point offsetを当てると字形が壊れる（例: 「2」の下の横線が崩れる）
 - 訓練サーバー: homesrv (i5-9600K, GTX 1050 Ti 4GB, CUDA 12.1, PyTorch 2.5.1) — mise + uv でパッケージ管理
 - Colab Pro: A100 40GB, AMP対応
 
@@ -180,6 +190,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - 機種: xDraw A4（iDraw互換、Inkscape extension制御）
 - USB: CH340（VID:PID=1A86:7523/8040）、115200bps
 - ペン制御: Z軸（ダウン: Z5 F5000、アップ: Z0.5 F5000）※M3/M5ではない
+- **筆遣いの終端Zリフト**: 払い・はねの終端区間で Z を接触(pen_down_z=5.0=最大筆圧)→半浮き(finish_lift_z=2.6)へ漸減し、シャーペンの接触圧を抜いて線を尻すぼみにする（`G1 XYZ`同時補間）。とめ＝変化なし。実機計測で芯の浮き始め≈2.7、それ以上下げても線は変わらず上がりが過大になるだけなので finish_lift_z=2.6（浮き始め直下＝最小リフト）。リフト区間は `contact_profile` が全長の `max_lift_fraction`(=0.5)で頭打ちし、短い画で全体が薄くなるのを防ぐ。接触率は `stroke_finishing.contact_profile()` が単一ソースで、G-codeのZ補間とプレビュー線幅(`compute_stroke_widths`)が連動。パラメータは `PlotterConfig`（finish_lift_z, finish_lift_length_mm, harai/hane_speed_factor）で実機キャリブ。手順は docs/plotter_gui_checklist.md
 - ホーミング: `$H`（左上角に移動）→ `G92 X0 Y297 Z0`（左上角を紙座標(0,297)に設定）
 - 紙座標: (0,0)=左下、(210,297)=右上
 - G-code送信: Windows側で `python scripts/run_plotter_gui.py` または `python -m src.plotter_gui` で GUI を起動（src/plotter_gui/）。CH340 自動検出・ホーミング・ペンテスト・進捗表示・緊急停止が GUI 操作で可能。実機チェックリストは docs/plotter_gui_checklist.md

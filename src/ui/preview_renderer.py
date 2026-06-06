@@ -34,6 +34,7 @@ class PreviewRenderer:
         save_path: str | Path,
         page_number: int | None = None,
         page_number_strokes: list[Stroke] | None = None,
+        finishes: list[str] | None = None,
     ) -> None:
         import matplotlib.patches as patches
         import matplotlib.pyplot as plt
@@ -78,16 +79,27 @@ class PreviewRenderer:
         )
         ax.add_patch(paper_border)
 
-        # 文字ストローク（黒）
-        for stroke in strokes:
+        # 文字ストローク（黒）。finishes があれば対応 index の筆画タイプで
+        # 太さプロファイルを切り替える。不足分は "none"（IndexError 回避）。
+        pv = self._plotter_config.pressure_variation
+        et = self._plotter_config.entry_taper
+        for i, stroke in enumerate(strokes):
             if len(stroke) >= 2:
-                _draw_stroke_with_width(ax, stroke, color="#1a1a1a")
+                finish = finishes[i] if finishes and i < len(finishes) else "none"
+                _draw_stroke_with_width(
+                    ax,
+                    stroke,
+                    color="#1a1a1a",
+                    finish=finish,
+                    pressure_variation=pv,
+                    entry_taper=et,
+                )
 
-        # ページ番号（手書きストローク）
+        # ページ番号（手書きストローク）は補助描画のため finish="none"
         if page_number_strokes:
             for stroke in page_number_strokes:
                 if len(stroke) >= 2:
-                    _draw_stroke_with_width(ax, stroke, color="#1a1a1a")
+                    _draw_stroke_with_width(ax, stroke, color="#1a1a1a", finish="none")
 
         ax.set_xlim(-2, cfg.paper_width + 2)
         ax.set_ylim(-2, cfg.paper_height + 2)

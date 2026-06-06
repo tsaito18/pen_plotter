@@ -27,12 +27,24 @@ class TestStrokeDataset:
         """テスト用サンプルディレクトリ"""
         for ch in ["あ", "い"]:
             for i in range(3):
-                stroke = [{"x": float(j), "y": float(j), "pressure": 1.0, "timestamp": float(j * 10)}
-                          for j in range(10)]
+                stroke = [
+                    {"x": float(j), "y": float(j), "pressure": 1.0, "timestamp": float(j * 10)}
+                    for j in range(10)
+                ]
                 _make_sample_file(
                     tmp_path / ch / f"{ch}_{i}.json",
                     ch,
-                    [[{"x": s["x"], "y": s["y"], "pressure": s["pressure"], "timestamp": s["timestamp"]} for s in stroke]],
+                    [
+                        [
+                            {
+                                "x": s["x"],
+                                "y": s["y"],
+                                "pressure": s["pressure"],
+                                "timestamp": s["timestamp"],
+                            }
+                            for s in stroke
+                        ]
+                    ],
                 )
         return tmp_path
 
