@@ -958,6 +958,22 @@ class TestInlineMath:
         assert "".join(chars) == "aとb"
 
 
+class TestPageBreak:
+    """ "-----" 行は改ページ指示。"""
+
+    def test_hr_forces_new_page(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("前のページ。\n\n-----\n\n次のページ。")
+        assert len(pages) == 2
+        assert any(p.char == "前" for p in pages[0])
+        assert any(p.char == "次" for p in pages[1])
+
+    def test_leading_hr_no_empty_page(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("-----\n\n本文。")
+        assert len(pages) == 1
+
+
 class TestHeadings:
     """セクション見出し（# で大きく表示）のテスト。"""
 

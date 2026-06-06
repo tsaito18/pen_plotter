@@ -282,6 +282,10 @@ class ParsedDocument:
     table_blocks: dict[int, list[list[str]]] = field(default_factory=dict)
     # global_line_idx → 表のキャプション（"" は無し）。表ブロック起点行に対応。
     table_captions: dict[int, str] = field(default_factory=dict)
+    # global_line_idx → キャプションを表の上に置くか（True=上, False=下）。
+    table_caption_above: dict[int, bool] = field(default_factory=dict)
+    # 改ページ指示（"-----" 行）の global_line_idx 集合。以降を次ページへ送る。
+    page_break_lines: set[int] = field(default_factory=set)
 
 
 class Typesetter:
@@ -375,6 +379,16 @@ class Typesetter:
                 page_idx += 1
                 line_idx = 0
 
+            # 改ページ指示: 以降を次ページ先頭へ送る（先頭が空ページにならないよう
+            # 既に内容があるか行が進んでいる場合のみページを確定）。
+            if global_line_idx in doc.page_break_lines:
+                if current_page or line_idx > 0:
+                    pages.append(current_page)
+                    current_page = []
+                    page_idx += 1
+                    line_idx = 0
+                continue
+
             y = line_positions[line_idx]
 
             if global_line_idx in doc.block_math_lines:
@@ -411,8 +425,9 @@ class Typesetter:
             if global_line_idx in doc.table_blocks:
                 rows = doc.table_blocks[global_line_idx]
                 caption = doc.table_captions.get(global_line_idx, "")
+                cap_above = doc.table_caption_above.get(global_line_idx, False)
                 consumed = self._place_table(
-                    rows, caption, line_idx, line_positions, area, page_idx, current_page
+                    rows, caption, cap_above, line_idx, line_positions, area, page_idx, current_page
                 )
                 if consumed == -1:
                     pages.append(current_page)
@@ -420,7 +435,7 @@ class Typesetter:
                     page_idx += 1
                     line_idx = 0
                     consumed = self._place_table(
-                        rows, caption, 0, line_positions, area, page_idx, current_page
+                        rows, caption, cap_above, 0, line_positions, area, page_idx, current_page
                     )
                     if consumed == -1:
                         consumed = 1  # 1ページに収まらない巨大表は無限ループ回避
@@ -501,25 +516,40 @@ class Typesetter:
         paragraphs = cleaned
 
         # パイプ表を検出して 1 プレースホルダ段落へ畳む（複数行表を後段で一括配置）。
-        # 表の直後の "「: タイトル」行" はキャプションとして取り込み下に中央寄せする。
-        stashed_tables: list[tuple[list[list[str]], str]] = []
+        # キャプション "「: タイトル」行" は表の直前なら上、直後なら下に中央寄せする。
+        stashed_tables: list[tuple[list[list[str]], str, bool]] = []
         collapsed: list[str] = []
+
+        def _caption_text(s: str) -> str | None:
+            m = re.match(r"^:\s+(.+)$", s.strip())
+            return m.group(1).strip() if m else None
+
         ti = 0
         while ti < len(paragraphs):
+            # 上キャプション: 「: タイトル」行の直後が表
+            cap_above = _caption_text(paragraphs[ti])
+            if cap_above is not None and detect_pipe_table(paragraphs, ti + 1) is not None:
+                rows, consumed = detect_pipe_table(paragraphs, ti + 1)
+                ti += 1 + consumed
+                stashed_tables.append((rows, cap_above, True))
+                collapsed.append(
+                    _TABLE_PLACEHOLDER_PREFIX
+                    + str(len(stashed_tables) - 1)
+                    + _TABLE_PLACEHOLDER_SUFFIX
+                )
+                continue
+
             tbl = detect_pipe_table(paragraphs, ti)
             if tbl is not None:
                 rows, consumed = tbl
                 ti += consumed
                 caption = ""
-                cap_m = (
-                    re.match(r"^:\s+(.+)$", paragraphs[ti].strip())
-                    if ti < len(paragraphs)
-                    else None
-                )
-                if cap_m is not None:
-                    caption = cap_m.group(1).strip()
-                    ti += 1  # キャプション行も消費
-                stashed_tables.append((rows, caption))
+                if ti < len(paragraphs):
+                    cap_below = _caption_text(paragraphs[ti])
+                    if cap_below is not None:
+                        caption = cap_below
+                        ti += 1  # 下キャプション行も消費
+                stashed_tables.append((rows, caption, False))
                 collapsed.append(
                     _TABLE_PLACEHOLDER_PREFIX
                     + str(len(stashed_tables) - 1)
@@ -538,19 +568,28 @@ class Typesetter:
         block_math_lines: dict[int, str] = {}
         table_blocks: dict[int, list[list[str]]] = {}
         table_captions: dict[int, str] = {}
+        table_caption_above: dict[int, bool] = {}
+        page_break_lines: set[int] = set()
         heading_lines: dict[int, int] = {}
         line_body_level: dict[int, int] = {}
         current_body_level: int = 0
 
         for para in paragraphs:
+            # 改ページ指示行（"-----" など3つ以上のハイフンのみ）
+            if re.match(r"^-{3,}$", para.strip()):
+                page_break_lines.add(len(lines))
+                lines.append("")
+                continue
+
             # パイプ表プレースホルダ: 表ブロック起点行として登録
             table_match = table_placeholder_re.fullmatch(para.strip())
             if table_match is not None:
-                rows, caption = stashed_tables[int(table_match.group(1))]
+                rows, caption, cap_above = stashed_tables[int(table_match.group(1))]
                 para_start_indices.add(len(lines))
                 table_blocks[len(lines)] = rows
                 if caption:
                     table_captions[len(lines)] = caption
+                    table_caption_above[len(lines)] = cap_above
                 line_body_level[len(lines)] = current_body_level
                 lines.append("")
                 continue
@@ -636,6 +675,8 @@ class Typesetter:
             block_math_lines=block_math_lines,
             table_blocks=table_blocks,
             table_captions=table_captions,
+            table_caption_above=table_caption_above,
+            page_break_lines=page_break_lines,
         )
 
     def _place_line(
@@ -799,6 +840,7 @@ class Typesetter:
         self,
         rows: list[list[str]],
         caption: str,
+        caption_above: bool,
         line_idx: int,
         line_positions: list[float],
         area: object,
@@ -809,8 +851,8 @@ class Typesetter:
 
         1 表行 = line_positions の 1 行を占有する。列幅は各列の最大文字数から決め、
         合計が本文幅を超える場合は一律縮小して収める。表は本文幅の中央寄せ。
-        ``caption`` があれば表の真下の行に中央寄せで描画し +1 行消費する。残り行が
-        足りなければ -1（呼び出し側で次ページ送り）。
+        ``caption`` があれば中央寄せで描画し +1 行消費する（``caption_above`` で表の
+        上/下）。残り行が足りなければ -1（呼び出し側で次ページ送り）。
 
         Returns:
             消費した行数（表の行数 + キャプション行）。残り行不足なら -1。
@@ -823,6 +865,9 @@ class Typesetter:
         remaining = len(line_positions) - line_idx
         if remaining < n_rows + cap_rows:
             return -1
+
+        # キャプションが上なら表は1行下から始まる
+        tbl_idx = line_idx + (1 if (caption and caption_above) else 0)
 
         fs = self.font_size
         pad = fs * 0.3
@@ -837,9 +882,8 @@ class Typesetter:
 
         row_h = self._config.line_spacing
         # 横罫線は用紙の罫線(line_positions)に一致させる。各行=1罫線バンドを占有。
-        # 境界 y: 先頭行の上罫線(L[idx]+row_h) → 各行の下罫線 L[idx+r]。
-        ys = [line_positions[line_idx] + row_h]
-        ys += [line_positions[line_idx + r] for r in range(n_rows)]
+        ys = [line_positions[tbl_idx] + row_h]
+        ys += [line_positions[tbl_idx + r] for r in range(n_rows)]
         # 表は本文幅の中央に寄せる（幅いっぱいのときは left=area.x）。
         table_w = sum(col_w)
         x_start = area.x + max(0.0, (area.width - table_w) / 2)
@@ -872,12 +916,11 @@ class Typesetter:
                     line_segment=(x, y_top, x, y_bot),
                 )
             )
-        # セル文字（左寄せ）。ベースライン=下罫線 L[idx+r]。_position_strokes が
-        # placement.y を帯下端として line_spacing 帯の中央へ glyph を置くため、
-        # これでセル帯（L[idx+r]〜L[idx+r]+row_h）のちょうど中央に収まる。字送りも scale。
+        # セル文字（左寄せ）。ベースライン=下罫線。_position_strokes が placement.y を
+        # 帯下端として line_spacing 帯の中央へ glyph を置くため、セル帯の中央に収まる。
         cell_fs = fs * scale
         for r in range(n_rows):
-            baseline = line_positions[line_idx + r]
+            baseline = line_positions[tbl_idx + r]
             for c in range(n_cols):
                 text = rows[r][c]
                 cx = xs[c] + pad * scale
@@ -890,9 +933,10 @@ class Typesetter:
                         )
                     cx += self._body_char_advance(ch) * scale
 
-        # キャプション: 表の真下の行に中央寄せ（表幅の中央に合わせる）。
+        # キャプション: 上(line_idx)または下(表の次行)に表幅中央で配置
         if caption:
-            cap_baseline = line_positions[line_idx + n_rows]
+            cap_idx = line_idx if caption_above else tbl_idx + n_rows
+            cap_baseline = line_positions[cap_idx]
             cap_w = sum(self._body_char_advance(ch) for ch in caption)
             table_center = (xs[0] + xs[-1]) / 2
             cx = table_center - cap_w / 2
