@@ -52,6 +52,9 @@ class StrokeRenderer:
         "\uff0b": "+",
         "\uff0d": "-",
         "\uff0f": "/",
+        "\u2212": "-",  # \u2212 \u6570\u5b66\u30de\u30a4\u30ca\u30b9 \u2192 ASCII -
+        "\u301c": "~",  # \u301c \u6ce2\u30c0\u30c3\u30b7\u30e5 \u2192 ~
+        "\uff5e": "~",  # \uff5e \u5168\u89d2\u30c1\u30eb\u30c0 \u2192 ~
     }
 
     _SMOOTH_CHARS = set(
@@ -782,6 +785,15 @@ class StrokeRenderer:
             )
             stem = np.array([[0.7, 0.6], [0.55, 0.35]], dtype=np.float64)
             return [arc, stem, self._small_dot(0.55, 0.1)]
+        elif char == "[":
+            return [np.array([[0.62, 0.9], [0.4, 0.9], [0.4, 0.1], [0.62, 0.1]], dtype=np.float64)]
+        elif char == "]":
+            return [np.array([[0.38, 0.9], [0.6, 0.9], [0.6, 0.1], [0.38, 0.1]], dtype=np.float64)]
+        elif char == "~":
+            t = np.linspace(0.0, 1.0, 20)
+            x = 0.2 + 0.6 * t
+            y = 0.5 + 0.12 * np.sin(2.0 * np.pi * t)
+            return [np.stack([x, y], axis=1).astype(np.float64)]
         return None
 
     def _simple_paren_strokes(self, char: str, placement: CharPlacement) -> list[Stroke] | None:

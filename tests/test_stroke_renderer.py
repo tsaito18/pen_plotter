@@ -132,7 +132,9 @@ class TestStrokeRendererMethods:
 class TestAsciiMathSymbols:
     """数式で頻出する ASCII 記号は矩形フォールバックではなく幾何で描画する。"""
 
-    @pytest.mark.parametrize("char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%"])
+    @pytest.mark.parametrize(
+        "char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%", "[", "]", "~"]
+    )
     def test_ascii_math_renders_geometric(self, char):
         from src.layout.typesetter import CharPlacement
 
