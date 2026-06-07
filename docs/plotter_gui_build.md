@@ -1,6 +1,8 @@
 # plotter_gui.exe ビルド手順 (Windows)
 
 xDraw A4 G-code 送信 GUI を単一ポータブル exe として配布する手順。
+通常の送信経路は Gradio Web UI の WebSerial 送信。`plotter_gui.exe` は WebSerial が使えない環境向けの
+legacy fallback として扱う。
 
 ## 前提
 

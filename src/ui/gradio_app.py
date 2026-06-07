@@ -128,6 +128,51 @@ _STALE_BANNER_HTML = (
     "</div>"
 )
 
+_WEBSERIAL_SCRIPT = (Path(__file__).with_name("webserial_sender.js")).read_text(encoding="utf-8")
+_WEBSERIAL_HEAD = f"<script>\n{_WEBSERIAL_SCRIPT}\n</script>"
+_FONT_HEAD = """\
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+"""
+_APP_HEAD = _FONT_HEAD + _WEBSERIAL_HEAD
+_APP_CSS = """\
+.gradio-container {
+    max-width: 1400px !important;
+    font-family: "Inter", "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body,
+button,
+input,
+textarea,
+select,
+label {
+    font-family: "Inter", "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.gradio-container .prose,
+.gradio-container .markdown,
+.gradio-container table {
+    font-family: "Inter", "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+"""
+
+_WEBSERIAL_STATUS_HTML = """\
+<div id="webserial-status-panel">
+  <div><strong>状態:</strong> <span id="webserial-status-value">初期化中</span></div>
+  <div style="height:12px;background:#f0f0f0;border:1px solid #d9d9d9;border-radius:3px;overflow:hidden;margin-top:6px;">
+    <div id="webserial-progress-bar" style="height:100%;width:0%;background:#1677ff;"></div>
+  </div>
+  <div id="webserial-progress-text" style="font-size:12px;color:#555;margin-top:4px;">0 / 0 行 (0%)</div>
+</div>
+"""
+
+_WEBSERIAL_LOG_HTML = """\
+<div id="webserial-log-entries" style="height:180px;overflow:auto;background:#fafafa;border:1px solid #d9d9d9;border-radius:4px;padding:8px;font-family:monospace;font-size:12px;">
+</div>
+"""
+
 
 # Gradio 6.9 の gr.Files は JS callback に FileData[] を渡す。
 # 各要素は {path, url, size, orig_name, mime_type, meta} 構造。
@@ -297,6 +342,7 @@ def create_app(
     default_settings = UISettings.default()
 
     with gr.Blocks(title="Pen Plotter") as app:
+        app._pen_plotter_webserial_head = _WEBSERIAL_HEAD  # type: ignore[attr-defined]
         settings_state = gr.State(value=default_settings)
         # ブラウザ localStorage への永続化。同一ブラウザで再訪時に設定を復元する。
         # storage_key にバージョン接尾辞を付け、将来の構造変更時に破棄しやすくする。
@@ -311,159 +357,227 @@ def create_app(
 
         gr.Markdown("# Pen Plotter")
 
-        with gr.Row(equal_height=False):
-            # ========== 左カラム: 入力 ==========
-            with gr.Column(scale=2):
-                text_input = gr.Textbox(
-                    lines=18,
-                    placeholder=("テキストを入力...\n\n# 見出し\n$数式$ / $$ブロック数式$$"),
-                    label="テキスト入力",
-                )
-                char_count_md = gr.Markdown("文字数: 0")
+        with gr.Tabs():
+            with gr.Tab("生成"):
+                with gr.Row(equal_height=False):
+                    # ========== 左カラム: 入力 ==========
+                    with gr.Column(scale=2):
+                        text_input = gr.Textbox(
+                            lines=18,
+                            placeholder=("テキストを入力...\n\n# 見出し\n$数式$ / $$ブロック数式$$"),
+                            label="テキスト入力",
+                        )
+                        char_count_md = gr.Markdown("文字数: 0")
 
+                        with gr.Row():
+                            preview_btn = gr.Button("プレビュー", variant="primary", scale=2)
+                            gcode_btn = gr.Button("G-code 生成", variant="secondary", scale=2)
+                            clear_btn = gr.Button("クリア", scale=1)
+
+                        with gr.Accordion("例文を挿入", open=False):
+                            with gr.Row():
+                                ex_report_btn = gr.Button("レポートヘッダー", size="sm")
+                                ex_math_btn = gr.Button("数式レポート", size="sm")
+                                ex_essay_btn = gr.Button("小論文", size="sm")
+                                ex_table_btn = gr.Button("表サンプル", size="sm")
+
+                    # ========== 中央カラム: プレビュー ==========
+                    with gr.Column(scale=3):
+                        stale_banner = gr.HTML(value="", visible=False)
+                        status_md = gr.Markdown(visible=False)
+                        preview_gallery = gr.Gallery(
+                            label="プレビュー",
+                            columns=1,
+                            height=700,
+                            show_label=False,
+                            object_fit="contain",
+                            preview=True,
+                        )
+                        with gr.Accordion("文字カバレッジ", open=False):
+                            coverage_md = gr.Markdown("")
+                        gcode_files = gr.Files(label="G-code ダウンロード", interactive=False)
+
+                    # ========== 右カラム: 設定 ==========
+                    with gr.Column(scale=2):
+                        gr.Markdown("### レイアウト")
+                        font_size = gr.Slider(
+                            3.0,
+                            10.0,
+                            value=default_settings.font_size,
+                            step=0.1,
+                            label="フォントサイズ (mm)",
+                        )
+                        line_spacing = gr.Slider(
+                            5.0,
+                            15.0,
+                            value=default_settings.line_spacing,
+                            step=0.01,
+                            label="行間隔 (mm)",
+                        )
+
+                        gr.Markdown("### 余白 (mm)")
+                        margin_top = gr.Slider(
+                            5,
+                            60,
+                            value=default_settings.margin_top,
+                            step=1,
+                            label="上",
+                        )
+                        margin_bottom = gr.Slider(
+                            5,
+                            50,
+                            value=default_settings.margin_bottom,
+                            step=1,
+                            label="下",
+                        )
+                        margin_left = gr.Slider(
+                            1,
+                            50,
+                            value=default_settings.margin_left,
+                            step=1,
+                            label="左",
+                        )
+                        margin_right = gr.Slider(
+                            1,
+                            50,
+                            value=default_settings.margin_right,
+                            step=1,
+                            label="右",
+                        )
+
+                        gr.Markdown("### プロッタ")
+                        draw_speed = gr.Slider(
+                            200,
+                            3000,
+                            value=default_settings.draw_speed,
+                            step=50,
+                            label="描画速度 (mm/min)",
+                        )
+                        travel_speed = gr.Slider(
+                            1000,
+                            5000,
+                            value=default_settings.travel_speed,
+                            step=100,
+                            label="移動速度 (mm/min)",
+                        )
+                        pen_delay = gr.Slider(
+                            0.0,
+                            0.50,
+                            value=default_settings.pen_delay,
+                            step=0.01,
+                            label="ペン遅延 (s)",
+                        )
+
+                        gr.Markdown("### ML モデル")
+                        profile_select = gr.Dropdown(
+                            choices=[pid for pid, _ in profile_options],
+                            value=default_profile,
+                            label="人物プロファイル",
+                            visible=bool(profile_options),
+                            interactive=bool(profile_options),
+                        )
+                        temperature = gr.Slider(
+                            0.1,
+                            2.0,
+                            value=default_settings.temperature,
+                            step=0.1,
+                            label="温度",
+                            info="高いほど文字の揺らぎが大きくなります",
+                        )
+                        messiness = gr.Slider(
+                            0.0,
+                            2.0,
+                            value=default_settings.messiness,
+                            step=0.1,
+                            label="汚さ",
+                            info="行内の上下動・字間・サイズ・傾きのばらつき。0=整った字、2=大きく乱れる",
+                        )
+                        pressure_variation = gr.Slider(
+                            0.0,
+                            1.0,
+                            value=default_settings.pressure_variation,
+                            step=0.05,
+                            label="筆圧変化",
+                            info="画の中の濃淡（プレビュー演出用）。実機は描画中Zが振れて点線化するため0推奨",
+                        )
+                        instance_variation = gr.Slider(
+                            0.0,
+                            1.0,
+                            value=default_settings.instance_variation,
+                            step=0.05,
+                            label="字のばらつき",
+                            info="同じ字を毎回少し変える。0=毎回同じ形、大=書くたびに違う",
+                        )
+                        entry_taper = gr.Slider(
+                            0.0,
+                            1.0,
+                            value=default_settings.entry_taper,
+                            step=0.05,
+                            label="入筆",
+                            info="始筆を軽く入れて立ち上げる筆の入り。実機は始筆がかすれ得るため0推奨",
+                        )
+                        connection_strength = gr.Slider(
+                            0.0,
+                            1.0,
+                            value=default_settings.connection_strength,
+                            step=0.05,
+                            label="連綿（続け字）",
+                            info="同じ字の近い画を薄い線で続ける。近いほど高確率＋乱数。Z一定で点線化しない",
+                        )
+
+                        reset_btn = gr.Button("デフォルトに戻す", size="sm")
+                        validation_md = gr.HTML(value="", visible=False)
+
+                with gr.Accordion("ヘルプ", open=False):
+                    gr.Markdown(_HELP_MARKDOWN)
+
+            with gr.Tab("プロッタ送信"):
+                gr.Markdown(
+                    "Windows Chrome/Edge で `http://localhost` から開く想定。"
+                    "Firefox/Safari、LAN共有、Spaces では WebSerial を使えない場合があります。"
+                )
+                gr.HTML(
+                    value=_WEBSERIAL_STATUS_HTML,
+                    elem_id="webserial-status",
+                )
                 with gr.Row():
-                    preview_btn = gr.Button("プレビュー", variant="primary", scale=2)
-                    gcode_btn = gr.Button("G-code 生成", variant="secondary", scale=2)
-                    clear_btn = gr.Button("クリア", scale=1)
-
-                with gr.Accordion("例文を挿入", open=False):
-                    with gr.Row():
-                        ex_report_btn = gr.Button("レポートヘッダー", size="sm")
-                        ex_math_btn = gr.Button("数式レポート", size="sm")
-                        ex_essay_btn = gr.Button("小論文", size="sm")
-                        ex_table_btn = gr.Button("表サンプル", size="sm")
-
-            # ========== 中央カラム: プレビュー ==========
-            with gr.Column(scale=3):
-                stale_banner = gr.HTML(value="", visible=False)
-                status_md = gr.Markdown(visible=False)
-                preview_gallery = gr.Gallery(
-                    label="プレビュー",
-                    columns=1,
-                    height=700,
-                    show_label=False,
-                    object_fit="contain",
-                    preview=True,
-                )
-                with gr.Accordion("文字カバレッジ", open=False):
-                    coverage_md = gr.Markdown("")
-                gcode_files = gr.Files(label="G-code ダウンロード", interactive=False)
-
-            # ========== 右カラム: 設定 ==========
-            with gr.Column(scale=2):
-                gr.Markdown("### レイアウト")
-                font_size = gr.Slider(
-                    3.0,
-                    10.0,
-                    value=default_settings.font_size,
-                    step=0.1,
-                    label="フォントサイズ (mm)",
-                )
-                line_spacing = gr.Slider(
-                    5.0,
-                    15.0,
-                    value=default_settings.line_spacing,
-                    step=0.01,
-                    label="行間隔 (mm)",
-                )
-
-                gr.Markdown("### 余白 (mm)")
-                margin_top = gr.Slider(5, 60, value=default_settings.margin_top, step=1, label="上")
-                margin_bottom = gr.Slider(
-                    5, 50, value=default_settings.margin_bottom, step=1, label="下"
-                )
-                margin_left = gr.Slider(
-                    1, 50, value=default_settings.margin_left, step=1, label="左"
-                )
-                margin_right = gr.Slider(
-                    1, 50, value=default_settings.margin_right, step=1, label="右"
-                )
-
-                gr.Markdown("### プロッタ")
-                draw_speed = gr.Slider(
-                    200,
-                    3000,
-                    value=default_settings.draw_speed,
-                    step=50,
-                    label="描画速度 (mm/min)",
-                )
-                travel_speed = gr.Slider(
-                    1000,
-                    5000,
-                    value=default_settings.travel_speed,
-                    step=100,
-                    label="移動速度 (mm/min)",
-                )
-                pen_delay = gr.Slider(
-                    0.0,
-                    0.50,
-                    value=default_settings.pen_delay,
-                    step=0.01,
-                    label="ペン遅延 (s)",
-                )
-
-                gr.Markdown("### ML モデル")
-                profile_select = gr.Dropdown(
-                    choices=[pid for pid, _ in profile_options],
-                    value=default_profile,
-                    label="人物プロファイル",
-                    visible=bool(profile_options),
-                    interactive=bool(profile_options),
-                )
-                temperature = gr.Slider(
-                    0.1,
-                    2.0,
-                    value=default_settings.temperature,
-                    step=0.1,
-                    label="温度",
-                    info="高いほど文字の揺らぎが大きくなります",
-                )
-                messiness = gr.Slider(
-                    0.0,
-                    2.0,
-                    value=default_settings.messiness,
-                    step=0.1,
-                    label="汚さ",
-                    info="行内の上下動・字間・サイズ・傾きのばらつき。0=整った字、2=大きく乱れる",
-                )
-                pressure_variation = gr.Slider(
-                    0.0,
-                    1.0,
-                    value=default_settings.pressure_variation,
-                    step=0.05,
-                    label="筆圧変化",
-                    info="画の中の濃淡（プレビュー演出用）。実機は描画中Zが振れて点線化するため0推奨",
-                )
-                instance_variation = gr.Slider(
-                    0.0,
-                    1.0,
-                    value=default_settings.instance_variation,
-                    step=0.05,
-                    label="字のばらつき",
-                    info="同じ字を毎回少し変える。0=毎回同じ形、大=書くたびに違う",
-                )
-                entry_taper = gr.Slider(
-                    0.0,
-                    1.0,
-                    value=default_settings.entry_taper,
-                    step=0.05,
-                    label="入筆",
-                    info="始筆を軽く入れて立ち上げる筆の入り。実機は始筆がかすれ得るため0推奨",
-                )
-                connection_strength = gr.Slider(
-                    0.0,
-                    1.0,
-                    value=default_settings.connection_strength,
-                    step=0.05,
-                    label="連綿（続け字）",
-                    info="同じ字の近い画を薄い線で続ける。近いほど高確率＋乱数。Z一定で点線化しない",
-                )
-
-                reset_btn = gr.Button("デフォルトに戻す", size="sm")
-                validation_md = gr.HTML(value="", visible=False)
-
-        with gr.Accordion("ヘルプ", open=False):
-            gr.Markdown(_HELP_MARKDOWN)
+                    webserial_connect_btn = gr.Button("接続", elem_id="webserial-connect-btn")
+                    webserial_disconnect_btn = gr.Button(
+                        "切断",
+                        elem_id="webserial-disconnect-btn",
+                    )
+                    webserial_home_btn = gr.Button("Home", elem_id="webserial-home-btn")
+                    webserial_pen_up_btn = gr.Button("ペン Up", elem_id="webserial-pen-up-btn")
+                    webserial_pen_down_btn = gr.Button(
+                        "ペン Down",
+                        elem_id="webserial-pen-down-btn",
+                    )
+                with gr.Row():
+                    webserial_source = gr.Radio(
+                        choices=[
+                            ("生成済み G-code", "generated"),
+                            ("アップロード G-code", "uploaded"),
+                        ],
+                        value="generated",
+                        label="送信元",
+                    )
+                    webserial_upload = gr.Files(
+                        label="アップロード G-code (.gcode/.nc/.txt)",
+                        file_types=[".gcode", ".nc", ".txt"],
+                    )
+                with gr.Row():
+                    webserial_start_btn = gr.Button(
+                        "送信開始",
+                        variant="primary",
+                        elem_id="webserial-start-btn",
+                    )
+                    webserial_stop_btn = gr.Button("停止", elem_id="webserial-stop-btn")
+                    webserial_emergency_btn = gr.Button(
+                        "緊急停止",
+                        variant="stop",
+                        elem_id="webserial-emergency-btn",
+                    )
+                gr.HTML(value=_WEBSERIAL_LOG_HTML, elem_id="webserial-log")
 
         slider_components = [
             font_size,
@@ -716,6 +830,48 @@ def create_app(
             inputs=[gcode_files],
             outputs=None,
             js=_TRIGGER_MULTI_DOWNLOAD_JS,
+        )
+
+        webserial_connect_btn.click(
+            fn=None,
+            outputs=None,
+            js="() => window.penPlotterWebSerial.connect()",
+        )
+        webserial_disconnect_btn.click(
+            fn=None,
+            outputs=None,
+            js="() => window.penPlotterWebSerial.disconnect()",
+        )
+        webserial_home_btn.click(
+            fn=None,
+            outputs=None,
+            js="() => window.penPlotterWebSerial.home()",
+        )
+        webserial_pen_up_btn.click(
+            fn=None,
+            outputs=None,
+            js="() => window.penPlotterWebSerial.penUp()",
+        )
+        webserial_pen_down_btn.click(
+            fn=None,
+            outputs=None,
+            js="() => window.penPlotterWebSerial.penDown()",
+        )
+        webserial_start_btn.click(
+            fn=None,
+            inputs=[webserial_source, gcode_files, webserial_upload],
+            outputs=None,
+            js="(source, generatedFiles, uploadedFiles) => window.penPlotterWebSerial.start(source, generatedFiles, uploadedFiles)",
+        )
+        webserial_stop_btn.click(
+            fn=None,
+            outputs=None,
+            js="() => window.penPlotterWebSerial.stop()",
+        )
+        webserial_emergency_btn.click(
+            fn=None,
+            outputs=None,
+            js="() => window.penPlotterWebSerial.emergencyStop()",
         )
 
         def _on_clear(old_paths: list[str], old_tmpdir: str | None):

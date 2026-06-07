@@ -8,14 +8,21 @@ in-place 設定差し替えユーティリティは存在しない。
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import gradio as gr
 import pytest
 
 from src.ui.gradio_app import (
+    _APP_CSS,
+    _APP_HEAD,
     _EXAMPLE_ESSAY,
     _EXAMPLE_MATH_REPORT,
     _EXAMPLE_REPORT_HEADER,
+    _FONT_HEAD,
     _HELP_MARKDOWN,
+    _WEBSERIAL_HEAD,
+    _WEBSERIAL_SCRIPT,
     _format_coverage,
     _resolve_restored_profile,
     create_app,
@@ -128,6 +135,88 @@ class TestAppSmoke:
         # 設定・プロファイルの localStorage 永続化に BrowserState を 2 つ期待する
         bs = [b for b in app.blocks.values() if isinstance(b, gr.BrowserState)]
         assert len(bs) >= 2
+
+    def test_has_webserial_panel_components(self, app):
+        elem_ids = {
+            getattr(b, "elem_id", None)
+            for b in app.blocks.values()
+            if getattr(b, "elem_id", None)
+        }
+        assert "webserial-status" in elem_ids
+        assert "webserial-log" in elem_ids
+        assert "webserial-connect-btn" in elem_ids
+        assert "webserial-disconnect-btn" in elem_ids
+        assert "webserial-home-btn" in elem_ids
+        assert "webserial-pen-up-btn" in elem_ids
+        assert "webserial-pen-down-btn" in elem_ids
+        assert "webserial-start-btn" in elem_ids
+        assert "webserial-stop-btn" in elem_ids
+        assert "webserial-emergency-btn" in elem_ids
+
+    def test_generation_and_webserial_are_separate_tabs(self, app):
+        tab_labels = {
+            getattr(b, "label", None)
+            for b in app.blocks.values()
+            if type(b).__name__ == "Tab"
+        }
+        assert "生成" in tab_labels
+        assert "プロッタ送信" in tab_labels
+
+    def test_has_webserial_upload_file_input(self, app):
+        files = [b for b in app.blocks.values() if isinstance(b, gr.Files)]
+        labels = {getattr(b, "label", "") for b in files}
+        assert "G-code ダウンロード" in labels
+        assert "アップロード G-code (.gcode/.nc/.txt)" in labels
+
+
+class TestWebSerialScript:
+    def test_head_injects_webserial_script(self):
+        assert "<script>" in _WEBSERIAL_HEAD
+        assert "window.penPlotterWebSerial" in _WEBSERIAL_HEAD
+
+    def test_script_has_webserial_contract(self):
+        assert "navigator.serial.requestPort()" in _WEBSERIAL_SCRIPT
+        assert "baudRate: BAUD_RATE" in _WEBSERIAL_SCRIPT
+        assert "const BAUD_RATE = 115200" in _WEBSERIAL_SCRIPT
+        assert '"$H", "G4 P1", "G92 X0 Y297 Z0", "G90"' in _WEBSERIAL_SCRIPT
+        assert 'const PEN_UP_COMMAND = "G1G90 Z0.5 F5000"' in _WEBSERIAL_SCRIPT
+        assert 'const PEN_DOWN_COMMAND = "G1G90 Z5 F5000"' in _WEBSERIAL_SCRIPT
+
+    def test_script_has_stream_safety_guards(self):
+        assert "window.confirm" in _WEBSERIAL_SCRIPT
+        assert "state.cancelRequested" in _WEBSERIAL_SCRIPT
+        assert "GRBL 応答タイムアウト" in _WEBSERIAL_SCRIPT
+        assert "/^error:/i" in _WEBSERIAL_SCRIPT
+        assert "/^ALARM:/i" in _WEBSERIAL_SCRIPT
+        assert "new Uint8Array([0x21, 0x18])" in _WEBSERIAL_SCRIPT
+
+    def test_script_exposes_normalize_helper(self):
+        assert "normalizeGcode" in _WEBSERIAL_SCRIPT
+        assert "replace(/;.*$/," in _WEBSERIAL_SCRIPT
+        assert "replace(/\\([^)]*\\)/g," in _WEBSERIAL_SCRIPT
+
+
+class TestAppBrandingAssets:
+    def test_google_fonts_are_included_in_head(self):
+        assert "fonts.googleapis.com" in _FONT_HEAD
+        assert "fonts.gstatic.com" in _FONT_HEAD
+        assert "family=Inter" in _FONT_HEAD
+        assert "family=Noto+Sans+JP" in _FONT_HEAD
+
+    def test_app_head_combines_fonts_and_webserial(self):
+        assert "fonts.googleapis.com" in _APP_HEAD
+        assert "window.penPlotterWebSerial" in _APP_HEAD
+
+    def test_app_css_uses_inter_and_noto_sans_jp(self):
+        assert 'font-family: "Inter", "Noto Sans JP"' in _APP_CSS
+        assert "max-width: 1400px" in _APP_CSS
+
+    def test_run_ui_enables_pwa_with_app_assets(self):
+        run_ui = Path("scripts/run_ui.py").read_text(encoding="utf-8")
+        assert "from src.ui.gradio_app import _APP_CSS, _APP_HEAD, create_app" in run_ui
+        assert "css=_APP_CSS" in run_ui
+        assert "head=_APP_HEAD" in run_ui
+        assert "pwa=True" in run_ui
 
 
 class TestResolveRestoredProfile:

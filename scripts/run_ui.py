@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.ui.gradio_app import create_app
+from src.ui.gradio_app import _APP_CSS, _APP_HEAD, create_app
 
 
 def main() -> None:
@@ -57,7 +57,9 @@ def main() -> None:
         server_name="0.0.0.0",
         server_port=args.port,
         share=args.share,
-        css=".gradio-container { max-width: 1400px !important; }",
+        css=_APP_CSS,
+        head=_APP_HEAD,
+        pwa=True,
     )
 
 
