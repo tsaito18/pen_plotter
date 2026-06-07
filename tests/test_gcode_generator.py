@@ -332,3 +332,43 @@ class TestGCodeGeneratorFinishLift:
         g1 = _g1_lines(lines)
         last_feed = float(g1[-1].split("F")[1])
         assert last_feed < cfg.draw_speed
+
+
+class TestSimplifyStroke:
+    """RDP ストローク簡略化（実機スタッター抑制）。"""
+
+    def test_collinear_points_collapse_to_endpoints(self):
+        from src.gcode.generator import simplify_stroke
+
+        line = np.stack([np.linspace(0, 3.5, 32), np.zeros(32)], axis=1)
+        out = simplify_stroke(line, tolerance_mm=0.05)
+        assert len(out) == 2
+        assert np.allclose(out[0], line[0])
+        assert np.allclose(out[-1], line[-1])
+
+    def test_curve_preserved_within_tolerance(self):
+        from src.gcode.generator import simplify_stroke
+
+        t = np.linspace(0, 1, 32)
+        curve = np.stack([3.5 * t, 0.5 * np.sin(np.pi * t)], axis=1)
+        out = simplify_stroke(curve, tolerance_mm=0.05)
+        # 32点 → 大幅削減しつつ端点保持
+        assert 3 <= len(out) < 32
+        assert np.allclose(out[0], curve[0]) and np.allclose(out[-1], curve[-1])
+
+    def test_zero_tolerance_is_noop(self):
+        from src.gcode.generator import simplify_stroke
+
+        t = np.linspace(0, 1, 10)
+        s = np.stack([t, t**2], axis=1)
+        out = simplify_stroke(s, tolerance_mm=0.0)
+        assert len(out) == len(s)
+
+    def test_generator_reduces_g1_segments(self):
+        # 直線的なストロークは G1 が大幅に減る（スタッター抑制）
+        line = np.stack([np.linspace(2, 6, 32), np.full(32, 100.0)], axis=1)
+        many = GCodeGenerator(PlotterConfig(simplify_tolerance_mm=0.0))
+        few = GCodeGenerator(PlotterConfig(simplify_tolerance_mm=0.05))
+        n_many = sum(1 for s in many._stroke_to_gcode(line) if s.startswith("G1 X"))
+        n_few = sum(1 for s in few._stroke_to_gcode(line) if s.startswith("G1 X"))
+        assert n_few < n_many

@@ -50,6 +50,13 @@ class PlotterConfig:
     # Z軸移動のフィードレート (mm/min)。
     pen_z_feed: float = 5000.0
 
+    # ストローク簡略化(RDP)の許容偏差(mm)。リサンプリングは曲率に関係なく32点固定で
+    # 出力するため、4.5mm字では約0.12mmの極短セグメントが連続し GRBL が加減速しきれず
+    # 「ガガガ」と震えて遅くなる。共線に近い冗長点を畳んで最小セグメント長を確保する。
+    # 0.05mm: 緩い曲線32→約5点(最小≈0.8mm)・直線→2点、手書き揺らぎ(tremor)は温存。
+    # 0=簡略化なし。
+    simplify_tolerance_mm: float = 0.05
+
     # G-code設定
     decimal_places: int = 2
 
