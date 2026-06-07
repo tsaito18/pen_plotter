@@ -1293,3 +1293,32 @@ class TestTablePlacement:
         area = layout.content_area()
         assert v_rules[0] >= area.x - 1e-6
         assert v_rules[-1] <= area.x + area.width + 1e-6
+
+
+class TestPlainMathBodyRouting:
+    """単純数式の本文手書き経路ルーティングと□回避。"""
+
+    def test_plain_latin_routed_to_body(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset("$V = IR$")[0]
+        # 本文文字として配置（math_source なし）
+        assert all(p.math_source is None for p in placements)
+        assert "".join(p.char for p in placements) == "V = IR"
+
+    def test_plain_greek_routed_to_body(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset(r"$\sigma$")[0]
+        assert all(p.math_source is None for p in placements)
+        assert "".join(p.char for p in placements) == "σ"
+
+    def test_prime_symbol_stays_matplotlib(self):
+        """σ' は本文に字形が無い ' を含むため matplotlib 経路（□回避）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset(r"$\sigma'$")[0]
+        assert any(p.math_source for p in placements)
+
+    def test_simeq_stays_matplotlib(self):
+        """≃ は本文に字形が無いため matplotlib 経路（□回避）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset(r"$A \simeq B$")[0]
+        assert any(p.math_source for p in placements)

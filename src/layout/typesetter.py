@@ -16,6 +16,17 @@ from src.layout.math_layout import (
 from src.layout.page_layout import PageConfig, PageLayout
 from src.layout.table_layout import detect_pipe_table
 
+# 単純数式を本文手書き経路で描いてよい文字集合（stroke_renderer の幾何/記号/英字/数字
+# 経路が確実に字形を持つもの）。ここに無い記号(' " ^ _ | ≃ √ や未対応ギリシャ ικξουΑΒΕΞ
+# 等)を含む式は matplotlib のまま描く（本文経路だと□になるため）。renderer 側の対応を
+# 増やしたらここも追随する。診断ツール(layout_diagnostics)が□退行を検出する。
+_PLAIN_MATH_BODY_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789"
+    " =+-*/<>%:;!?()[]~.,"
+    "αβγδεζηθλμνπρστφχψωΓΔΘΛΠΣΦΨΩ"
+)
+
 _SMALL_KANA = set("っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ")
 _SMALL_PUNCT = set("・、。，．")
 _HEADING_X: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
@@ -1097,10 +1108,18 @@ class Typesetter:
         イタリック)で描くと手書き本文の中で書体が浮くため、本文と同じ手書き経路で描く。
         sup/sub/frac/sqrt/accent/group や演算子語(\\cos 等)を含むものは matplotlib のまま
         （=,+,- は text に含まれるので plain 対象。\\cos/\\sin は operator なので対象外）。
+        また本文経路に字形が無い記号(' ≃ 等)を含む式も matplotlib のまま（□回避）。
         """
-        return bool(elements) and all(e.type in ("text", "symbol") for e in elements)
+        if not elements or not all(e.type in ("text", "symbol") for e in elements):
+            return False
+        return all(
+            ch in _PLAIN_MATH_BODY_CHARS
+            for e in elements
+            for ch in e.content
+        )
 
-    def _plain_math_text(self, elements: list[MathElement]) -> str:
+    @staticmethod
+    def _plain_math_text(elements: list[MathElement]) -> str:
         return "".join(e.content for e in elements)
 
     def _place_math(
