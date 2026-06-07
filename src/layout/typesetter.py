@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from src.layout.line_breaking import break_paragraph_by_width, is_halfwidth
 from src.layout.math_layout import (
+    MathElement,
     MathLayoutEngine,
     MathParser,
     MathPlacement,
@@ -337,14 +338,17 @@ class Typesetter:
         return draw_w, h_mm
 
     def _inline_math_width(self, math_src: str) -> float:
-        # 予約幅を matplotlib 実描画幅に一致させる。論理幅（_CHAR_WIDTH_RATIO 等幅）は
-        # 上付き ^ を幅0・∑/∫を過大に見積もり、実描画とずれて行はみ出し／過大空白を
-        # 起こすため。draw_w<=0（墨なし等）は論理幅へフォールバック。
+        # 予約幅を実配置幅に一致させる（measure/wrap と placement の整合）。
+        # 単純な変数列は本文手書き経路で描くため本文送りの合計。
+        # それ以外は matplotlib 実描画幅（論理幅は ^/∑ を誤見積もりするため不可）。
+        # draw_w<=0（墨なし等）は論理幅へフォールバック。
+        elements = MathParser.parse(math_src)
+        elements = [e for e in elements if e.type != "tag"]
+        if self._is_plain_math(elements):
+            return sum(self._body_char_advance(ch) for ch in self._plain_math_text(elements))
         draw_w, _ = self._inline_math_draw_size(math_src)
         if draw_w > 0:
             return draw_w
-        elements = MathParser.parse(math_src)
-        elements = [e for e in elements if e.type != "tag"]
         box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size)
         return box.width
 
@@ -817,8 +821,6 @@ class Typesetter:
         本体の中心位置が tag 周辺空白の影響を受けないようにするため、
         tag 直前 text の末尾空白と直後 text の先頭空白も除去する。
         """
-        from src.layout.math_layout import MathElement
-
         result: list = []
         for elem in elements:
             if elem.type == "tag":
@@ -1087,6 +1089,20 @@ class Typesetter:
 
         return required_rows
 
+    @staticmethod
+    def _is_plain_math(elements: list[MathElement]) -> bool:
+        """数式が単純な変数列（添字/上付き/分数/根号を含まない）かを判定する。
+
+        単純な $u$ $S$ $\\sigma$ $x = 1$ $V = IR$ 等は matplotlib(Computer Modern
+        イタリック)で描くと手書き本文の中で書体が浮くため、本文と同じ手書き経路で描く。
+        sup/sub/frac/sqrt/accent/group や演算子語(\\cos 等)を含むものは matplotlib のまま
+        （=,+,- は text に含まれるので plain 対象。\\cos/\\sin は operator なので対象外）。
+        """
+        return bool(elements) and all(e.type in ("text", "symbol") for e in elements)
+
+    def _plain_math_text(self, elements: list[MathElement]) -> str:
+        return "".join(e.content for e in elements)
+
     def _place_math(
         self,
         math_src: str,
@@ -1099,6 +1115,18 @@ class Typesetter:
         elements = MathParser.parse(math_src)
         # インライン数式中の \tag{} は配置しない（仕様: ブロック数式専用）
         elements = [e for e in elements if e.type != "tag"]
+        # 単純な変数列は本文と同じ手書き経路で描く（書体を本文に統一）。
+        if self._is_plain_math(elements):
+            cursor = x
+            # 本文文字と同様、空白も placement 化（描画なし）して文字列順を保つ。
+            for ch in self._plain_math_text(elements):
+                output.append(
+                    CharPlacement(
+                        char=ch, x=cursor, y=y, font_size=self.font_size, page=page_idx
+                    )
+                )
+                cursor += self._body_char_advance(ch)
+            return cursor
         box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
         # インライン: bbox[1] に本文ベースライン y を渡し、math_align="baseline" で
         # 数式のベースラインを本文行に揃える（中心配置のズレを根本解消）。

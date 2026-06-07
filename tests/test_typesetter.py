@@ -1168,11 +1168,12 @@ class TestInlineMathBboxWidth:
         from src.ui.math_skeletonize import formula_draw_width_mm
 
         ts = Typesetter(PageConfig(), font_size=7.0)
-        pages = ts.typeset("A$E$B")
+        # 上付きを含む式は matplotlib 経路（単純変数は本文手書き経路で math_source なし）
+        pages = ts.typeset("A$E^2$B")
         placements = pages[0]
-        mp = next(p for p in placements if p.math_source == "E")
+        mp = next(p for p in placements if p.math_source)
         _, _, w_mm, h_mm = mp.math_bbox
-        expected = formula_draw_width_mm("E", h_mm)
+        expected = formula_draw_width_mm(mp.math_source, h_mm)
         assert w_mm == pytest.approx(expected, abs=0.1)
 
     def test_inline_math_does_not_overlap_next_char(self):
