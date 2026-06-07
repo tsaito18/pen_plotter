@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import tempfile
@@ -136,7 +137,40 @@ _FONT_HEAD = """\
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
 """
-_APP_HEAD = _FONT_HEAD + _WEBSERIAL_HEAD
+
+
+def _report_paper_data_uri() -> str:
+    """レポート用紙背景を縮小して base64 data URI 化する。
+
+    プレビュー Canvas の背景に敷くため、静的配信を使わず head 注入で渡す。
+    画像が無い/読込失敗時は空文字を返し、起動を止めない。
+    """
+    import base64
+    import io
+
+    from PIL import Image
+
+    try:
+        path = Path("data/report_paper.jpg")
+        if not path.exists():
+            return ""
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((1200, 1200))
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=80)
+        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        return "data:image/jpeg;base64," + encoded
+    except Exception:
+        logger.exception("report paper background load failed")
+        return ""
+
+
+# webserial_sender.js より前に window.__ppReportPaper を定義する順序にする。
+_REPORT_PAPER_HEAD = (
+    "<script>window.__ppReportPaper=" + json.dumps(_report_paper_data_uri()) + ";</script>"
+)
+_APP_HEAD = _FONT_HEAD + _REPORT_PAPER_HEAD + _WEBSERIAL_HEAD
 _APP_CSS = """\
 :root {
     --pp-primary: #2563eb;
@@ -416,6 +450,22 @@ label {
     font-size: 0.85rem;
 }
 
+/* プロッタ送信プレビュー: A4 比率の Canvas に G-code を直接描画する。 */
+.pp-preview-canvas {
+    width: 100%;
+    aspect-ratio: 210/297;
+    background: #ffffff;
+    border: 1px solid var(--pp-neutral-300);
+    border-radius: 3px;
+    display: block;
+}
+
+.pp-preview-info {
+    margin-top: 6px;
+    font-size: 0.8rem;
+    color: var(--pp-neutral-400);
+}
+
 /* primary ボタンを青系に統一（既定オレンジを上書き）。
    stop(緊急停止=赤) には適用しないよう :not(.stop) で除外する。 */
 .gradio-container button.primary:not(.stop) {
@@ -481,7 +531,16 @@ _WEBSERIAL_PROGRESS_HTML = """\
   </div>
   <div id="webserial-progress-text" class="pp-progress-text">0 / 0 行 (0%)</div>
   <div id="webserial-current-line" class="pp-current-line">現在行: -</div>
+  <div id="webserial-paper-change"
+       style="display:none; margin-top:8px; padding:10px 12px; border-radius:8px;
+              background:#fff7e6; border:1px solid #ffd591; color:#874d00; font-weight:600;">
+  </div>
 </div>
+"""
+
+_WEBSERIAL_PREVIEW_HTML = """\
+<canvas id="webserial-preview-canvas" class="pp-preview-canvas"></canvas>
+<div id="webserial-preview-info" class="pp-preview-info">対象なし</div>
 """
 
 _WEBSERIAL_LOG_HTML = """\
@@ -888,7 +947,7 @@ def create_app(
 
             with gr.Tab("プロッタ送信"):
                 with gr.Row(equal_height=False):
-                    # ===== 左カラム: 操作系（接続 / 機械操作 / ジョブ送信）=====
+                    # ===== 左カラム: 操作系（接続 / 送信データ選択 / ジョブ送信）=====
                     with gr.Column(scale=1):
                         with gr.Group(elem_classes=["pp-fieldset"]):
                             gr.HTML('<div class="pp-legend">接続</div>')
@@ -907,23 +966,33 @@ def create_app(
                                 )
 
                         with gr.Group(elem_classes=["pp-fieldset"]):
-                            gr.HTML('<div class="pp-legend">機械操作</div>')
+                            gr.HTML('<div class="pp-legend">送信データ選択</div>')
                             gr.HTML(
-                                '<div class="pp-fieldset-note">描画前に動作確認してください。</div>'
+                                '<div class="pp-fieldset-note">'
+                                "「生成」タブで作った G-code は「生成済み G-code」で選べます。"
+                                "</div>"
                             )
-                            with gr.Row():
-                                webserial_home_btn = gr.Button(
-                                    "Home", variant="secondary", elem_id="webserial-home-btn"
-                                )
-                                webserial_pen_up_btn = gr.Button(
-                                    "ペン Up",
-                                    variant="secondary",
-                                    elem_id="webserial-pen-up-btn",
-                                )
-                                webserial_pen_down_btn = gr.Button(
-                                    "ペン Down",
-                                    variant="secondary",
-                                    elem_id="webserial-pen-down-btn",
+                            webserial_source = gr.Radio(
+                                choices=[
+                                    ("生成済み G-code", "generated"),
+                                    ("アップロード G-code", "uploaded"),
+                                ],
+                                value="generated",
+                                label="送信元",
+                            )
+                            webserial_pages = gr.Dropdown(
+                                choices=[],
+                                value=[],
+                                multiselect=True,
+                                label="送信ページ",
+                                info="送信するページを選択（既定: 全ページ）。1ページごとに用紙交換で停止します。",
+                            )
+                            # gr.Files を visible=False で初期化すると初回表示時に
+                            # loading 表示が固着するため、Group 側の表示を切り替える。
+                            with gr.Group(visible=False) as webserial_upload_group:
+                                webserial_upload = gr.Files(
+                                    label="アップロード G-code (.gcode/.nc/.txt)",
+                                    file_types=[".gcode", ".nc", ".txt"],
                                 )
 
                         with gr.Group(elem_classes=["pp-fieldset"]):
@@ -942,35 +1011,20 @@ def create_app(
                                     variant="stop",
                                     elem_id="webserial-emergency-btn",
                                 )
+                                webserial_resume_btn = gr.Button(
+                                    "続行（用紙交換後）",
+                                    variant="primary",
+                                    elem_id="webserial-resume-btn",
+                                )
                             gr.HTML(value=_WEBSERIAL_PROGRESS_HTML)
 
-                    # ===== 右カラム: 送信データ選択 / プレビュー =====
-                    with gr.Column(scale=1):
-                        with gr.Group(elem_classes=["pp-fieldset"]):
-                            gr.HTML('<div class="pp-legend">送信データ選択</div>')
-                            gr.HTML(
-                                '<div class="pp-fieldset-note">'
-                                "「生成」タブで作った G-code は「生成済み G-code」で選べます。"
-                                "</div>"
-                            )
-                            webserial_source = gr.Radio(
-                                choices=[
-                                    ("生成済み G-code", "generated"),
-                                    ("アップロード G-code", "uploaded"),
-                                ],
-                                value="generated",
-                                label="送信元",
-                            )
-                            webserial_upload = gr.Files(
-                                label="アップロード G-code (.gcode/.nc/.txt)",
-                                file_types=[".gcode", ".nc", ".txt"],
-                                visible=False,
-                            )
-
+                    # ===== 右カラム: プレビュー =====
+                    with gr.Column(scale=2):
                         with gr.Group(elem_classes=["pp-fieldset"]):
                             gr.HTML('<div class="pp-legend">プレビュー</div>')
                             gr.HTML(
-                                '<div class="pp-preview-placeholder">プレビューは今後対応予定</div>'
+                                value=_WEBSERIAL_PREVIEW_HTML,
+                                elem_id="webserial-preview",
                             )
 
                 # ===== 最下部 全幅: ログ（常時表示）=====
@@ -1184,12 +1238,14 @@ def create_app(
                     None,
                     None,
                     gr.update(value=_validation_status(errors), visible=True),
+                    gr.update(),
                 )
             if not text or not text.strip():
                 return (
                     None,
                     None,
                     gr.update(value="**テキストを入力してください。**", visible=True),
+                    gr.update(),
                 )
 
             def _progress_cb(frac: float, desc: str) -> None:
@@ -1213,32 +1269,87 @@ def create_app(
                     f"**G-code を {len(paths)} ページ生成しました** ({elapsed:.1f}秒) "
                     "— 自動ダウンロードを開始します"
                 )
-                return str_paths, str(tmp_dir), gr.update(value=status, visible=True)
+                page_choices = list(range(1, len(paths) + 1))
+                return (
+                    str_paths,
+                    str(tmp_dir),
+                    gr.update(value=status, visible=True),
+                    gr.update(choices=page_choices, value=page_choices),
+                )
             except Exception as exc:
                 logger.exception("G-code generation failed")
                 if tmp_dir is not None:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
-                return None, None, gr.update(value=f"**エラー:** {exc}", visible=True)
+                return (
+                    None,
+                    None,
+                    gr.update(value=f"**エラー:** {exc}", visible=True),
+                    gr.update(),
+                )
 
         gcode_btn.click(
             _on_generate,
             inputs=[text_input, settings_state, profile_select, prev_gcode_tmpdir],
-            outputs=[gcode_files, prev_gcode_tmpdir, status_md],
+            outputs=[gcode_files, prev_gcode_tmpdir, status_md, webserial_pages],
         ).then(
             fn=None,
             inputs=[gcode_files],
             outputs=None,
             js=_TRIGGER_MULTI_DOWNLOAD_JS,
+        ).then(
+            # gcode_files / webserial_pages 更新後に送信対象プレビューを描く。
+            fn=None,
+            inputs=[webserial_source, gcode_files, webserial_upload, webserial_pages],
+            outputs=None,
+            js=(
+                "(source, generatedFiles, uploadedFiles, pages) => "
+                "window.penPlotterWebSerial.preview(source, generatedFiles, uploadedFiles, pages)"
+            ),
         )
 
         def _on_webserial_source_change(source: str):
-            # アップロード選択時のみファイル欄を表示する
-            return gr.update(visible=source == "uploaded")
+            # アップロード選択時はファイル欄、生成済み選択時はページ選択を表示する
+            is_uploaded = source == "uploaded"
+            return (
+                gr.update(visible=is_uploaded),  # webserial_upload_group
+                gr.update(visible=not is_uploaded),  # webserial_pages
+            )
+
+        # 対象確認用プレビュー: start() と同じ引数順で先頭ページを薄灰描画する。
+        _webserial_preview_inputs = [
+            webserial_source,
+            gcode_files,
+            webserial_upload,
+            webserial_pages,
+        ]
+        _webserial_preview_js = (
+            "(source, generatedFiles, uploadedFiles, pages) => "
+            "window.penPlotterWebSerial.preview(source, generatedFiles, uploadedFiles, pages)"
+        )
 
         webserial_source.change(
             _on_webserial_source_change,
             inputs=[webserial_source],
-            outputs=[webserial_upload],
+            outputs=[webserial_upload_group, webserial_pages],
+        ).then(
+            fn=None,
+            inputs=_webserial_preview_inputs,
+            outputs=None,
+            js=_webserial_preview_js,
+        )
+
+        webserial_pages.change(
+            fn=None,
+            inputs=_webserial_preview_inputs,
+            outputs=None,
+            js=_webserial_preview_js,
+        )
+
+        webserial_upload.change(
+            fn=None,
+            inputs=_webserial_preview_inputs,
+            outputs=None,
+            js=_webserial_preview_js,
         )
 
         webserial_connect_btn.click(
@@ -1251,26 +1362,16 @@ def create_app(
             outputs=None,
             js="() => window.penPlotterWebSerial.disconnect()",
         )
-        webserial_home_btn.click(
-            fn=None,
-            outputs=None,
-            js="() => window.penPlotterWebSerial.home()",
-        )
-        webserial_pen_up_btn.click(
-            fn=None,
-            outputs=None,
-            js="() => window.penPlotterWebSerial.penUp()",
-        )
-        webserial_pen_down_btn.click(
-            fn=None,
-            outputs=None,
-            js="() => window.penPlotterWebSerial.penDown()",
-        )
         webserial_start_btn.click(
             fn=None,
-            inputs=[webserial_source, gcode_files, webserial_upload],
+            inputs=[webserial_source, gcode_files, webserial_upload, webserial_pages],
             outputs=None,
-            js="(source, generatedFiles, uploadedFiles) => window.penPlotterWebSerial.start(source, generatedFiles, uploadedFiles)",
+            js="(source, generatedFiles, uploadedFiles, pages) => window.penPlotterWebSerial.start(source, generatedFiles, uploadedFiles, pages)",
+        )
+        webserial_resume_btn.click(
+            fn=None,
+            outputs=None,
+            js="() => window.penPlotterWebSerial.resume()",
         )
         webserial_stop_btn.click(
             fn=None,
@@ -1296,6 +1397,7 @@ def create_app(
                 "",  # coverage_md
                 [],  # prev_preview_paths
                 None,  # prev_gcode_tmpdir
+                gr.update(choices=[], value=[]),  # webserial_pages
             )
 
         clear_btn.click(
@@ -1310,6 +1412,7 @@ def create_app(
                 coverage_md,
                 prev_preview_paths,
                 prev_gcode_tmpdir,
+                webserial_pages,
             ],
         )
 
