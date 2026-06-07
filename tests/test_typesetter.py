@@ -1136,3 +1136,99 @@ class TestMathRealDrawWidth:
         draw_w = formula_draw_width_mm(long_src, h_mm)
         assert draw_w == pytest.approx(w_mm, abs=0.5) or w_mm <= area.width + 0.5
         assert x0 + w_mm <= area.x + area.width + 0.5
+
+
+class TestInlineMathBboxWidth:
+    """インライン数式 bbox の幅が実描画幅に一致し右隣文字とかぶらないテスト（バグ2）。
+
+    旧実装は bbox 幅に論理幅(box.width)を使い、実描画幅(h_mm*aspect)より小さいため
+    数式画像が予約枠からはみ出し右隣文字に重なっていた。
+    """
+
+    def test_inline_bbox_width_matches_real_draw_width(self):
+        from src.ui.math_skeletonize import formula_draw_width_mm
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("A$E$B")
+        placements = pages[0]
+        mp = next(p for p in placements if p.math_source == "E")
+        _, _, w_mm, h_mm = mp.math_bbox
+        expected = formula_draw_width_mm("E", h_mm)
+        assert w_mm == pytest.approx(expected, abs=0.1)
+
+    def test_inline_math_does_not_overlap_next_char(self):
+        from src.ui.math_skeletonize import render_latex_to_strokes
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("A$E=mc^2$B")
+        placements = pages[0]
+        mp = next(p for p in placements if p.math_source)
+        strokes = render_latex_to_strokes(mp.math_source, mp.math_bbox, mp.math_align)
+        assert strokes, "inline math should render strokes"
+        math_right = max(float(s[:, 0].max()) for s in strokes)
+        next_char = next(p for p in placements if p.char == "B")
+        # 数式の実描画右端が右隣文字の開始 x を超えない（重なりなし）
+        assert math_right <= next_char.x + 0.5
+
+
+class TestMultiCharSubscript:
+    """複数文字添字 σ_{sU} の全文字が描画対象として保持されるテスト（バグ1）。
+
+    旧実装は複数文字 MathPlacement(text="sU") を1文字ずつ分割し、先頭以外を
+    math_skip=True・role=None に落として2文字目以降を取りこぼしていた。
+    画像レンダリングしない（math_source 無し）経路を直接検証する。
+    """
+
+    def _convert(self, src: str) -> list[CharPlacement]:
+        from src.layout.math_layout import MathLayoutEngine, MathParser
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        elements = [e for e in MathParser.parse(src) if e.type != "tag"]
+        box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=ts.font_size)
+        output: list[CharPlacement] = []
+        # math_source を渡さない＝個別文字描画経路（タグ等と同じ）
+        ts._convert_math_placements(box.placements, page_idx=0, output=output)
+        return output
+
+    def test_multichar_subscript_keeps_all_chars(self):
+        output = self._convert(r"\sigma_{sU}")
+        chars = "".join(p.char for p in output)
+        assert "s" in chars
+        assert "U" in chars
+
+    def test_multichar_subscript_all_have_role_and_no_skip(self):
+        output = self._convert(r"\sigma_{sL}")
+        sub_ps = [p for p in output if p.char in ("s", "L")]
+        assert len(sub_ps) == 2
+        for p in sub_ps:
+            assert p.role == "subscript", f"{p.char!r} lost subscript role"
+            assert not p.math_skip, f"{p.char!r} wrongly marked math_skip"
+            # 添字サイズは本文の 0.75 倍
+            assert p.font_size == pytest.approx(7.0 * 0.75, abs=0.01)
+
+    def test_multichar_subscript_chars_distinct_x(self):
+        output = self._convert(r"\sigma_{sU}")
+        xs = [p.x for p in output if p.char in ("s", "U")]
+        assert len(xs) == 2
+        assert xs[1] > xs[0], "添字2文字目が1文字目と同じ位置に重なっている"
+
+    def test_multichar_word_in_image_mode_still_skips(self):
+        """math_source 有り（画像描画）経路では従来どおり先頭以外 skip。"""
+        from src.layout.math_layout import MathLayoutEngine, MathParser
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        elements = [e for e in MathParser.parse(r"\sigma_{sU}") if e.type != "tag"]
+        box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=ts.font_size)
+        output: list[CharPlacement] = []
+        ts._convert_math_placements(
+            box.placements,
+            page_idx=0,
+            output=output,
+            math_source=r"\sigma_{sU}",
+            math_bbox=(0.0, 0.0, 10.0, 7.0),
+        )
+        # 先頭1つだけ math_source を持ち、残りは skip（画像が一括描画する）
+        head = [p for p in output if p.math_source]
+        assert len(head) == 1
+        rest = [p for p in output if not p.math_source]
+        assert all(p.math_skip for p in rest)

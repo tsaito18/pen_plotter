@@ -1081,13 +1081,18 @@ class Typesetter:
         # インライン: bbox[1] に本文ベースライン y を渡し、math_align="baseline" で
         # 数式のベースラインを本文行に揃える（中心配置のズレを根本解消）。
         # 高さ h は ascent+descent（数式画像の縦範囲スケールに使う）。
-        math_bbox = (x, y, box.width, box.ascent + box.descent)
+        # bbox 幅は実描画幅（draw_w=h_mm*aspect = _inline_math_width）に一致させる。
+        # 論理幅(box.width)は実描画より小さく、数式画像が予約枠からはみ出して右隣文字に
+        # 重なるため。カーソル前進(_inline_math_width)とも一致し、折り返し予約と揃う。
+        h_mm = box.ascent + box.descent
+        draw_w = self._inline_math_width(math_src)
+        math_bbox = (x, y, draw_w, h_mm)
         self._convert_math_placements(
             box.placements, page_idx, output, math_src, math_bbox, math_align="baseline"
         )
         # カーソル前進は実描画幅（_inline_math_width）に揃える。box.width(論理幅)では
-        # 上付き等で実描画が右隣へ食い込む。bbox は baseline 経路で h_mm*aspect 描画のため box.width のままでよい。
-        return x + self._inline_math_width(math_src)
+        # 上付き等で実描画が右隣へ食い込む。bbox 幅も同じ draw_w にして三者を一致させる。
+        return x + draw_w
 
     @staticmethod
     def _convert_math_placements(
@@ -1145,8 +1150,11 @@ class Typesetter:
                     )
                 )
             else:
+                # 複数文字 MathPlacement（例: 添字 _{sU} の "sU"）を1文字ずつ分割。
+                # role（subscript 等）は全文字に保持する。先頭だけにすると2文字目以降が
+                # 添字サイズ・位置を失い描画から取りこぼされる（バグ）。
+                # line_segment は単一の幾何要素なので先頭のみに付与する。
                 for i, ch in enumerate(mp.text):
-                    role = mp.role if i == 0 else None
                     seg = mp.line_segment if i == 0 else None
                     output.append(
                         make_cp(
@@ -1155,7 +1163,7 @@ class Typesetter:
                             y=mp.y,
                             font_size=mp.font_size,
                             page=page_idx,
-                            role=role,
+                            role=mp.role,
                             line_segment=seg,
                         )
                     )
