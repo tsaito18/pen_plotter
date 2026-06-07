@@ -171,7 +171,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - ガイド付きストローク収集UI（381文字セット、KanjiVGお手本表示、Apple Pencilのみ入力）
 - ユーザーサンプル: 381文字 / 925+サンプル収集済み（data/user_strokes/）
 - V3 StrokeDeformer（per-point offset MLP + 局所曲率）でユーザーデータ訓練完了
-- レポート用紙実測レイアウト: 罫線7.16mm、余白48/34/5/5mm、font_size 4.5mm
+- レポート用紙実測レイアウト: 罫線7.14mm、余白48/34/5/5mm、font_size 4.5mm
 - 文字バランス: 漢字100%、ひらがな/カタカナ個別調整（85%-68%）、半角70%、小書き55%
 - 数式レイアウト統合: インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線, ^/_ブレースなし記法
 - **表（Markdownパイプ表）**: `| a | b |`＋区切り`|---|---|`＋データ行を `table_layout.detect_pipe_table()` で検出し、`typesetter._place_table()` が罫線(line_segment)＋手書きセル文字に組版（ブロック数式と同じ「複数行消費＋次ページ送り」方式、`ParsedDocument.table_blocks`）。列幅は中身の最大文字数から決め本文幅に収める。**本文幅の中央寄せ**。横罫線は用紙の罫線(line_positions)に一致。表の直後の `: タイトル` 行はキャプションとして表の下に中央寄せ描画（`table_captions`）

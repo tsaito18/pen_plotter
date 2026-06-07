@@ -19,7 +19,7 @@ class TestUISettingsDefault:
         """default() は PlotterPipeline.__init__() のデフォルトと一致する。"""
         s = UISettings.default()
         assert s.font_size == 4.5
-        assert s.line_spacing == 7.16
+        assert s.line_spacing == 7.14
         assert s.margin_top == 48.0
         assert s.margin_bottom == 34.0
         assert s.margin_left == 5.0

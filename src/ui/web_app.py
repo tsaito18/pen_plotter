@@ -64,7 +64,7 @@ class PlotterPipeline:
             margin_bottom=34.0,
             margin_left=5.0,
             margin_right=5.0,
-            line_spacing=7.16,
+            line_spacing=7.14,
         )
         self._plotter_config = plotter_config or PlotterConfig(
             work_area_width=220.0,

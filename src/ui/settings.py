@@ -74,7 +74,7 @@ class UISettings:
         """
         return cls(
             font_size=4.5,
-            line_spacing=7.16,
+            line_spacing=7.14,
             margin_top=48.0,
             margin_bottom=34.0,
             margin_left=5.0,
