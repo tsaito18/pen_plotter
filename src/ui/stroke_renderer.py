@@ -364,6 +364,9 @@ class StrokeRenderer:
                 cov.kanjivg.append(original_char)
                 positioned = self._position_strokes(char_strokes, placement)
                 finishes = self._resolve_finishes(char_types, positioned)
+                # 数字は終端リフト（はらい/はね）を当てると下線等が歪むため無効化
+                if not self._is_ml_deformable(placement.char):
+                    finishes = ["none"] * len(positioned)
                 positioned = apply_finishing(
                     positioned,
                     finishes,
@@ -718,9 +721,10 @@ class StrokeRenderer:
         if char in ("\u3001", ","):
             return [np.array([[0.6, 0.2], [0.3, 0.8]])]
         elif char == "\u3002":
-            return [self._small_dot(0.5, 0.5, r=0.12)]
+            # \u53e5\u70b9\u306f\u30ec\u30dd\u30fc\u30c8\u4f53\u88c1\u306b\u5408\u308f\u305b\u3001\u4e2d\u592e\u306e\u5186\u3067\u306f\u306a\u304f\u5e95\u306e\u5c0f\u3055\u306a\u70b9\uff08\u30d4\u30ea\u30aa\u30c9\u98a8\uff09
+            return [self._small_dot(0.5, 0.2, r=0.08)]
         elif char == ".":
-            return [np.array([[0.48, 0.22], [0.52, 0.22]], dtype=np.float64)]
+            return [self._small_dot(0.5, 0.2, r=0.07)]
         elif char == "\u30fb":
             angles = np.linspace(0, 2 * np.pi, 12)
             r = 0.15
