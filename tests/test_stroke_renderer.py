@@ -666,3 +666,30 @@ class TestGenerateCharStrokesWithFinishes:
         assert not isinstance(result, tuple)
         strokes, _ = renderer.generate_char_strokes_with_finishes(placement)
         assert len(result) == len(strokes)
+
+
+class TestAsciiLetterHandwriting:
+    """本文 ASCII 英字の手書き揺らぎ（きれいすぎ解消）。"""
+
+    def test_ascii_letter_gets_distortion_with_augmenter(self):
+        from src.layout.typesetter import CharPlacement
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        clean = StrokeRenderer()
+        hand = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
+        cp = CharPlacement(char="x", x=0.0, y=0.0, font_size=10.0)
+        s_clean = clean.generate_char_strokes(cp)
+        s_hand = hand.generate_char_strokes(cp)
+        assert len(s_clean) == len(s_hand)
+        # augmenter 有りでは素の幾何字形から変位する（きれいすぎない）
+        assert any(not np.allclose(c, h) for c, h in zip(s_clean, s_hand))
+
+    def test_ascii_letter_no_augmenter_is_clean(self):
+        from src.layout.typesetter import CharPlacement
+
+        r = StrokeRenderer()  # augmenter なし
+        cp = CharPlacement(char="x", x=0.0, y=0.0, font_size=10.0)
+        a = r.generate_char_strokes(cp)
+        b = r.generate_char_strokes(cp)
+        # augmenter 無しなら毎回同一（distortion no-op）
+        assert all(np.allclose(x, y) for x, y in zip(a, b))

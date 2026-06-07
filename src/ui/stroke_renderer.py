@@ -317,6 +317,9 @@ class StrokeRenderer:
         if letter_strokes is not None:
             cov.geometric.append(original_char)
             positioned = self._position_strokes(letter_strokes, placement)
+            # 幾何字形は完全な直線/円で「きれいすぎる」ため手書き揺らぎを乗せる。
+            # ML/直接ストローク(素値1.0)より強く、数式画像(6.0)より弱い中間値。
+            positioned = self._apply_distortion(positioned, waver_scale=3.0)
             return positioned, ["none"] * len(positioned)
 
         direct = self._direct_stroke(placement.char)
