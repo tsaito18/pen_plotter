@@ -1232,3 +1232,44 @@ class TestMultiCharSubscript:
         assert len(head) == 1
         rest = [p for p in output if not p.math_source]
         assert all(p.math_skip for p in rest)
+
+
+class TestTablePlacement:
+    """Markdownパイプ表の組版（_place_table）。"""
+
+    _TABLE = "| 材料 | 引張強さ |\n|---|---|\n| 圧延鋼材 | 400 |\n| 焼鈍材 | 510 |\n"
+
+    def _segments_and_cells(self, font_size=4.5):
+        ts = Typesetter(PageConfig(), font_size=font_size)
+        pages = ts.typeset(self._TABLE)
+        placements = pages[0]
+        v_rules = sorted(
+            p.line_segment[0]
+            for p in placements
+            if p.line_segment is not None and p.line_segment[0] == p.line_segment[2]
+        )
+        cells = [p for p in placements if p.char and p.line_segment is None]
+        return ts, v_rules, cells
+
+    def test_cells_do_not_overflow_columns(self):
+        """各セル文字は所属列の縦罫線(右境界)を越えない（漢字混在でもはみ出さない）。"""
+        ts, v_rules, cells = self._segments_and_cells()
+        assert len(v_rules) >= 3  # 2列なら縦罫線3本
+        for cp in cells:
+            # この文字が属する列を、左境界 < x の最右な縦罫線で特定
+            left = max((x for x in v_rules if x <= cp.x + 1e-6), default=None)
+            right = min((x for x in v_rules if x > cp.x + 1e-6), default=None)
+            assert left is not None and right is not None
+            # 文字送り分も右境界内に収まること
+            adv = ts._body_char_advance(cp.char)
+            assert cp.x + adv <= right + 1e-6, (
+                f"セル文字 {cp.char!r} (x={cp.x:.2f}+{adv:.2f}) が右境界 {right:.2f} を越えた"
+            )
+
+    def test_table_fits_in_content_width(self):
+        """表全体は本文幅に収まる。"""
+        ts, v_rules, _ = self._segments_and_cells()
+        layout = PageLayout(PageConfig())
+        area = layout.content_area()
+        assert v_rules[0] >= area.x - 1e-6
+        assert v_rules[-1] <= area.x + area.width + 1e-6

@@ -880,11 +880,20 @@ class Typesetter:
 
         fs = self.font_size
         pad = fs * 0.3
-        # 列幅: 各列の最大文字数 × 文字送り + 左右パディング
+        # 列幅: 各列セルの実文字送り(_body_char_advance)の最大 + 左右パディング。
+        # 文字数×fs だと半角(0.55倍)を過大・漢字(1.08倍)を過小に見積もり、配置(実送り)と
+        # ずれてセルが縦罫線を越える/過大空白になるため、配置と同じ実幅で算出する。
         col_w: list[float] = []
         for c in range(n_cols):
-            max_chars = max(len(rows[r][c]) for r in range(n_rows)) if n_cols > 0 else 1
-            col_w.append(max(max_chars, 1) * fs + 2 * pad)
+            cell_adv = (
+                max(
+                    sum(self._body_char_advance(ch) for ch in rows[r][c])
+                    for r in range(n_rows)
+                )
+                if n_rows > 0
+                else fs
+            )
+            col_w.append(max(cell_adv, fs) + 2 * pad)
         total_w = sum(col_w)
         scale = min(1.0, area.width / total_w) if total_w > 0 else 1.0
         col_w = [w * scale for w in col_w]
