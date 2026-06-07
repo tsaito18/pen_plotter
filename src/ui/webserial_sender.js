@@ -82,7 +82,31 @@
     return state.connected ? "接続中" : "未接続";
   }
 
+  function badgeState() {
+    if (!("serial" in navigator) || !window.isSecureContext) {
+      return { variant: "unsupported", label: "非対応" };
+    }
+    if (state.streaming) {
+      return { variant: "streaming", label: "送信中" };
+    }
+    if (state.connected) {
+      return { variant: "connected", label: "接続中" };
+    }
+    return { variant: "idle", label: "未接続" };
+  }
+
+  function refreshBadge() {
+    const node = byId("webserial-status-badge");
+    if (!node) {
+      return;
+    }
+    const { variant, label } = badgeState();
+    node.className = `pp-badge pp-badge--${variant}`;
+    node.textContent = label;
+  }
+
   function refreshStatus() {
+    refreshBadge();
     setHtml(
       "webserial-status-value",
       escapeHtml(
@@ -92,11 +116,15 @@
       ),
     );
     const pct = state.total > 0 ? Math.round((state.sent / state.total) * 100) : 0;
-    setHtml(
-      "webserial-progress-bar",
-      `<div style="height:100%;width:${pct}%;background:#1677ff;"></div>`,
-    );
+    const bar = byId("webserial-progress-bar");
+    if (bar) {
+      bar.style.width = `${pct}%`;
+    }
     setHtml("webserial-progress-text", escapeHtml(`${state.sent} / ${state.total} 行 (${pct}%)`));
+    const currentLine = byId("webserial-current-line");
+    if (currentLine) {
+      currentLine.textContent = `現在行: ${state.currentLine || "-"}`;
+    }
     refreshButtons();
   }
 
@@ -336,11 +364,6 @@
       const lines = await loadSelectedGcode(source, generatedFiles, uploadedFiles);
       if (lines.length === 0) {
         throw new Error("送信可能な G-code 行なし");
-      }
-      const ok = window.confirm(`${lines.length} 行の G-code を xDraw A4 へ送信します。開始しますか？`);
-      if (!ok) {
-        log("送信キャンセル");
-        return;
       }
       state.streaming = true;
       state.cancelRequested = false;

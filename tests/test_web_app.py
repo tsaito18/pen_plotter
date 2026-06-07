@@ -893,6 +893,37 @@ class TestDirectStrokeGeometricVariation:
             assert all_pts[:, 1].max() <= 20.0 + 8.0 + 3.0
 
 
+class TestSimplePunctStrokes:
+    """_simple_punct_strokes() のテスト。"""
+
+    @pytest.fixture
+    def pipeline(self):
+        return PlotterPipeline()
+
+    def test_ascii_period_is_short_drawable_dot(self, pipeline):
+        """ASCIIピリオドは円ではなく、G-codeで描ける短い点線。"""
+        result = pipeline._simple_punct_strokes(".")
+
+        assert result is not None
+        assert len(result) == 1
+        stroke = result[0]
+        assert stroke.shape == (2, 2)
+        assert stroke.dtype == np.float64
+        assert not np.allclose(stroke[0], stroke[-1])
+        assert np.ptp(stroke[:, 0]) <= 0.05
+        assert np.ptp(stroke[:, 1]) == 0.0
+
+    def test_japanese_period_remains_circular(self, pipeline):
+        """句点は既存通り小円ストローク。"""
+        result = pipeline._simple_punct_strokes("。")
+
+        assert result is not None
+        assert len(result) == 1
+        stroke = result[0]
+        assert stroke.shape[0] > 2
+        assert np.allclose(stroke[0], stroke[-1])
+
+
 class TestMathSymbolStrokes:
     """_math_symbol_strokes() のテスト。"""
 

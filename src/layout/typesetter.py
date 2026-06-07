@@ -322,9 +322,18 @@ class Typesetter:
         return area.x + area.width
 
     def _inline_math_width(self, math_src: str) -> float:
+        # 予約幅を matplotlib 実描画幅に一致させる。論理幅（_CHAR_WIDTH_RATIO 等幅）は
+        # 上付き ^ を幅0・∑/∫を過大に見積もり、実描画(draw_w=h_mm*aspect)とずれて
+        # 行はみ出し／過大空白を起こすため。層の逆依存（layout → ui）を避け遅延 import。
+        from src.ui.math_skeletonize import formula_aspect
+
         elements = MathParser.parse(math_src)
         elements = [e for e in elements if e.type != "tag"]
-        return MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size).width
+        box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size)
+        h_mm = box.ascent + box.descent
+        body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src)
+        draw_w = h_mm * formula_aspect(body_src)
+        return draw_w if draw_w > 0 else box.width
 
     def _line_neutral_width(
         self,
@@ -1019,24 +1028,28 @@ class Typesetter:
             offset = (group_count - 1) / 2 * line_spacing - i * line_spacing
             baseline_y = center_y + offset
             last_baseline_y = baseline_y
-            # 中央寄せのため幅測定→本配置の2段構え（既存挙動踏襲）
-            center_x = area.x + (area.width - g_box.width) / 2
+            # 中央寄せ・式番号位置は実描画幅(draw_w=g_h*aspect)基準にする。論理幅(g_box.width)
+            # では上付き等で実描画が右へずれ、中央からはみ出す。本文幅を超える長い式は縮小して収める。
+            g_h = g_box.ascent + g_box.descent
+            draw_w = formula_draw_width_mm(body_src, g_h)
+            scale = 1.0
+            if draw_w > area.width and draw_w > 0:
+                scale = area.width / draw_w
+                g_h *= scale
+                draw_w = area.width
+            center_x = area.x + (area.width - draw_w) / 2
             placed = MathLayoutEngine.layout(
                 g_elems, x=center_x, y=baseline_y, font_size=self.font_size
             )
-            # グループ単位の bbox を求めて skeletonize レンダラに渡す
-            # 複数グループ時は各グループの math_src を再構築できないため body_src 全体を渡す
-            g_h = placed.ascent + placed.descent
+            # render center 経路は bbox の (x0, w_mm, h_mm) を使う（w_mm を無視せず実描画幅で描く）
             g_bbox = (
                 center_x,
-                baseline_y - placed.descent,
-                placed.width,
+                baseline_y - placed.descent * scale,
+                draw_w,
                 g_h,
             )
             self._convert_math_placements(placed.placements, page_idx, output, body_src, g_bbox)
-            # 数式画像は bbox 中心に draw_w(=g_h*aspect)幅で描かれる。実描画右端を式番号配置に使う
-            draw_w = formula_draw_width_mm(body_src, g_h)
-            last_body_right = (center_x + placed.width / 2) + draw_w / 2
+            last_body_right = center_x + draw_w
 
         if tag_elem is not None:
             tag_y = last_baseline_y if group_boxes else center_y
@@ -1072,7 +1085,9 @@ class Typesetter:
         self._convert_math_placements(
             box.placements, page_idx, output, math_src, math_bbox, math_align="baseline"
         )
-        return x + box.width
+        # カーソル前進は実描画幅（_inline_math_width）に揃える。box.width(論理幅)では
+        # 上付き等で実描画が右隣へ食い込む。bbox は baseline 経路で h_mm*aspect 描画のため box.width のままでよい。
+        return x + self._inline_math_width(math_src)
 
     @staticmethod
     def _convert_math_placements(

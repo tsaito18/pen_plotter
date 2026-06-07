@@ -68,16 +68,38 @@ def _render_formula_unit_strokes(
     return (aspect, tuple(result)) if result else None
 
 
+@lru_cache(maxsize=128)
+def formula_aspect(math_src: str) -> float:
+    """数式を matplotlib mathtext で描いたときのアスペクト比（幅/高さ）を返す。
+
+    予約幅（折り返し・カーソル前進・中央寄せ）を実描画幅に一致させるための軽量関数。
+    render_latex_to_strokes は draw_w = h_mm * aspect で描くので、予約側も同じ aspect を
+    使えば論理幅（_CHAR_WIDTH_RATIO 等幅）との不一致による行はみ出しが解消する。
+    skeletonize は描画結果に影響しないため、幅予約のたびに呼ぶこの関数では省略する。
+
+    Args:
+        math_src: LaTeX ソース（$ なし）。
+
+    Returns:
+        aspect = 描画画像の幅/高さ。墨なし／描画失敗時は 0.0。
+    """
+    gray = _render_to_gray(math_src)
+    if gray is None:
+        return 0.0
+    binary = _binarize(gray)
+    if not binary.any():
+        return 0.0
+    binary = _crop(binary)
+    h_px, w_px = binary.shape
+    return w_px / max(h_px, 1)
+
+
 def formula_draw_width_mm(math_src: str, h_mm: float) -> float:
     """数式を高さ h_mm で描いたときの実際の描画幅(mm)。式番号の配置に使う。
 
     render_latex_to_strokes と同じ draw_w = h_mm * aspect を返す。
     """
-    rendered = _render_formula_unit_strokes(math_src)
-    if not rendered:
-        return 0.0
-    aspect, _ = rendered
-    return h_mm * aspect
+    return h_mm * formula_aspect(math_src)
 
 
 @lru_cache(maxsize=128)

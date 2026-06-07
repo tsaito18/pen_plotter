@@ -121,6 +121,7 @@ _HELP_MARKDOWN = """\
 - 設定を変更したらプレビューを再生成してください（黄色の警告が出ます）
 """
 
+
 _STALE_BANNER_HTML = (
     '<div style="padding:8px 12px;background:#fff7e6;border-left:4px solid #faad14;'
     'border-radius:4px;color:#874d00;">'
@@ -137,6 +138,34 @@ _FONT_HEAD = """\
 """
 _APP_HEAD = _FONT_HEAD + _WEBSERIAL_HEAD
 _APP_CSS = """\
+:root {
+    --pp-primary: #2563eb;
+    --pp-primary-hover: #1d4ed8;
+    --pp-primary-soft: #eff4ff;
+    --pp-success: #16a34a;
+    --pp-success-soft: #ecfdf3;
+    --pp-warning: #d97706;
+    --pp-warning-soft: #fff7ed;
+    --pp-danger: #dc2626;
+    --pp-danger-soft: #fef2f2;
+    --pp-neutral-50: #f8fafc;
+    --pp-neutral-100: #f1f5f9;
+    --pp-neutral-200: #e2e8f0;
+    --pp-neutral-300: #cbd5e1;
+    --pp-neutral-400: #94a3b8;
+    --pp-neutral-500: #64748b;
+    --pp-neutral-600: #475569;
+    --pp-neutral-800: #1e293b;
+    --pp-radius: 12px;
+    --pp-radius-sm: 8px;
+    --pp-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 12px rgba(15, 23, 42, 0.06);
+    --pp-space-1: 4px;
+    --pp-space-2: 8px;
+    --pp-space-3: 12px;
+    --pp-space-4: 16px;
+    --pp-space-5: 24px;
+}
+
 .gradio-container {
     max-width: 1400px !important;
     font-family: "Inter", "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -156,20 +185,307 @@ label {
 .gradio-container table {
     font-family: "Inter", "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
+
+/* Technical Editorial（製図×ミニマル）。
+   囲みボックス・影は使わず、極細 hairline と余白で構造化する。 */
+
+/* セクション: 上部 hairline＋たっぷりの上下マージン。背景はごく薄い紙地。 */
+.gradio-container .pp-section {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: var(--pp-space-4) 0 0;
+    margin-top: var(--pp-space-5);
+}
+
+.gradio-container .pp-section--flush {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+}
+
+/* 極細罫線。セクション区切り・状態/ログの上下罫に共用。 */
+.gradio-container .pp-hairline,
+.gradio-container .pp-section:not(.pp-section--flush) {
+    border-top: 1px solid var(--pp-neutral-200);
+}
+
+/* エディトリアルな小見出し: 小さめ・字間広め・淡色グレー。 */
+.pp-section-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--pp-neutral-500);
+    letter-spacing: 0.08em;
+    margin-bottom: var(--pp-space-3);
+}
+
+.pp-section-title p {
+    margin: 0;
+}
+
+/* カラム内で連続する小見出しの区切り: 上に hairline＋余白。 */
+.pp-section-title--rule {
+    border-top: 1px solid var(--pp-neutral-200);
+    padding-top: var(--pp-space-4);
+    margin-top: var(--pp-space-4);
+}
+
+/* ステータスバッジ: 小さな色ドット＋テキスト（枠なし）。 */
+.pp-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    background: transparent;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.pp-badge::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.pp-badge--idle {
+    color: var(--pp-neutral-500);
+}
+
+.pp-badge--connected {
+    color: var(--pp-success);
+}
+
+.pp-badge--streaming {
+    color: var(--pp-primary);
+}
+
+.pp-badge--unsupported {
+    color: var(--pp-danger);
+}
+
+/* 状態表示: fieldset 内に置くため枠なし。バッジ＋詳細テキストのみ。 */
+.pp-status-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pp-space-2);
+}
+
+.pp-status-head {
+    display: flex;
+    align-items: center;
+    gap: var(--pp-space-3);
+    flex-wrap: wrap;
+}
+
+.pp-status-detail {
+    font-size: 0.82rem;
+    color: var(--pp-neutral-600);
+    word-break: break-all;
+}
+
+.pp-progress-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pp-space-2);
+    margin-top: var(--pp-space-3);
+}
+
+/* 進捗バー: fieldset 内の大型トラック（角丸）＋青 fill。 */
+.pp-progress-track {
+    height: 14px;
+    background: var(--pp-neutral-100);
+    border: 1px solid var(--pp-neutral-200);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.pp-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--pp-primary);
+    border-radius: 999px;
+    transition: width 0.2s ease;
+}
+
+.pp-progress-text {
+    font-size: 0.78rem;
+    color: var(--pp-neutral-500);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ログ: fieldset 内の等幅スクロール領域。枠は親 fieldset が持つ。 */
+.pp-log {
+    height: 200px;
+    overflow: auto;
+    background: var(--pp-neutral-50);
+    border: 1px solid var(--pp-neutral-200);
+    border-radius: 3px;
+    padding: var(--pp-space-3);
+    font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+}
+
+/* 現在行表示（等幅）。Tkinter の TkFixedFont ラベル相当。 */
+.pp-current-line {
+    font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+    font-size: 0.78rem;
+    color: var(--pp-neutral-600);
+    word-break: break-all;
+}
+
+/* Instrument Panel: 白地＋細枠のクリーンな計器パネル（fieldset/LabelFrame 風）。
+   背景はベタグレーを避け白に統一し、1px 実線で機械的に区切る。 */
+.gradio-container .pp-fieldset {
+    position: relative;
+    background: #ffffff;
+    border: 1px solid var(--pp-neutral-300);
+    border-radius: 4px;
+    box-shadow: none;
+    padding: calc(var(--pp-space-5) + 2px) var(--pp-space-4) var(--pp-space-4);
+    margin-bottom: var(--pp-space-4);
+    overflow: visible;
+}
+
+/* Gradio が pp-fieldset 内の Group/Block に当てる地色・枠・影を打ち消し、
+   入れ子の二重枠／のっぺりグレーを排す。 */
+.gradio-container .pp-fieldset,
+.gradio-container .pp-fieldset > div,
+.gradio-container .pp-fieldset .gr-group,
+.gradio-container .pp-fieldset .block,
+.gradio-container .pp-fieldset .form {
+    background: #ffffff;
+}
+
+.gradio-container .pp-fieldset .block,
+.gradio-container .pp-fieldset .gr-group {
+    border: none;
+    box-shadow: none;
+}
+
+/* legend: 枠の上辺にラベルを重ね、白背景でボーダーを途切れさせる本物の fieldset 風。
+   gr.HTML のラッパ階層に依存せず、.pp-legend 自身を .pp-fieldset 基準で絶対配置する。 */
+.gradio-container .pp-fieldset .pp-legend {
+    position: absolute;
+    top: 0;
+    left: var(--pp-space-3);
+    transform: translateY(-50%);
+    display: inline-block;
+    background: #ffffff;
+    padding: 0 var(--pp-space-2);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--pp-neutral-600);
+    letter-spacing: 0.03em;
+    line-height: 1.2;
+    z-index: 1;
+}
+
+/* legend を内包する gr.HTML ブロックの余白を畳み、枠内コンテンツとの隙間を消す。 */
+.gradio-container .pp-fieldset > div:has(.pp-legend) {
+    margin: 0;
+    padding: 0;
+    min-height: 0;
+}
+
+.pp-legend p {
+    margin: 0;
+}
+
+/* 注記: 小さく薄いキャプション。 */
+.pp-fieldset-note {
+    color: var(--pp-neutral-400);
+    font-size: 0.74rem;
+    line-height: 1.4;
+    margin: 0 0 var(--pp-space-2);
+}
+
+/* 将来用プレビュープレースホルダ: 白地＋点線枠＋中央に淡色テキスト。 */
+.pp-preview-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 360px;
+    background: #ffffff;
+    border: 1px dashed var(--pp-neutral-300);
+    border-radius: 3px;
+    color: var(--pp-neutral-400);
+    font-size: 0.85rem;
+}
+
+/* primary ボタンを青系に統一（既定オレンジを上書き）。
+   stop(緊急停止=赤) には適用しないよう :not(.stop) で除外する。 */
+.gradio-container button.primary:not(.stop) {
+    background: var(--pp-primary);
+    border-color: var(--pp-primary);
+    color: #ffffff;
+}
+
+.gradio-container button.primary:not(.stop):hover,
+.gradio-container button.primary:not(.stop):focus {
+    background: var(--pp-primary-hover);
+    border-color: var(--pp-primary-hover);
+    color: #ffffff;
+}
+
+/* secondary ボタン: 機械操作 / 切断 / 停止。背景に溶けないよう視認できる枠＋
+   立体感を付与。primary(青)より控えめ、pp-ghost より一段はっきり。 */
+.gradio-container button.secondary {
+    background: #ffffff;
+    border: 1px solid var(--pp-neutral-300);
+    color: var(--pp-neutral-800);
+    box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+}
+
+.gradio-container button.secondary:hover,
+.gradio-container button.secondary:focus {
+    background: var(--pp-neutral-100);
+    border-color: var(--pp-neutral-400);
+    color: var(--pp-neutral-800);
+}
+
+/* 控えめ ghost ボタン: クリア / リセット / 例文挿入。
+   secondary より一段控えめに（枠細く・文字薄く・影なし）。 */
+.gradio-container button.pp-ghost,
+.gradio-container .pp-ghost button {
+    background: transparent;
+    border: 1px solid var(--pp-neutral-200);
+    color: var(--pp-neutral-600);
+    box-shadow: none;
+}
+
+.gradio-container button.pp-ghost:hover,
+.gradio-container .pp-ghost button:hover {
+    background: var(--pp-neutral-100);
+    border-color: var(--pp-neutral-400);
+    color: var(--pp-neutral-800);
+}
 """
 
 _WEBSERIAL_STATUS_HTML = """\
-<div id="webserial-status-panel">
-  <div><strong>状態:</strong> <span id="webserial-status-value">初期化中</span></div>
-  <div style="height:12px;background:#f0f0f0;border:1px solid #d9d9d9;border-radius:3px;overflow:hidden;margin-top:6px;">
-    <div id="webserial-progress-bar" style="height:100%;width:0%;background:#1677ff;"></div>
+<div class="pp-status-card" id="webserial-status-panel">
+  <div class="pp-status-head">
+    <span id="webserial-status-badge" class="pp-badge pp-badge--idle">初期化中</span>
+    <span id="webserial-status-value" class="pp-status-detail">初期化中</span>
   </div>
-  <div id="webserial-progress-text" style="font-size:12px;color:#555;margin-top:4px;">0 / 0 行 (0%)</div>
+</div>
+"""
+
+_WEBSERIAL_PROGRESS_HTML = """\
+<div class="pp-progress-card" id="webserial-progress-panel">
+  <div class="pp-progress-track">
+    <div id="webserial-progress-bar" class="pp-progress-fill"></div>
+  </div>
+  <div id="webserial-progress-text" class="pp-progress-text">0 / 0 行 (0%)</div>
+  <div id="webserial-current-line" class="pp-current-line">現在行: -</div>
 </div>
 """
 
 _WEBSERIAL_LOG_HTML = """\
-<div id="webserial-log-entries" style="height:180px;overflow:auto;background:#fafafa;border:1px solid #d9d9d9;border-radius:4px;padding:8px;font-family:monospace;font-size:12px;">
+<div id="webserial-log-entries" class="pp-log">
 </div>
 """
 
@@ -361,28 +677,55 @@ def create_app(
             with gr.Tab("生成"):
                 with gr.Row(equal_height=False):
                     # ========== 左カラム: 入力 ==========
-                    with gr.Column(scale=2):
+                    with gr.Column(scale=2, elem_classes=["pp-section", "pp-section--flush"]):
+                        gr.HTML('<div class="pp-section-title">テキスト入力</div>')
                         text_input = gr.Textbox(
                             lines=18,
-                            placeholder=("テキストを入力...\n\n# 見出し\n$数式$ / $$ブロック数式$$"),
-                            label="テキスト入力",
+                            placeholder=(
+                                "テキストを入力...\n\n# 見出し\n$数式$ / $$ブロック数式$$"
+                            ),
+                            show_label=False,
+                            container=False,
                         )
                         char_count_md = gr.Markdown("文字数: 0")
 
                         with gr.Row():
                             preview_btn = gr.Button("プレビュー", variant="primary", scale=2)
                             gcode_btn = gr.Button("G-code 生成", variant="secondary", scale=2)
-                            clear_btn = gr.Button("クリア", scale=1)
+                            clear_btn = gr.Button(
+                                "クリア", variant="secondary", scale=1, elem_classes=["pp-ghost"]
+                            )
 
                         with gr.Accordion("例文を挿入", open=False):
                             with gr.Row():
-                                ex_report_btn = gr.Button("レポートヘッダー", size="sm")
-                                ex_math_btn = gr.Button("数式レポート", size="sm")
-                                ex_essay_btn = gr.Button("小論文", size="sm")
-                                ex_table_btn = gr.Button("表サンプル", size="sm")
+                                ex_report_btn = gr.Button(
+                                    "レポートヘッダー",
+                                    variant="secondary",
+                                    size="sm",
+                                    elem_classes=["pp-ghost"],
+                                )
+                                ex_math_btn = gr.Button(
+                                    "数式レポート",
+                                    variant="secondary",
+                                    size="sm",
+                                    elem_classes=["pp-ghost"],
+                                )
+                                ex_essay_btn = gr.Button(
+                                    "小論文",
+                                    variant="secondary",
+                                    size="sm",
+                                    elem_classes=["pp-ghost"],
+                                )
+                                ex_table_btn = gr.Button(
+                                    "表サンプル",
+                                    variant="secondary",
+                                    size="sm",
+                                    elem_classes=["pp-ghost"],
+                                )
 
                     # ========== 中央カラム: プレビュー ==========
-                    with gr.Column(scale=3):
+                    with gr.Column(scale=3, elem_classes=["pp-section", "pp-section--flush"]):
+                        gr.HTML('<div class="pp-section-title">プレビュー</div>')
                         stale_banner = gr.HTML(value="", visible=False)
                         status_md = gr.Markdown(visible=False)
                         preview_gallery = gr.Gallery(
@@ -398,8 +741,8 @@ def create_app(
                         gcode_files = gr.Files(label="G-code ダウンロード", interactive=False)
 
                     # ========== 右カラム: 設定 ==========
-                    with gr.Column(scale=2):
-                        gr.Markdown("### レイアウト")
+                    with gr.Column(scale=2, elem_classes=["pp-section", "pp-section--flush"]):
+                        gr.HTML('<div class="pp-section-title">レイアウト</div>')
                         font_size = gr.Slider(
                             3.0,
                             10.0,
@@ -415,7 +758,9 @@ def create_app(
                             label="行間隔 (mm)",
                         )
 
-                        gr.Markdown("### 余白 (mm)")
+                        gr.HTML(
+                            '<div class="pp-section-title pp-section-title--rule">余白 (mm)</div>'
+                        )
                         margin_top = gr.Slider(
                             5,
                             60,
@@ -445,7 +790,9 @@ def create_app(
                             label="右",
                         )
 
-                        gr.Markdown("### プロッタ")
+                        gr.HTML(
+                            '<div class="pp-section-title pp-section-title--rule">プロッタ</div>'
+                        )
                         draw_speed = gr.Slider(
                             200,
                             3000,
@@ -468,7 +815,9 @@ def create_app(
                             label="ペン遅延 (s)",
                         )
 
-                        gr.Markdown("### ML モデル")
+                        gr.HTML(
+                            '<div class="pp-section-title pp-section-title--rule">ML モデル</div>'
+                        )
                         profile_select = gr.Dropdown(
                             choices=[pid for pid, _ in profile_options],
                             value=default_profile,
@@ -492,92 +841,142 @@ def create_app(
                             label="汚さ",
                             info="行内の上下動・字間・サイズ・傾きのばらつき。0=整った字、2=大きく乱れる",
                         )
-                        pressure_variation = gr.Slider(
-                            0.0,
-                            1.0,
-                            value=default_settings.pressure_variation,
-                            step=0.05,
-                            label="筆圧変化",
-                            info="画の中の濃淡（プレビュー演出用）。実機は描画中Zが振れて点線化するため0推奨",
-                        )
-                        instance_variation = gr.Slider(
-                            0.0,
-                            1.0,
-                            value=default_settings.instance_variation,
-                            step=0.05,
-                            label="字のばらつき",
-                            info="同じ字を毎回少し変える。0=毎回同じ形、大=書くたびに違う",
-                        )
-                        entry_taper = gr.Slider(
-                            0.0,
-                            1.0,
-                            value=default_settings.entry_taper,
-                            step=0.05,
-                            label="入筆",
-                            info="始筆を軽く入れて立ち上げる筆の入り。実機は始筆がかすれ得るため0推奨",
-                        )
-                        connection_strength = gr.Slider(
-                            0.0,
-                            1.0,
-                            value=default_settings.connection_strength,
-                            step=0.05,
-                            label="連綿（続け字）",
-                            info="同じ字の近い画を薄い線で続ける。近いほど高確率＋乱数。Z一定で点線化しない",
-                        )
+                        with gr.Accordion("人らしさ調整", open=False):
+                            pressure_variation = gr.Slider(
+                                0.0,
+                                1.0,
+                                value=default_settings.pressure_variation,
+                                step=0.05,
+                                label="筆圧変化",
+                                info="画の中の濃淡（プレビュー演出用）。実機は描画中Zが振れて点線化するため0推奨",
+                            )
+                            instance_variation = gr.Slider(
+                                0.0,
+                                1.0,
+                                value=default_settings.instance_variation,
+                                step=0.05,
+                                label="字のばらつき",
+                                info="同じ字を毎回少し変える。0=毎回同じ形、大=書くたびに違う",
+                            )
+                            entry_taper = gr.Slider(
+                                0.0,
+                                1.0,
+                                value=default_settings.entry_taper,
+                                step=0.05,
+                                label="入筆",
+                                info="始筆を軽く入れて立ち上げる筆の入り。実機は始筆がかすれ得るため0推奨",
+                            )
+                            connection_strength = gr.Slider(
+                                0.0,
+                                1.0,
+                                value=default_settings.connection_strength,
+                                step=0.05,
+                                label="連綿（続け字）",
+                                info="同じ字の近い画を薄い線で続ける。近いほど高確率＋乱数。Z一定で点線化しない",
+                            )
 
-                        reset_btn = gr.Button("デフォルトに戻す", size="sm")
+                        reset_btn = gr.Button(
+                            "デフォルトに戻す",
+                            variant="secondary",
+                            size="sm",
+                            elem_classes=["pp-ghost"],
+                        )
                         validation_md = gr.HTML(value="", visible=False)
 
                 with gr.Accordion("ヘルプ", open=False):
                     gr.Markdown(_HELP_MARKDOWN)
 
             with gr.Tab("プロッタ送信"):
-                gr.Markdown(
-                    "Windows Chrome/Edge で `http://localhost` から開く想定。"
-                    "Firefox/Safari、LAN共有、Spaces では WebSerial を使えない場合があります。"
-                )
-                gr.HTML(
-                    value=_WEBSERIAL_STATUS_HTML,
-                    elem_id="webserial-status",
-                )
-                with gr.Row():
-                    webserial_connect_btn = gr.Button("接続", elem_id="webserial-connect-btn")
-                    webserial_disconnect_btn = gr.Button(
-                        "切断",
-                        elem_id="webserial-disconnect-btn",
-                    )
-                    webserial_home_btn = gr.Button("Home", elem_id="webserial-home-btn")
-                    webserial_pen_up_btn = gr.Button("ペン Up", elem_id="webserial-pen-up-btn")
-                    webserial_pen_down_btn = gr.Button(
-                        "ペン Down",
-                        elem_id="webserial-pen-down-btn",
-                    )
-                with gr.Row():
-                    webserial_source = gr.Radio(
-                        choices=[
-                            ("生成済み G-code", "generated"),
-                            ("アップロード G-code", "uploaded"),
-                        ],
-                        value="generated",
-                        label="送信元",
-                    )
-                    webserial_upload = gr.Files(
-                        label="アップロード G-code (.gcode/.nc/.txt)",
-                        file_types=[".gcode", ".nc", ".txt"],
-                    )
-                with gr.Row():
-                    webserial_start_btn = gr.Button(
-                        "送信開始",
-                        variant="primary",
-                        elem_id="webserial-start-btn",
-                    )
-                    webserial_stop_btn = gr.Button("停止", elem_id="webserial-stop-btn")
-                    webserial_emergency_btn = gr.Button(
-                        "緊急停止",
-                        variant="stop",
-                        elem_id="webserial-emergency-btn",
-                    )
-                gr.HTML(value=_WEBSERIAL_LOG_HTML, elem_id="webserial-log")
+                with gr.Row(equal_height=False):
+                    # ===== 左カラム: 操作系（接続 / 機械操作 / ジョブ送信）=====
+                    with gr.Column(scale=1):
+                        with gr.Group(elem_classes=["pp-fieldset"]):
+                            gr.HTML('<div class="pp-legend">接続</div>')
+                            gr.HTML(
+                                value=_WEBSERIAL_STATUS_HTML,
+                                elem_id="webserial-status",
+                            )
+                            with gr.Row():
+                                webserial_connect_btn = gr.Button(
+                                    "接続", variant="primary", elem_id="webserial-connect-btn"
+                                )
+                                webserial_disconnect_btn = gr.Button(
+                                    "切断",
+                                    variant="secondary",
+                                    elem_id="webserial-disconnect-btn",
+                                )
+
+                        with gr.Group(elem_classes=["pp-fieldset"]):
+                            gr.HTML('<div class="pp-legend">機械操作</div>')
+                            gr.HTML(
+                                '<div class="pp-fieldset-note">描画前に動作確認してください。</div>'
+                            )
+                            with gr.Row():
+                                webserial_home_btn = gr.Button(
+                                    "Home", variant="secondary", elem_id="webserial-home-btn"
+                                )
+                                webserial_pen_up_btn = gr.Button(
+                                    "ペン Up",
+                                    variant="secondary",
+                                    elem_id="webserial-pen-up-btn",
+                                )
+                                webserial_pen_down_btn = gr.Button(
+                                    "ペン Down",
+                                    variant="secondary",
+                                    elem_id="webserial-pen-down-btn",
+                                )
+
+                        with gr.Group(elem_classes=["pp-fieldset"]):
+                            gr.HTML('<div class="pp-legend">ジョブ送信</div>')
+                            with gr.Row():
+                                webserial_start_btn = gr.Button(
+                                    "送信開始",
+                                    variant="primary",
+                                    elem_id="webserial-start-btn",
+                                )
+                                webserial_stop_btn = gr.Button(
+                                    "停止", variant="secondary", elem_id="webserial-stop-btn"
+                                )
+                                webserial_emergency_btn = gr.Button(
+                                    "緊急停止",
+                                    variant="stop",
+                                    elem_id="webserial-emergency-btn",
+                                )
+                            gr.HTML(value=_WEBSERIAL_PROGRESS_HTML)
+
+                    # ===== 右カラム: 送信データ選択 / プレビュー =====
+                    with gr.Column(scale=1):
+                        with gr.Group(elem_classes=["pp-fieldset"]):
+                            gr.HTML('<div class="pp-legend">送信データ選択</div>')
+                            gr.HTML(
+                                '<div class="pp-fieldset-note">'
+                                "「生成」タブで作った G-code は「生成済み G-code」で選べます。"
+                                "</div>"
+                            )
+                            webserial_source = gr.Radio(
+                                choices=[
+                                    ("生成済み G-code", "generated"),
+                                    ("アップロード G-code", "uploaded"),
+                                ],
+                                value="generated",
+                                label="送信元",
+                            )
+                            webserial_upload = gr.Files(
+                                label="アップロード G-code (.gcode/.nc/.txt)",
+                                file_types=[".gcode", ".nc", ".txt"],
+                                visible=False,
+                            )
+
+                        with gr.Group(elem_classes=["pp-fieldset"]):
+                            gr.HTML('<div class="pp-legend">プレビュー</div>')
+                            gr.HTML(
+                                '<div class="pp-preview-placeholder">プレビューは今後対応予定</div>'
+                            )
+
+                # ===== 最下部 全幅: ログ（常時表示）=====
+                with gr.Group(elem_classes=["pp-fieldset"]):
+                    gr.HTML('<div class="pp-legend">ログ</div>')
+                    gr.HTML(value=_WEBSERIAL_LOG_HTML, elem_id="webserial-log")
 
         slider_components = [
             font_size,
@@ -830,6 +1229,16 @@ def create_app(
             inputs=[gcode_files],
             outputs=None,
             js=_TRIGGER_MULTI_DOWNLOAD_JS,
+        )
+
+        def _on_webserial_source_change(source: str):
+            # アップロード選択時のみファイル欄を表示する
+            return gr.update(visible=source == "uploaded")
+
+        webserial_source.change(
+            _on_webserial_source_change,
+            inputs=[webserial_source],
+            outputs=[webserial_upload],
         )
 
         webserial_connect_btn.click(

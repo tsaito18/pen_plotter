@@ -708,8 +708,10 @@ class StrokeRenderer:
     def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
         if char in ("\u3001", ","):
             return [np.array([[0.6, 0.2], [0.3, 0.8]])]
-        elif char in ("\u3002", "."):
+        elif char == "\u3002":
             return [self._small_dot(0.5, 0.5, r=0.12)]
+        elif char == ".":
+            return [np.array([[0.48, 0.22], [0.52, 0.22]], dtype=np.float64)]
         elif char == "\u30fb":
             angles = np.linspace(0, 2 * np.pi, 12)
             r = 0.15

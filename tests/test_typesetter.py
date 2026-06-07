@@ -1080,3 +1080,59 @@ class TestHeadings:
         chars = [p.char for p in pages[0]]
         assert "." not in chars
         assert "。" in chars
+
+
+class TestMathRealDrawWidth:
+    """数式の予約幅が実描画幅（matplotlib aspect）に一致することのテスト。
+
+    論理幅（MathLayoutEngine.width, _CHAR_WIDTH_RATIO 等幅）は上付き ^ を幅0、∑/∫を
+    過大に見積もるため実描画とずれる。予約を実描画幅にして行はみ出しを解消する。
+    """
+
+    def test_inline_width_matches_real_draw_width(self):
+        from src.layout.math_layout import MathLayoutEngine, MathParser
+        from src.ui.math_skeletonize import formula_aspect
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        src = "E=mc^2"
+        reserved = ts._inline_math_width(src)
+
+        elements = [e for e in MathParser.parse(src) if e.type != "tag"]
+        box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=ts.font_size)
+        logical = box.width
+        h_mm = box.ascent + box.descent
+        expected = h_mm * formula_aspect(src)
+
+        # 実描画幅に一致し、論理幅とは異なる（^2 で論理幅は過小）
+        assert reserved == pytest.approx(expected)
+        assert reserved != pytest.approx(logical)
+
+    def test_inline_cursor_advances_by_real_width(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("本文$E=mc^2$後")
+        placements = pages[0]
+        x_本 = next(p.x for p in placements if p.char == "本")
+        x_後 = next(p.x for p in placements if p.char == "後")
+        # 数式は「本文」の直後に始まる: 数式開始 x = x_本 + 2文字分
+        adv = ts._body_char_advance("本")
+        math_start = x_本 + adv * 2
+        expected_after = math_start + ts._inline_math_width("E=mc^2")
+        assert x_後 == pytest.approx(expected_after, abs=0.5)
+
+    def test_block_long_formula_shrinks_to_body_width(self):
+        from src.ui.math_skeletonize import formula_draw_width_mm
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        layout = PageLayout(PageConfig())
+        area = layout.content_area()
+        long_src = r"x^2+y^2+z^2+w^2+a^2+b^2+c^2+d^2+e^2+f^2"
+        pages = ts.typeset(f"$$ {long_src} $$")
+        placements = pages[0]
+        math_ps = [p for p in placements if p.math_source]
+        assert math_ps, "block math placement should exist"
+        # 実描画想定の右端が本文幅を超えない（縮小が効いている）
+        mp = math_ps[0]
+        x0, _, w_mm, h_mm = mp.math_bbox
+        draw_w = formula_draw_width_mm(long_src, h_mm)
+        assert draw_w == pytest.approx(w_mm, abs=0.5) or w_mm <= area.width + 0.5
+        assert x0 + w_mm <= area.x + area.width + 0.5

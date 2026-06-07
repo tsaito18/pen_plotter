@@ -40,7 +40,10 @@ def convert_pot_directory(
     for i, pot_file in enumerate(pot_files, 1):
         samples = parser.parse_pot_file(pot_file)
         count = CASIAParser.convert_to_stroke_samples(
-            samples, output_dir, target_size=target_size, num_points=num_points,
+            samples,
+            output_dir,
+            target_size=target_size,
+            num_points=num_points,
             char_counters=char_counters,
         )
         total_count += count

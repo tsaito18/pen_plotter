@@ -22,7 +22,10 @@ from src.ui.gradio_app import (
     _FONT_HEAD,
     _HELP_MARKDOWN,
     _WEBSERIAL_HEAD,
+    _WEBSERIAL_LOG_HTML,
+    _WEBSERIAL_PROGRESS_HTML,
     _WEBSERIAL_SCRIPT,
+    _WEBSERIAL_STATUS_HTML,
     _format_coverage,
     _resolve_restored_profile,
     create_app,
@@ -138,9 +141,7 @@ class TestAppSmoke:
 
     def test_has_webserial_panel_components(self, app):
         elem_ids = {
-            getattr(b, "elem_id", None)
-            for b in app.blocks.values()
-            if getattr(b, "elem_id", None)
+            getattr(b, "elem_id", None) for b in app.blocks.values() if getattr(b, "elem_id", None)
         }
         assert "webserial-status" in elem_ids
         assert "webserial-log" in elem_ids
@@ -155,9 +156,7 @@ class TestAppSmoke:
 
     def test_generation_and_webserial_are_separate_tabs(self, app):
         tab_labels = {
-            getattr(b, "label", None)
-            for b in app.blocks.values()
-            if type(b).__name__ == "Tab"
+            getattr(b, "label", None) for b in app.blocks.values() if type(b).__name__ == "Tab"
         }
         assert "生成" in tab_labels
         assert "プロッタ送信" in tab_labels
@@ -183,12 +182,20 @@ class TestWebSerialScript:
         assert 'const PEN_DOWN_COMMAND = "G1G90 Z5 F5000"' in _WEBSERIAL_SCRIPT
 
     def test_script_has_stream_safety_guards(self):
-        assert "window.confirm" in _WEBSERIAL_SCRIPT
         assert "state.cancelRequested" in _WEBSERIAL_SCRIPT
         assert "GRBL 応答タイムアウト" in _WEBSERIAL_SCRIPT
         assert "/^error:/i" in _WEBSERIAL_SCRIPT
         assert "/^ALARM:/i" in _WEBSERIAL_SCRIPT
         assert "new Uint8Array([0x21, 0x18])" in _WEBSERIAL_SCRIPT
+
+    def test_script_has_no_confirm_dialog(self):
+        # 確認ダイアログは廃止: 送信開始で即ストリームする
+        assert "window.confirm" not in _WEBSERIAL_SCRIPT
+
+    def test_script_updates_status_badge(self):
+        # 状態バッジ（idle/connected/streaming/unsupported）の切替を行う
+        assert "webserial-status-badge" in _WEBSERIAL_SCRIPT
+        assert "pp-badge--" in _WEBSERIAL_SCRIPT
 
     def test_script_exposes_normalize_helper(self):
         assert "normalizeGcode" in _WEBSERIAL_SCRIPT
@@ -211,12 +218,46 @@ class TestAppBrandingAssets:
         assert 'font-family: "Inter", "Noto Sans JP"' in _APP_CSS
         assert "max-width: 1400px" in _APP_CSS
 
+    def test_app_css_has_design_system(self):
+        # CSS 変数＋構造クラス（生成タブ=section, 送信タブ=計器パネル fieldset）
+        assert "--pp-primary" in _APP_CSS
+        assert ".pp-section" in _APP_CSS
+        assert ".pp-fieldset" in _APP_CSS
+
+    def test_app_css_is_card_free(self):
+        # ソフトな囲みボックス（カードUI）は廃止済み
+        assert ".pp-card" not in _APP_CSS
+
     def test_run_ui_enables_pwa_with_app_assets(self):
         run_ui = Path("scripts/run_ui.py").read_text(encoding="utf-8")
         assert "from src.ui.gradio_app import _APP_CSS, _APP_HEAD, create_app" in run_ui
         assert "css=_APP_CSS" in run_ui
         assert "head=_APP_HEAD" in run_ui
         assert "pwa=True" in run_ui
+
+
+class TestWebSerialTemplates:
+    """状態/進捗/ログ HTML テンプレが JS 連携 id とバッジ構造を保持することを担保する。
+
+    計器パネル化に伴い、状態テンプレ（バッジ＋状態テキスト）と進捗テンプレ
+    （進捗バー＋現在行）を別グループへ分割した。各 id は JS が個別に
+    getElementById で更新するため、テンプレが分かれても動作する。
+    """
+
+    def test_status_html_keeps_status_ids(self):
+        assert 'id="webserial-status-value"' in _WEBSERIAL_STATUS_HTML
+        assert 'id="webserial-status-badge"' in _WEBSERIAL_STATUS_HTML
+        assert "pp-badge" in _WEBSERIAL_STATUS_HTML
+
+    def test_progress_html_keeps_progress_ids(self):
+        assert 'id="webserial-progress-bar"' in _WEBSERIAL_PROGRESS_HTML
+        assert 'id="webserial-progress-text"' in _WEBSERIAL_PROGRESS_HTML
+
+    def test_progress_html_has_current_line(self):
+        assert 'id="webserial-current-line"' in _WEBSERIAL_PROGRESS_HTML
+
+    def test_log_html_keeps_entries_id(self):
+        assert 'id="webserial-log-entries"' in _WEBSERIAL_LOG_HTML
 
 
 class TestResolveRestoredProfile:

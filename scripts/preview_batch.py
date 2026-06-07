@@ -164,7 +164,8 @@ def main(argv: list[str] | None = None) -> None:
     n_rows = len(valid_chars)
     n_cols = 1 + args.samples_per_char
     fig, axes = plt.subplots(
-        n_rows, n_cols,
+        n_rows,
+        n_cols,
         figsize=(4 * n_cols, 4 * n_rows),
         squeeze=False,
     )

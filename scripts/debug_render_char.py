@@ -68,9 +68,7 @@ def _default_user_strokes_dir() -> Path:
     return Path("data/user_strokes")
 
 
-def _load_reference_strokes(
-    kanjivg_dir: Path, char: str
-) -> tuple[list[Stroke] | None, list[str]]:
+def _load_reference_strokes(kanjivg_dir: Path, char: str) -> tuple[list[Stroke] | None, list[str]]:
     """KanjiVG 参照ストロークと筆画タイプ(kvg:type)を返す。
 
     strokes と types は同じ ``len>=2`` 条件で同期フィルタするため index が
@@ -92,9 +90,7 @@ def _load_reference_strokes(
         stroke = np.array([[p.x, p.y] for p in stroke_points], dtype=np.float64)
         if len(stroke) >= 2:
             strokes.append(stroke)
-            types.append(
-                sample.stroke_types[index] if index < len(sample.stroke_types) else ""
-            )
+            types.append(sample.stroke_types[index] if index < len(sample.stroke_types) else "")
     return (strokes or None, types)
 
 
@@ -115,9 +111,7 @@ def _format_bbox(bounds: tuple[float, float, float, float] | None) -> str:
 
 
 def _print_stage(char: str, stage: str, strokes: list[Stroke]) -> None:
-    print(
-        f"char={char} stage={stage} strokes={len(strokes)} bbox={_format_bbox(_bbox(strokes))}"
-    )
+    print(f"char={char} stage={stage} strokes={len(strokes)} bbox={_format_bbox(_bbox(strokes))}")
 
 
 def _next_output_path(output_dir: Path, char: str, stage: str) -> Path:

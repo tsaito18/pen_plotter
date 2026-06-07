@@ -105,9 +105,7 @@ def _strokes_to_sample(
         if len(arr) < 2:
             continue
         points = [
-            StrokePoint(
-                x=float(x), y=float(target_size - y), pressure=1.0, timestamp=0.0
-            )
+            StrokePoint(x=float(x), y=float(target_size - y), pressure=1.0, timestamp=0.0)
             for x, y in arr
         ]
         points = recorder.resample_points(points, num_points=num_points)
@@ -259,7 +257,10 @@ def main() -> None:
         "--target-size", type=float, default=10.0, help="正規化ターゲットサイズ (default: 10.0)"
     )
     argp.add_argument(
-        "--num-points", type=int, default=32, help="ストロークあたりのリサンプリング点数 (default: 32)"
+        "--num-points",
+        type=int,
+        default=32,
+        help="ストロークあたりのリサンプリング点数 (default: 32)",
     )
 
     args = argp.parse_args()
