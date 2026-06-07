@@ -960,12 +960,18 @@ class StrokeRenderer:
             stem = np.array([[0.5, 0.25], [0.5, 0.7]], dtype=np.float64)
             return [stem, self._small_dot(0.5, 0.88)]
         if char == "n":
-            left = np.array([[0.2, 0.2], [0.2, 0.75]], dtype=np.float64)
-            arch = np.array([[0.2, 0.75], [0.5, 0.2], [0.8, 0.75]], dtype=np.float64)
-            return [left, arch]
+            # 左の縦棒＋上に膨らむアーチ(∩)＋右脚。中央が下がる ν との混同を解消
+            stem = np.array([[0.22, 0.2], [0.22, 0.72]], dtype=np.float64)
+            t = np.linspace(np.pi, 0, 16)
+            arch = np.stack(
+                [0.5 + 0.28 * np.cos(t), 0.5 + 0.22 * np.sin(t)], axis=1
+            ).astype(np.float64)
+            right = np.array([[0.78, 0.5], [0.78, 0.2]], dtype=np.float64)
+            return [stem, arch, right]
         if char == "t":
-            stem = np.array([[0.5, 0.15], [0.5, 0.85]], dtype=np.float64)
-            cross = np.array([[0.25, 0.35], [0.75, 0.35]], dtype=np.float64)
+            # 縦棒の下端を右へ軽くはらい、クロスバーは上寄り → "+" と区別
+            stem = np.array([[0.48, 0.85], [0.48, 0.12], [0.62, 0.07]], dtype=np.float64)
+            cross = np.array([[0.28, 0.62], [0.72, 0.62]], dtype=np.float64)
             return [stem, cross]
         if char == "a":
             t = np.linspace(0, 2 * np.pi, 24)
@@ -980,10 +986,13 @@ class StrokeRenderer:
         if char == "g":
             t = np.linspace(0, 2 * np.pi, 24)
             body = np.stack(
-                [0.48 + 0.25 * np.cos(t), 0.45 + 0.25 * np.sin(t)],
+                [0.48 + 0.24 * np.cos(t), 0.52 + 0.22 * np.sin(t)],
                 axis=1,
             ).astype(np.float64)
-            tail = np.array([[0.65, 0.45], [0.6, 0.0], [0.35, 0.05]], dtype=np.float64)
+            # 右から下降しベースライン下(y<0)で左へカールする descender → "9" と区別
+            tail = np.array(
+                [[0.72, 0.52], [0.72, -0.05], [0.5, -0.2], [0.28, -0.1]], dtype=np.float64
+            )
             return [body, tail]
         if char == "e":
             t = np.linspace(0.2 * np.pi, 1.8 * np.pi, 24)
