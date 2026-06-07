@@ -693,3 +693,35 @@ class TestAsciiLetterHandwriting:
         b = r.generate_char_strokes(cp)
         # augmenter 無しなら毎回同一（distortion no-op）
         assert all(np.allclose(x, y) for x, y in zip(a, b))
+
+
+class TestAsciiLetterPrefersUserStroke:
+    """英字はユーザー実筆跡サンプルがあれば幾何フォントより優先（英語くそ対策）。"""
+
+    def test_letter_with_user_sample_uses_direct(self, tmp_path):
+        from src.layout.typesetter import CharPlacement
+
+        user_dir = tmp_path / "user_strokes"
+        # ユーザーが書いた "A"（特徴的な三角形状）
+        _create_user_stroke_json(
+            user_dir, "A", [[[0, 100], [50, 0]], [[50, 0], [100, 100]], [[25, 50], [75, 50]]]
+        )
+        r = StrokeRenderer(user_strokes_dir=user_dir)
+        r._last_coverage.geometric.clear()
+        r._last_coverage.user_strokes.clear()
+        r.generate_char_strokes(CharPlacement(char="A", x=0, y=0, font_size=7.0))
+        # 幾何でなく実筆跡経路（user_strokes）に入る
+        assert "A" in r._last_coverage.user_strokes
+        assert "A" not in r._last_coverage.geometric
+
+    def test_letter_without_sample_falls_back_to_geometric(self, tmp_path):
+        from src.layout.typesetter import CharPlacement
+
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(user_dir, "A", [[[0, 100], [50, 0]]])
+        r = StrokeRenderer(user_strokes_dir=user_dir)
+        r._last_coverage.geometric.clear()
+        r._last_coverage.user_strokes.clear()
+        # "Z" はサンプル無し → 幾何フォントへフォールバック
+        r.generate_char_strokes(CharPlacement(char="Z", x=0, y=0, font_size=7.0))
+        assert "Z" in r._last_coverage.geometric

@@ -313,6 +313,20 @@ class StrokeRenderer:
             cov.geometric.append(original_char)
             return word_strokes, ["none"] * len(word_strokes)
 
+        # 英字はユーザーの実筆跡サンプルがあれば幾何フォントより最優先（自然・本人の字）。
+        # モデルは CJK のみ訓練で英字に使えないため、幾何フォント(_ascii_letter_strokes)が
+        # 粗く「英語がくそ」になる。書いた英字は直接ストロークで本人の手書きにする。
+        if lookup_char.isascii() and lookup_char.isalpha():
+            direct_letter = self._direct_stroke(lookup_char)
+            if direct_letter is not None:
+                cov.user_strokes.append(original_char)
+                positioned = self._position_strokes(direct_letter, placement)
+                waver = self._waver_scale(len(positioned))
+                positioned = (
+                    positioned if is_smooth else self._apply_distortion(positioned, waver)
+                )
+                return positioned, ["none"] * len(positioned)
+
         letter_strokes = self._ascii_letter_strokes(lookup_char)
         if letter_strokes is not None:
             cov.geometric.append(original_char)
