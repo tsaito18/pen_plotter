@@ -321,19 +321,32 @@ class Typesetter:
             return self._config.paper_size[0] - 10.0
         return area.x + area.width
 
+    def _inline_math_draw_size(self, math_src: str) -> tuple[float, float]:
+        """インライン数式の実描画 (幅, 高さ) mm。stroke 描画と幅予約の単一ソース。
+
+        高さ = ink_em * font_size。matplotlib は墨範囲に crop するため、論理高
+        (ascent+descent=font_size) いっぱいへスケールすると小文字 u 等が em まで
+        拡大され「でかすぎ」になる。インクの em 比で縮め本文 em と縮尺を揃える。
+        幅 = 高 * aspect。層の逆依存（layout → ui）を避け遅延 import。
+        """
+        from src.ui.math_skeletonize import formula_aspect, formula_ink_em
+
+        body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src)
+        h_mm = formula_ink_em(body_src) * self.font_size
+        draw_w = h_mm * formula_aspect(body_src)
+        return draw_w, h_mm
+
     def _inline_math_width(self, math_src: str) -> float:
         # 予約幅を matplotlib 実描画幅に一致させる。論理幅（_CHAR_WIDTH_RATIO 等幅）は
-        # 上付き ^ を幅0・∑/∫を過大に見積もり、実描画(draw_w=h_mm*aspect)とずれて
-        # 行はみ出し／過大空白を起こすため。層の逆依存（layout → ui）を避け遅延 import。
-        from src.ui.math_skeletonize import formula_aspect
-
+        # 上付き ^ を幅0・∑/∫を過大に見積もり、実描画とずれて行はみ出し／過大空白を
+        # 起こすため。draw_w<=0（墨なし等）は論理幅へフォールバック。
+        draw_w, _ = self._inline_math_draw_size(math_src)
+        if draw_w > 0:
+            return draw_w
         elements = MathParser.parse(math_src)
         elements = [e for e in elements if e.type != "tag"]
         box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size)
-        h_mm = box.ascent + box.descent
-        body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src)
-        draw_w = h_mm * formula_aspect(body_src)
-        return draw_w if draw_w > 0 else box.width
+        return box.width
 
     def _line_neutral_width(
         self,
@@ -1089,12 +1102,10 @@ class Typesetter:
         box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
         # インライン: bbox[1] に本文ベースライン y を渡し、math_align="baseline" で
         # 数式のベースラインを本文行に揃える（中心配置のズレを根本解消）。
-        # 高さ h は ascent+descent（数式画像の縦範囲スケールに使う）。
-        # bbox 幅は実描画幅（draw_w=h_mm*aspect = _inline_math_width）に一致させる。
-        # 論理幅(box.width)は実描画より小さく、数式画像が予約枠からはみ出して右隣文字に
-        # 重なるため。カーソル前進(_inline_math_width)とも一致し、折り返し予約と揃う。
-        h_mm = box.ascent + box.descent
-        draw_w = self._inline_math_width(math_src)
+        # 高さ h_mm = ink_em*font_size（墨の em 比で本文と同縮尺。論理高だと小文字が
+        # でかすぎる）。幅 draw_w = h_mm*aspect。カーソル前進・折り返し予約(_inline_math_width)
+        # とも一致し、数式画像が予約枠からはみ出して右隣文字に重なるのを防ぐ。
+        draw_w, h_mm = self._inline_math_draw_size(math_src)
         math_bbox = (x, y, draw_w, h_mm)
         self._convert_math_placements(
             box.placements, page_idx, output, math_src, math_bbox, math_align="baseline"

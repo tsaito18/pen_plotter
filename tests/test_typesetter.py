@@ -822,11 +822,16 @@ class TestInlineMath:
         assert "".join(chars) == "電圧V = IRです"
 
     def test_mixed_text_x_positions_monotonic(self):
-        """混在テキストのx座標が単調増加する（重なりなし）。"""
+        """混在テキストのx座標が単調増加する（重なりなし）。
+
+        数式は1枚の画像として math_bbox 内に描かれるため、内部の math_skip 文字
+        （論理スケールの幻の placement、非描画）は除外し、実描画される本文文字＋
+        数式先頭(math_source)の x が単調増加することを確認する。
+        """
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("式$x = 1$。")
         placements = pages[0]
-        xs = [p.x for p in placements]
+        xs = [p.x for p in placements if not p.math_skip]
         for i in range(1, len(xs)):
             assert xs[i] > xs[i - 1], f"x[{i}]={xs[i]} <= x[{i - 1}]={xs[i - 1]}"
 
@@ -1091,7 +1096,7 @@ class TestMathRealDrawWidth:
 
     def test_inline_width_matches_real_draw_width(self):
         from src.layout.math_layout import MathLayoutEngine, MathParser
-        from src.ui.math_skeletonize import formula_aspect
+        from src.ui.math_skeletonize import formula_aspect, formula_ink_em
 
         ts = Typesetter(PageConfig(), font_size=7.0)
         src = "E=mc^2"
@@ -1100,12 +1105,26 @@ class TestMathRealDrawWidth:
         elements = [e for e in MathParser.parse(src) if e.type != "tag"]
         box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=ts.font_size)
         logical = box.width
-        h_mm = box.ascent + box.descent
+        # 実描画: 高さ = ink_em*font_size、幅 = 高 * aspect
+        h_mm = formula_ink_em(src) * ts.font_size
         expected = h_mm * formula_aspect(src)
 
         # 実描画幅に一致し、論理幅とは異なる（^2 で論理幅は過小）
         assert reserved == pytest.approx(expected)
         assert reserved != pytest.approx(logical)
+
+    def test_inline_lowercase_letter_not_oversized(self):
+        """$u$ 等の小文字インライン数式は em いっぱいでなく ink 比に縮む（でかすぎ防止）。"""
+        from src.ui.math_skeletonize import formula_ink_em
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        _, h_mm = ts._inline_math_draw_size("u")
+        # 小文字 u のインク高は em の約 0.45 倍。font_size いっぱいにならない。
+        assert h_mm == pytest.approx(formula_ink_em("u") * ts.font_size)
+        assert h_mm < ts.font_size * 0.6
+        # 大文字 F はキャップ高(約0.69em)で u より大きい
+        _, h_F = ts._inline_math_draw_size("F")
+        assert h_F > h_mm
 
     def test_inline_cursor_advances_by_real_width(self):
         ts = Typesetter(PageConfig(), font_size=7.0)
