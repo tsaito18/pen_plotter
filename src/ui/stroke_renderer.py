@@ -721,10 +721,10 @@ class StrokeRenderer:
         if char in ("\u3001", ","):
             return [np.array([[0.6, 0.2], [0.3, 0.8]])]
         elif char == "\u3002":
-            # \u53e5\u70b9\u306f\u30ec\u30dd\u30fc\u30c8\u4f53\u88c1\u306b\u5408\u308f\u305b\u3001\u4e2d\u592e\u306e\u5186\u3067\u306f\u306a\u304f\u5e95\u306e\u5c0f\u3055\u306a\u70b9\uff08\u30d4\u30ea\u30aa\u30c9\u98a8\uff09
-            return [self._small_dot(0.5, 0.2, r=0.08)]
+            # \u53e5\u70b9\u306f\u30ec\u30dd\u30fc\u30c8\u4f53\u88c1\u306b\u5408\u308f\u305b\u3001\u4e38(\u5186)\u3067\u306f\u306a\u304f\u30d4\u30ea\u30aa\u30c9\u98a8\u306e\u77ed\u3044\u70b9(\u63cf\u3051\u308b\u30c9\u30c3\u30c8)
+            return [np.array([[0.44, 0.2], [0.5, 0.2]], dtype=np.float64)]
         elif char == ".":
-            return [self._small_dot(0.5, 0.2, r=0.07)]
+            return [np.array([[0.48, 0.22], [0.52, 0.22]], dtype=np.float64)]
         elif char == "\u30fb":
             angles = np.linspace(0, 2 * np.pi, 12)
             r = 0.15

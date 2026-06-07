@@ -913,15 +913,17 @@ class TestSimplePunctStrokes:
         assert np.ptp(stroke[:, 0]) <= 0.05
         assert np.ptp(stroke[:, 1]) == 0.0
 
-    def test_japanese_period_remains_circular(self, pipeline):
-        """句点は既存通り小円ストローク。"""
+    def test_japanese_period_is_short_dot(self, pipeline):
+        """句点は丸(円)ではなくピリオド風の短い点（描けるドット）。"""
         result = pipeline._simple_punct_strokes("。")
 
         assert result is not None
         assert len(result) == 1
         stroke = result[0]
-        assert stroke.shape[0] > 2
-        assert np.allclose(stroke[0], stroke[-1])
+        assert stroke.shape == (2, 2)
+        assert not np.allclose(stroke[0], stroke[-1])
+        assert np.ptp(stroke[:, 0]) <= 0.1
+        assert np.ptp(stroke[:, 1]) == 0.0
 
 
 class TestMathSymbolStrokes:
