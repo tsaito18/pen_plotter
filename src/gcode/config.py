@@ -35,7 +35,7 @@ class PlotterConfig:
     finish_lift_z: float = 2.6
     # 終端のリフト区間長(mm)。終端からこの距離でZを接触→finish_lift_zへ漸減する。
     # 点数でなく実距離なので文字サイズに依らず同じ抜けになる（小さい字でも先細る）。
-    finish_lift_length_mm: float = 2.5
+    finish_lift_length_mm: float = 1.5
     # 払い＝ゆっくり抜く、はね＝速く跳ね上げる、の速度倍率。
     harai_speed_factor: float = 0.5
     hane_speed_factor: float = 1.3

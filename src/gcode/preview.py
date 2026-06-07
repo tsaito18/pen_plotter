@@ -24,7 +24,7 @@ Stroke = npt.NDArray[np.float64]
 PREVIEW_WIDTH_MAX = 0.9
 PREVIEW_WIDTH_MIN = 0.15
 # 終端リフト区間長(mm)。PlotterConfig.finish_lift_length_mm と揃える。
-PREVIEW_LIFT_LENGTH_MM = 2.5
+PREVIEW_LIFT_LENGTH_MM = 1.5
 
 
 def compute_stroke_widths(

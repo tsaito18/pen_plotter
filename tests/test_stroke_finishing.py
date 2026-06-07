@@ -330,13 +330,29 @@ class TestContactProfile:
         # 線形(=t)より各中間点で接触が高い（=上がりが緩やか・遅い）
         assert contact_at(2.5) > 0.5
 
-    def test_hane_steeper_than_harai(self):
+    def test_hane_holds_more_contact_than_harai(self):
         arc = self._arc(20, 19.0)
         harai = contact_profile(HARAI, arc, lift_length=5.0)
         hane = contact_profile(HANE, arc, lift_length=5.0)
-        # リフト中間(終端2.5mm付近)ではねの方が接触小(二乗で急)
+        # リフト中間で、はね(三乗)の方が払い(二乗)より接触を高く保つ
         i = int(np.argmin(np.abs(arc - 2.5)))
-        assert hane[i] < harai[i]
+        assert hane[i] > harai[i]
+
+    def test_hane_holds_contact_until_tip(self):
+        # はねは三乗イーズイン contact=1-(1-t)^3。終端直前まで接触を高く保ち、
+        # 先端だけ鋭く抜けて跳ねる（早抜けの回帰防止）。harai_ease_in と同じ arc・
+        # 同じ lift_length(全長12 > lift/max_fraction=10 で eff_lift=lift=5)を使う。
+        arc = self._arc(241, 12.0)
+        prof = contact_profile(HANE, arc, lift_length=5.0)
+
+        def contact_at(d):
+            return float(np.interp(d, arc[::-1], prof[::-1]))
+
+        # 終端0・境界1、各 t での値が 1-(1-t)^3 に一致
+        for d, t in [(0.0, 0.0), (1.25, 0.25), (2.5, 0.5), (3.75, 0.75), (5.0, 1.0)]:
+            assert abs(contact_at(d) - (1.0 - (1.0 - t) ** 3)) < 1e-3
+        # 早抜け回帰防止: リフト中間(t=0.5)でも接触を高く保つ（旧 t**2 なら0.25で落ちる）
+        assert contact_at(2.5) > 0.7
 
     def test_short_stroke_keeps_solid_head(self):
         # 短い画(全長2mm)に長いlift_lengthを与えても、リフトは全長の

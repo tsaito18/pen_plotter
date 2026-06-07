@@ -196,8 +196,8 @@ def contact_profile(
     ``lift_length`` がそのまま効き、サイズ非依存の固定 mm リフトになる。
 
     払い＝二乗イーズイン（終端直前まで接触を高く保ち先端だけ抜く＝``x^2`` 状に
-    上がる）、はね＝二乗イーズアウト（境界側から早く抜けて終端で跳ねる）。
-    とめ・none は全点 ``1.0``。
+    上がる）、はね＝三乗イーズイン（払いより接触を長く保ち、先端だけ鋭く抜けて
+    跳ねる）。とめ・none は全点 ``1.0``。
 
     Args:
         finish: :data:`TOME` / :data:`HANE` / :data:`HARAI` / :data:`NONE`。
@@ -229,8 +229,8 @@ def contact_profile(
         # 二乗イーズイン: 終端直前まで接触≈1（濃い）を保ち、先端だけ曲線的に抜く。
         # lift量 = (1-t)^2 ＝終端からの距離の二乗 →「x^2 みたいに上がる」。
         contact = harai_min + (1.0 - harai_min) * (1.0 - (1.0 - t) ** 2)
-    else:  # HANE: 二乗イーズアウト（境界側から早く抜けて終端で跳ねる）
-        contact = hane_min + (1.0 - hane_min) * t**2
+    else:  # HANE: 三乗イーズイン（終端直前まで接触を保ち、先端だけ鋭く抜ける＝跳ね）
+        contact = hane_min + (1.0 - hane_min) * (1.0 - (1.0 - t) ** 3)
     return contact
 
 

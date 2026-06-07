@@ -139,7 +139,7 @@ class TestComputeStrokeWidthsFinish:
 
     def test_size_independent_taper(self):
         """同じ長さmmなら点数が違っても、終端から同距離の太さが一致（サイズ非依存）。"""
-        from src.gcode.preview import compute_stroke_widths
+        from src.gcode.preview import PREVIEW_LIFT_LENGTH_MM, compute_stroke_widths
 
         def width_at(length, n, d):
             s = _line_stroke_mm(length, n)
@@ -149,9 +149,13 @@ class TestComputeStrokeWidthsFinish:
             mid_from_end = length - (xs[:-1] + xs[1:]) / 2.0
             return float(np.interp(d, mid_from_end[::-1], np.array(w)[::-1]))
 
-        # 二乗イーズインの曲線を解像できる現実的な密度で比較（実ストロークは~32点）。
-        coarse = width_at(16.0, 17, 1.25)
-        fine = width_at(16.0, 65, 1.25)
+        # probe距離はリフト長に追従させる（ハードコードがリフト長変更で破綻するのを防ぐ）。
+        # リフト域中間で二乗カーブが最も急＝点数依存が出やすい所をサイズ非依存性の検証点に。
+        probe = 0.5 * PREVIEW_LIFT_LENGTH_MM
+        # coarse はリフト域(PREVIEW_LIFT_LENGTH_MM)に3セグメント(0.5mm間隔)入る密度。
+        # fine はその2倍密。別密度のまま一致を見ることでサイズ非依存性を検証する。
+        coarse = width_at(16.0, 33, probe)
+        fine = width_at(16.0, 65, probe)
         assert abs(coarse - fine) < 0.05  # 同じmm距離なら点数によらず一致
 
     def test_unknown_finish_falls_back_to_none(self):
