@@ -302,6 +302,12 @@ class StrokeRenderer:
             positioned = self._position_strokes(math_strokes, placement)
             return positioned, ["none"] * len(positioned)
 
+        composite = self._composite_symbol_strokes(lookup_char)
+        if composite is not None:
+            cov.geometric.append(original_char)
+            positioned = self._position_strokes(composite, placement)
+            return positioned, ["none"] * len(positioned)
+
         word_strokes = self._math_word_strokes(lookup_char, placement)
         if word_strokes is not None:
             cov.geometric.append(original_char)
@@ -794,6 +800,54 @@ class StrokeRenderer:
             x = 0.2 + 0.6 * t
             y = 0.5 + 0.12 * np.sin(2.0 * np.pi * t)
             return [np.stack([x, y], axis=1).astype(np.float64)]
+        return None
+
+    @staticmethod
+    def _unit_circle(cx: float, cy: float, r: float, n: int = 24) -> Stroke:
+        t = np.linspace(0.0, 2.0 * np.pi, n)
+        return np.stack([cx + r * np.cos(t), cy + r * np.sin(t)], axis=1).astype(np.float64)
+
+    @staticmethod
+    def _fit_into_box(
+        strokes: list[Stroke], x0: float, y0: float, x1: float, y1: float
+    ) -> list[Stroke]:
+        """ストローク群をアスペクト比保持で [x0,x1]×[y0,y1] に収める（Y-UP のまま）。"""
+        if not strokes:
+            return []
+        pts = np.concatenate(strokes, axis=0)
+        mn = pts.min(axis=0)
+        mx = pts.max(axis=0)
+        span = mx - mn
+        sx = (x1 - x0) / span[0] if span[0] > 1e-6 else 1.0
+        sy = (y1 - y0) / span[1] if span[1] > 1e-6 else 1.0
+        s = min(sx, sy)
+        w, h = span[0] * s, span[1] * s
+        ox = x0 + ((x1 - x0) - w) / 2 - mn[0] * s
+        oy = y0 + ((y1 - y0) - h) / 2 - mn[1] * s
+        return [stroke * s + np.array([ox, oy]) for stroke in strokes]
+
+    # 丸数字 ①..⑳ → 内側に入れる数字文字列
+    _CIRCLED_NUMBERS = {chr(0x2460 + i): str(i + 1) for i in range(20)}
+
+    def _composite_symbol_strokes(self, char: str) -> list[Stroke] | None:
+        """合成記号（℃・°・丸数字）を単位正方形内の幾何字形で返す。□回避。"""
+        if char == "°":
+            return [self._unit_circle(0.5, 0.78, 0.13)]
+        if char == "℃":
+            deg = self._unit_circle(0.22, 0.82, 0.1)
+            t = np.linspace(0.35 * np.pi, 1.65 * np.pi, 22)
+            c_arc = np.stack([0.62 + 0.3 * np.cos(t), 0.42 + 0.34 * np.sin(t)], axis=1).astype(
+                np.float64
+            )
+            return [deg, c_arc]
+        if char in self._CIRCLED_NUMBERS:
+            circle = self._unit_circle(0.5, 0.5, 0.46)
+            digit = self._CIRCLED_NUMBERS[char]
+            ref, _types = self._load_reference_strokes(digit)
+            if not ref:
+                return [circle]
+            inner = self._fit_into_box(ref, 0.3, 0.28, 0.7, 0.72)
+            return [circle, *inner]
         return None
 
     def _simple_paren_strokes(self, char: str, placement: CharPlacement) -> list[Stroke] | None:

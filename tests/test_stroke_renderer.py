@@ -198,6 +198,17 @@ class TestAsciiMathSymbols:
         for circle in result[1:]:
             assert np.allclose(circle[0], circle[-1], atol=1e-6)
 
+    @pytest.mark.parametrize("char", ["①", "②", "④", "⑩", "℃", "°"])
+    def test_composite_symbols_not_rect_fallback(self, char):
+        """丸数字・℃・° は合成字形で描画され□にならない。"""
+        from pathlib import Path
+
+        renderer = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+        strokes = renderer.generate_char_strokes(placement)
+        assert len(strokes) >= 1
+        assert char not in renderer._last_coverage.rect_fallback
+
     @pytest.mark.parametrize("char", ["S", "s"])
     def test_s_not_mirrored(self, char):
         """S/s は上が左・下が右に膨らむ正しい向き（左右反転 Ƨ でない）。"""
