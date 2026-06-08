@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +23,15 @@ from src.ui.stroke_renderer import CharCoverageReport  # noqa: F401 (re-export)
 Stroke = npt.NDArray[np.float64]
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _DrawUnit:
+    placement: CharPlacement
+    strokes: list[Stroke]
+    finishes: list[str]
+    source_index: int
+    serpentine: bool
 
 
 def _scaled_augment_config(messiness: float) -> AugmentConfig:
@@ -281,8 +290,7 @@ class PlotterPipeline:
         """
         self._stroke_renderer._augmenter = self._typesetter.augmenter
         self._stroke_renderer._last_coverage = CharCoverageReport()
-        strokes: list[Stroke] = []
-        finishes: list[str] = []
+        units: list[_DrawUnit] = []
         prev_end_x: float | None = None
         augmenter = self._typesetter.augmenter
         has_real_renderer = self._inference is not None or self._kanjivg_dir is not None
@@ -321,9 +329,6 @@ class PlotterPipeline:
                 last_stroke = char_strokes[-1]
                 prev_end_x = last_stroke[-1, 0]
 
-            strokes.extend(char_strokes)
-            finishes.extend(char_finishes)
-
             # $$ 数式は画像レンダリングに分数線が含まれるので、layout 側の分数線は引かない
             is_math_rendered = getattr(p, "math_source", None) or getattr(p, "math_skip", False)
             if getattr(p, "role", None) == "numerator" and not is_math_rendered:
@@ -339,10 +344,73 @@ class PlotterPipeline:
                         + p.font_size * 0.1
                     )
                     line_y = (p.y + next_denom.y) / 2
-                    strokes.append(np.array([[line_x0, line_y], [line_x1, line_y]]))
-                    finishes.append("none")
+                    char_strokes.append(np.array([[line_x0, line_y], [line_x1, line_y]]))
+                    char_finishes.append("none")
 
+            units.append(
+                _DrawUnit(
+                    placement=p,
+                    strokes=char_strokes,
+                    finishes=char_finishes,
+                    source_index=i,
+                    serpentine=self._can_serpentine_unit(p),
+                )
+            )
+
+        strokes: list[Stroke] = []
+        finishes: list[str] = []
+        for unit in self._serpentine_draw_units(units):
+            strokes.extend(unit.strokes)
+            finishes.extend(unit.finishes)
         return strokes, finishes
+
+    @staticmethod
+    def _can_serpentine_unit(placement: CharPlacement) -> bool:
+        """通常文字だけ蛇行対象にする。"""
+        return not (
+            placement.line_segment is not None
+            or placement.math_source is not None
+            or placement.math_skip
+            or placement.role is not None
+        )
+
+    @staticmethod
+    def _serpentine_draw_units(units: list[_DrawUnit]) -> list[_DrawUnit]:
+        if not units:
+            return []
+
+        safe_units = [unit for unit in units if unit.serpentine]
+        if not safe_units:
+            return units
+
+        safe_slots = [i for i, unit in enumerate(units) if unit.serpentine]
+        ordered_safe = PlotterPipeline._order_units_by_serpentine_lines(safe_units)
+        result = list(units)
+        for slot, unit in zip(safe_slots, ordered_safe, strict=True):
+            result[slot] = unit
+        return result
+
+    @staticmethod
+    def _order_units_by_serpentine_lines(units: list[_DrawUnit]) -> list[_DrawUnit]:
+        ordered = sorted(units, key=lambda unit: (-unit.placement.y, unit.placement.x))
+        font_sizes = [unit.placement.font_size for unit in units]
+        y_tolerance = max(min(font_sizes) * 0.35, 0.01)
+        lines: list[list[_DrawUnit]] = []
+
+        for unit in ordered:
+            if not lines or abs(lines[-1][0].placement.y - unit.placement.y) > y_tolerance:
+                lines.append([unit])
+            else:
+                lines[-1].append(unit)
+
+        result: list[_DrawUnit] = []
+        for line_index, line in enumerate(lines):
+            if line_index % 2 == 1:
+                line.sort(key=lambda unit: (-unit.placement.x, unit.source_index))
+            else:
+                line.sort(key=lambda unit: (unit.placement.x, unit.source_index))
+            result.extend(line)
+        return result
 
     def _generate_page_number_strokes(self, page_number: int) -> list[Stroke]:
         """ページ番号を手書きストロークで生成。用紙の「P.」印字の右横に配置。"""

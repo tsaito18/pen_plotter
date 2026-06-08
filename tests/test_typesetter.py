@@ -1,5 +1,10 @@
+import numpy as np
 import pytest
-from src.layout.typesetter import CharPlacement, Typesetter
+from src.layout.typesetter import (
+    CharPlacement,
+    Typesetter,
+    _LETTER_SPACING_SCALE,
+)
 from src.layout.page_layout import PageConfig, PageLayout
 from src.model.augmentation import AugmentConfig, HandwritingAugmenter
 
@@ -51,9 +56,9 @@ class TestTypesetter:
         ts = Typesetter(PageConfig())
         pages = ts.typeset("ab")
         placements = pages[0]
-        # 半角文字は_char_size_scaleにより0.6倍幅
+        # 半角文字は_char_size_scaleにより0.6倍幅（本文トラッキング加算込み）
         width = placements[1].x - placements[0].x
-        assert width == pytest.approx(ts.font_size * 0.55)
+        assert width == pytest.approx(ts.font_size * (0.55 + _LETTER_SPACING_SCALE))
 
     def test_halfwidth_width_ratio(self):
         """半角文字幅は全角文字幅より小さい。"""
@@ -72,7 +77,7 @@ class TestTypesetter:
 
         width = placements[1].x - placements[0].x
 
-        assert width == pytest.approx(10.0 * (0.45 + 0.55 * 0.85))
+        assert width == pytest.approx(10.0 * (0.45 + 0.55 * 0.85) + 10.0 * _LETTER_SPACING_SCALE)
 
     def test_kanji_advance_adds_breathing_room(self):
         ts = Typesetter(PageConfig(), font_size=10.0)
@@ -80,7 +85,28 @@ class TestTypesetter:
 
         width = placements[1].x - placements[0].x
 
-        assert width == pytest.approx(10.0 * 1.08)
+        assert width == pytest.approx(10.0 * (1.08 + _LETTER_SPACING_SCALE))
+
+    def test_body_advance_adds_letter_spacing_all_kinds(self):
+        """本文の字送りは字種に依らず一律トラッキングが加算される。"""
+        ts = Typesetter(PageConfig(), font_size=10.0)
+
+        ls = ts.font_size * _LETTER_SPACING_SCALE
+        # 半角
+        assert ts._body_char_advance("a") == pytest.approx(10.0 * 0.55 + ls)
+        # 漢字
+        assert ts._body_char_advance("漢") == pytest.approx(10.0 * 1.08 + ls)
+        # かな（_char_size_scale=0.85）
+        assert ts._body_char_advance("あ") == pytest.approx(10.0 * (0.45 + 0.55 * 0.85) + ls)
+
+    def test_heading_advance_unaffected_by_letter_spacing(self):
+        """見出し経路の字送りは line_font_size のままで、本文トラッキングを加えない。"""
+        ts = Typesetter(PageConfig(), font_size=10.0)
+        line_font_size = 11.5
+
+        adv = ts._char_advance("漢", is_heading=True, line_font_size=line_font_size)
+
+        assert adv == pytest.approx(line_font_size)
 
     def test_kanji_wrap_keeps_dynamic_advance_inside_content_edge(self):
         cfg = PageConfig()
@@ -99,7 +125,7 @@ class TestTypesetter:
     def test_hiragana_wrap_uses_smaller_body_advance(self):
         ts = Typesetter(PageConfig(), font_size=10.0)
 
-        placements = ts.typeset("あ" * 19)[0]
+        placements = ts.typeset("あ" * 18)[0]
 
         assert len({p.y for p in placements}) == 1
 
@@ -115,7 +141,7 @@ class TestTypesetter:
         layout = PageLayout(cfg)
         lines = layout.line_positions()
         area = layout.content_area()
-        char_advance = ts.font_size * (0.45 + 0.55 * 0.85)
+        char_advance = ts.font_size * (0.45 + 0.55 * 0.85) + ts.font_size * _LETTER_SPACING_SCALE
         chars_per_line = int(area.width / char_advance)
         # 1ページの行数 * 行あたり文字数 + α でオーバーフロー
         text = "あ" * (len(lines) * chars_per_line + 10)
@@ -163,13 +189,13 @@ class TestTypesetterAugmentation:
             assert p.y == d.y
             assert p.font_size == d.font_size
 
-    def test_baseline_consistent_within_line(self):
-        """同一行内の全文字は同じベースラインシフトを持つ。"""
+    def test_baseline_meanders_within_line(self):
+        """1/f化後、行内中心線は文字ごとに緩やかに蛇行する（y が一定でない）。"""
         ts = self._make_augmented_typesetter()
-        pages = ts.typeset("あいうえお")
+        pages = ts.typeset("あ" * 30)
         placements = pages[0]
-        ys = [p.y for p in placements]
-        assert len(set(ys)) == 1
+        line_ys = [p.y for p in placements]
+        assert len(set(line_ys)) > 1
 
     def test_baseline_varies_across_lines(self):
         """異なる行のベースラインシフトは異なる（高確率）。"""
@@ -207,13 +233,17 @@ class TestTypesetterAugmentation:
         pages = ts.typeset(text)
         placements = pages[0]
 
-        lines: dict[float, list[float]] = {}
+        # 行内中心線蛇行で p.y が文字ごとに微変動するため、行spacingでビニングして
+        # 同一行をまとめる（蛇行±0.15mm ≪ line_spacing 7.14mm）
+        line_spacing = cfg.line_spacing
+        lines: dict[int, list[float]] = {}
         for p in placements:
-            lines.setdefault(p.y, []).append(p.x)
+            line_key = round(p.y / line_spacing)
+            lines.setdefault(line_key, []).append(p.x)
 
         avg_spacings = []
-        for y in sorted(lines.keys()):
-            xs = sorted(lines[y])
+        for key in sorted(lines.keys()):
+            xs = sorted(lines[key])
             if len(xs) >= 2:
                 spacings = [xs[i + 1] - xs[i] for i in range(len(xs) - 1)]
                 avg_spacings.append(sum(spacings) / len(spacings))
@@ -244,7 +274,9 @@ class TestTypesetterAugmentation:
         placements = ts.typeset("漢字")[0]
 
         assert placements[0].x == pytest.approx(area.x + 2.0 * 0.75)
-        assert placements[1].x - placements[0].x == pytest.approx(10.0 * 1.08 * 0.75)
+        assert placements[1].x - placements[0].x == pytest.approx(
+            10.0 * (1.08 + _LETTER_SPACING_SCALE) * 0.75
+        )
 
     def test_density_expansion_stays_inside_wrapped_body_width(self):
         class ExpandingDensityAugmenter:
@@ -263,7 +295,7 @@ class TestTypesetterAugmentation:
         ts = Typesetter(cfg, font_size=10.0, augmenter=ExpandingDensityAugmenter())
         area = PageLayout(cfg).content_area()
 
-        placements = ts.typeset("漢" * 16)[0]
+        placements = ts.typeset("漢" * 12)[0]
         last = max(placements, key=lambda p: p.x)
 
         assert len({p.y for p in placements}) == 1
@@ -384,13 +416,13 @@ class TestHalfwidthSpacingReduction:
             font = ts_half.font_size
             for i in range(1, len(p_half) - 1):
                 actual_w = p_half[i + 1].x - p_half[i].x
-                expected_w = font * 0.55  # _char_size_scale による半角幅
+                expected_w = font * (0.55 + _LETTER_SPACING_SCALE)  # 半角幅+本文トラッキング
                 half_deviations.append(abs(actual_w - expected_w))
 
-            # 漢字: スケール1.0
+            # 漢字: _KANJI_ADVANCE_SCALE(1.08)+本文トラッキング
             for i in range(1, len(p_full) - 1):
                 actual_w = p_full[i + 1].x - p_full[i].x
-                expected_w = font  # 漢字のスケール1.0
+                expected_w = font * (1.08 + _LETTER_SPACING_SCALE)
                 full_deviations.append(abs(actual_w - expected_w))
 
         avg_half_dev = sum(half_deviations) / len(half_deviations)
@@ -415,6 +447,101 @@ class TestHalfwidthSpacingReduction:
         # augmentありで値が変動している（減衰なし=フルaugment）
         # NOTE: seed次第で偶然一致する可能性はあるが、spacing_variation=1.0なら非常に低い
         assert actual_w != pytest.approx(plain_w, abs=0.01)
+
+
+class TestPinkNoiseLayoutWiring:
+    """Phase C: 1/fノイズ(ピンクノイズ)ストリームの typesetter 配線。
+
+    行内中心線蛇行・行間baseline相関・再現性・後方互換を検証する。
+    """
+
+    def _make_ts(self, seed: int = 42, **cfg_kwargs) -> Typesetter:
+        cfg = AugmentConfig(**cfg_kwargs)
+        aug = HandwritingAugmenter(cfg, seed=seed)
+        return Typesetter(PageConfig(), augmenter=aug)
+
+    def test_within_line_meander_has_variance(self):
+        """1行に同種文字を多数並べると CharPlacement.y がばらつく(分散>0)。"""
+        ts = self._make_ts()
+        placements = ts.typeset("あ" * 40)[0]
+        # 1行目だけ抽出(折り返し後の行を混ぜない)
+        first_y0 = placements[0].y
+        line_ys = [p.y for p in placements if abs(p.y - first_y0) < ts.font_size]
+        assert len(line_ys) >= 10
+        variance = float(np.var(line_ys))
+        assert variance > 0.0, "行内中心線が蛇行していない(yが全て同一)"
+
+    def test_line_baseline_pink_differs_from_white(self):
+        """use_pink_noise の有無で行ごと代表yの系列が変わる(性質の違いを確認)。"""
+        ts_pink = self._make_ts(seed=7, use_pink_noise=True)
+        ts_white = self._make_ts(seed=7, use_pink_noise=False)
+        text = "あ" * 600  # 複数行に折り返す
+
+        def line_rep_ys(ts: Typesetter) -> list[float]:
+            placements = ts.typeset(text)[0]
+            seen: dict[float, float] = {}
+            for p in placements:
+                # 行先頭文字(最小x)の代表yを行ごとに1つ取る
+                key = round(p.y, 6)
+                if key not in seen:
+                    seen[key] = p.x
+            return sorted(seen.keys())
+
+        pink_ys = line_rep_ys(ts_pink)
+        white_ys = line_rep_ys(ts_white)
+        assert len(pink_ys) >= 3
+        assert len(white_ys) >= 3
+        # ピンクと白色で行baseline系列は一致しない(ノイズ性質が異なる)
+        assert pink_ys != white_ys
+
+    def test_reproducible_same_seed(self):
+        """同seed augmenter は同一レイアウト(CharPlacement列)を再現する。"""
+        ts1 = self._make_ts(seed=99)
+        ts2 = self._make_ts(seed=99)
+        text = "あいうえおかきくけこ\nさしすせそたちつてと"
+        p1 = ts1.typeset(text)[0]
+        p2 = ts2.typeset(text)[0]
+        assert len(p1) == len(p2)
+        for a, b in zip(p1, p2):
+            assert a.char == b.char
+            assert a.x == pytest.approx(b.x)
+            assert a.y == pytest.approx(b.y)
+            assert a.font_size == pytest.approx(b.font_size)
+            assert a.slant == pytest.approx(b.slant)
+
+    def test_disabled_keeps_flat_baseline(self):
+        """enabled=False は従来通り行内 y 一定(蛇行なし)。"""
+        ts = self._make_ts(enabled=False)
+        ts_plain = Typesetter(PageConfig())
+        text = "あいうえお"
+        placements = ts.typeset(text)[0]
+        plain = ts_plain.typeset(text)[0]
+        assert len({p.y for p in placements}) == 1
+        for p, q in zip(placements, plain):
+            assert p.x == pytest.approx(q.x)
+            assert p.y == pytest.approx(q.y)
+            assert p.font_size == pytest.approx(q.font_size)
+
+    def test_no_augmenter_flat_baseline(self):
+        """augmenter=None でも行内 y は一定(従来動作)。"""
+        ts = Typesetter(PageConfig())
+        placements = ts.typeset("あいうえお")[0]
+        assert len({p.y for p in placements}) == 1
+
+    def test_mixed_math_and_halfwidth_no_exception(self):
+        """数式・半角・全角混在でも例外なくレイアウトできる。"""
+        ts = self._make_ts(seed=3)
+        text = "速度$v = at$ は abc と漢字が混ざる123。"
+        placements = ts.typeset(text)[0]
+        assert len(placements) > 0
+
+    def test_size_lower_bound_preserved(self):
+        """サイズ揺らぎでも下限(0.8倍)を下回らない。"""
+        ts = self._make_ts(seed=5, size_variation=2.0)
+        placements = ts.typeset("漢" * 50)[0]
+        for p in placements:
+            # 漢字本文の素の font_size は ts.font_size
+            assert p.font_size >= ts.font_size * 0.8 - 1e-9
 
 
 class TestCharSizeScale:

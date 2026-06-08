@@ -33,6 +33,9 @@ _HEADING_X: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
 _BODY_X: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
 _HEADING_FONT_SCALES: dict[int, float] = {1: 1.15, 2: 1.08, 3: 1.0}
 _KANJI_ADVANCE_SCALE = 1.08
+# 本文字間トラッキング(font_size比)。手書きは字が詰まって見えるため、字種に依らず
+# 本文の字送りへ一律の隙間を加える(乗算でなく加算で全字種に均一な間隔を与える)。
+_LETTER_SPACING_SCALE = 0.05
 
 # 手書きバランス調整: 画数が少なく視覚的に軽い文字は小さめにする
 _KANA_SIZE_OVERRIDES: dict[str, float] = {
@@ -317,11 +320,12 @@ class Typesetter:
         return self._augmenter
 
     def _body_char_advance(self, ch: str) -> float:
+        letter_spacing = self.font_size * _LETTER_SPACING_SCALE
         if is_halfwidth(ch):
-            return self.font_size * 0.55
+            return self.font_size * 0.55 + letter_spacing
         if _is_kanji(ch):
-            return self.font_size * _KANJI_ADVANCE_SCALE
-        return self.font_size * (0.45 + 0.55 * _char_size_scale(ch))
+            return self.font_size * _KANJI_ADVANCE_SCALE + letter_spacing
+        return self.font_size * (0.45 + 0.55 * _char_size_scale(ch)) + letter_spacing
 
     def _char_advance(self, ch: str, is_heading: bool, line_font_size: float) -> float:
         if is_heading:
@@ -749,7 +753,14 @@ class Typesetter:
             x += self.font_size
 
         if self._augmenter is not None:
-            _, line_y, _ = self._augmenter.augment_char_placement(x, y, self.font_size)
+            # 行baselineは1/fストリーム next_line_baseline() を単一ソースとする。
+            # 旧インタフェースのみ実装したaugmenter(テスト用モック等)には
+            # next_line_baseline が無いので augment_char_placement へフォールバック
+            next_line_baseline = getattr(self._augmenter, "next_line_baseline", None)
+            if next_line_baseline is not None:
+                line_y = y + next_line_baseline()
+            else:
+                _, line_y, _ = self._augmenter.augment_char_placement(x, y, self.font_size)
             density_scale = self._augmenter.get_line_density_scale()
         else:
             line_y = y
@@ -781,15 +792,33 @@ class Typesetter:
                     neutral_remaining -= char_advance
 
                     if self._augmenter is not None:
-                        aug_x, _, aug_size = self._augmenter.augment_char_placement(
-                            x, y, char_font_size
-                        )
+                        next_spacing = getattr(self._augmenter, "next_char_spacing", None)
+                        next_size = getattr(self._augmenter, "next_char_size_scale", None)
+                        next_slant = getattr(self._augmenter, "next_char_slant", None)
+                        next_char_baseline = getattr(self._augmenter, "next_char_baseline", None)
+                        if next_spacing is not None:
+                            spacing_jitter = next_spacing()
+                            aug_size = char_font_size * next_size() if next_size else char_font_size
+                            char_slant = next_slant() if next_slant else 0.0
+                            char_baseline = next_char_baseline() if next_char_baseline else 0.0
+                        else:
+                            # 旧インタフェースのみのaugmenterへのフォールバック
+                            old_x, _, aug_size = self._augmenter.augment_char_placement(
+                                x, y, char_font_size
+                            )
+                            spacing_jitter = old_x - x
+                            get_slant = getattr(self._augmenter, "get_char_slant", None)
+                            char_slant = get_slant() if get_slant else 0.0
+                            char_baseline = 0.0
+                        # サイズは下限0.8倍を維持(旧 augment_char_placement のクランプと同じ)
+                        aug_size = max(aug_size, char_font_size * 0.8)
+
                         char_density_scale = self._augmenter.get_char_density_scale()
                         density_factor = density_scale * char_density_scale
                         spacing_factor = density_factor
                         if prev_halfwidth and cur_halfwidth:
                             spacing_factor *= 0.5
-                        aug_x = x + (aug_x - x) * spacing_factor
+                        aug_x = x + spacing_jitter * spacing_factor
                         char_width = char_advance * density_factor
                         if density_factor > 1.0:
                             density_width_cap = max(
@@ -797,15 +826,14 @@ class Typesetter:
                                 line_right_x - x - neutral_remaining,
                             )
                             char_width = min(char_width, density_width_cap)
-                        get_slant = getattr(self._augmenter, "get_char_slant", None)
                         output.append(
                             CharPlacement(
                                 char=ch,
                                 x=aug_x,
-                                y=line_y,
+                                y=line_y + char_baseline,
                                 font_size=aug_size,
                                 page=page_idx,
-                                slant=get_slant() if get_slant else 0.0,
+                                slant=char_slant,
                             )
                         )
                     else:
@@ -912,10 +940,7 @@ class Typesetter:
         col_w: list[float] = []
         for c in range(n_cols):
             cell_adv = (
-                max(
-                    sum(self._body_char_advance(ch) for ch in rows[r][c])
-                    for r in range(n_rows)
-                )
+                max(sum(self._body_char_advance(ch) for ch in rows[r][c]) for r in range(n_rows))
                 if n_rows > 0
                 else fs
             )
@@ -1112,11 +1137,7 @@ class Typesetter:
         """
         if not elements or not all(e.type in ("text", "symbol") for e in elements):
             return False
-        return all(
-            ch in _PLAIN_MATH_BODY_CHARS
-            for e in elements
-            for ch in e.content
-        )
+        return all(ch in _PLAIN_MATH_BODY_CHARS for e in elements for ch in e.content)
 
     @staticmethod
     def _plain_math_text(elements: list[MathElement]) -> str:
@@ -1140,9 +1161,7 @@ class Typesetter:
             # 本文文字と同様、空白も placement 化（描画なし）して文字列順を保つ。
             for ch in self._plain_math_text(elements):
                 output.append(
-                    CharPlacement(
-                        char=ch, x=cursor, y=y, font_size=self.font_size, page=page_idx
-                    )
+                    CharPlacement(char=ch, x=cursor, y=y, font_size=self.font_size, page=page_idx)
                 )
                 cursor += self._body_char_advance(ch)
             return cursor

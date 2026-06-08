@@ -1088,6 +1088,42 @@ class TestPlacementsToStrokesWithFinishes:
         assert isinstance(result, list)
         assert preview_path.exists()
 
+    def test_serpentine_plot_order_keeps_layout_coordinates(self, pipeline):
+        """通常文字の描画順だけ行ごとに蛇行させ、配置座標は変えない。"""
+        placements = [
+            CharPlacement(char="a", x=10.0, y=30.0, font_size=4.0),
+            CharPlacement(char="b", x=20.0, y=30.0, font_size=4.0),
+            CharPlacement(char="c", x=30.0, y=30.0, font_size=4.0),
+            CharPlacement(char="d", x=10.0, y=20.0, font_size=4.0),
+            CharPlacement(char="e", x=20.0, y=20.0, font_size=4.0),
+            CharPlacement(char="f", x=30.0, y=20.0, font_size=4.0),
+            CharPlacement(char="g", x=10.0, y=10.0, font_size=4.0),
+            CharPlacement(char="h", x=20.0, y=10.0, font_size=4.0),
+            CharPlacement(char="i", x=30.0, y=10.0, font_size=4.0),
+        ]
+        original_positions = [(p.char, p.x, p.y) for p in placements]
+
+        def fake_generate(p):
+            return [np.array([[p.x, p.y], [p.x + 1.0, p.y]])], [p.char]
+
+        pipeline._stroke_renderer.generate_char_strokes_with_finishes = fake_generate
+        strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements)
+
+        assert [float(stroke[0, 0]) for stroke in strokes] == [
+            10.0,
+            20.0,
+            30.0,
+            30.0,
+            20.0,
+            10.0,
+            10.0,
+            20.0,
+            30.0,
+        ]
+        assert finishes == ["a", "b", "c", "f", "e", "d", "g", "h", "i"]
+        assert len(strokes) == len(finishes)
+        assert [(p.char, p.x, p.y) for p in placements] == original_positions
+
 
 class TestMultiPagePreview:
     """マルチページプレビューのテスト。"""

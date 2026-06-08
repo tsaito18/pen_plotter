@@ -301,3 +301,117 @@ class TestApplyTremor:
         r1 = HandwritingAugmenter(seed=99).apply_tremor(stroke)
         r2 = HandwritingAugmenter(seed=99).apply_tremor(stroke)
         np.testing.assert_array_equal(r1, r2)
+
+
+def _lag1_autocorr(series: np.ndarray) -> float:
+    """系列の lag-1 自己相関を返す。"""
+    s = np.asarray(series, dtype=np.float64)
+    s = s - s.mean()
+    denom = float(np.dot(s, s))
+    if denom < 1e-12:
+        return 0.0
+    return float(np.dot(s[:-1], s[1:]) / denom)
+
+
+class TestPinkNoiseConfig:
+    def test_pink_noise_defaults(self):
+        cfg = AugmentConfig()
+        assert cfg.use_pink_noise is True
+        assert cfg.pink_octaves == 16
+
+
+class TestPinkSequenceCorrelation:
+    def test_char_baseline_positive_autocorrelation(self):
+        """1/fノイズは隣接サンプルが正相関する(白色との違い)。"""
+        aug = HandwritingAugmenter(AugmentConfig(use_pink_noise=True), seed=7)
+        series = np.array([aug.next_char_baseline() for _ in range(2000)])
+        assert _lag1_autocorr(series) > 0.1
+
+    def test_white_fallback_near_zero_autocorrelation(self):
+        """白色ノイズは隣接サンプルが無相関(lag-1 ≈ 0)。"""
+        aug = HandwritingAugmenter(AugmentConfig(use_pink_noise=False), seed=7)
+        series = np.array([aug.next_char_baseline() for _ in range(2000)])
+        assert abs(_lag1_autocorr(series)) < 0.1
+
+
+class TestPinkSequenceReproducibility:
+    def test_same_seed_identical_series(self):
+        cfg = AugmentConfig(use_pink_noise=True)
+        a = HandwritingAugmenter(cfg, seed=321)
+        b = HandwritingAugmenter(cfg, seed=321)
+        for method in (
+            "next_line_baseline",
+            "next_char_baseline",
+            "next_char_spacing",
+            "next_char_size_scale",
+            "next_char_slant",
+        ):
+            sa = [getattr(a, method)() for _ in range(50)]
+            sb = [getattr(b, method)() for _ in range(50)]
+            assert sa == sb, f"{method} not reproducible"
+
+    def test_streams_independent(self):
+        """各ストリームは異なるseed派生で独立(同一系列にならない)。"""
+        cfg = AugmentConfig(use_pink_noise=True)
+        aug = HandwritingAugmenter(cfg, seed=5)
+        baseline = [aug.next_char_baseline() for _ in range(50)]
+        spacing = [aug.next_char_spacing() for _ in range(50)]
+        assert baseline != spacing
+
+
+class TestPinkNeutralValues:
+    def test_disabled_returns_neutral(self):
+        cfg = AugmentConfig(enabled=False, use_pink_noise=True)
+        aug = HandwritingAugmenter(cfg, seed=1)
+        for _ in range(10):
+            assert aug.next_line_baseline() == 0.0
+            assert aug.next_char_baseline() == 0.0
+            assert aug.next_char_spacing() == 0.0
+            assert aug.next_char_slant() == 0.0
+            assert aug.next_char_size_scale() == 1.0
+
+    def test_disabled_white_returns_neutral(self):
+        cfg = AugmentConfig(enabled=False, use_pink_noise=False)
+        aug = HandwritingAugmenter(cfg, seed=1)
+        for _ in range(10):
+            assert aug.next_line_baseline() == 0.0
+            assert aug.next_char_baseline() == 0.0
+            assert aug.next_char_spacing() == 0.0
+            assert aug.next_char_slant() == 0.0
+            assert aug.next_char_size_scale() == 1.0
+
+
+class TestPinkScaling:
+    def test_amplitude_proportional_to_config(self):
+        """振幅が config の σ に比例する。"""
+        small = HandwritingAugmenter(AugmentConfig(baseline_drift=0.1), seed=3)
+        large = HandwritingAugmenter(AugmentConfig(baseline_drift=1.0), seed=3)
+        s_std = np.std([small.next_char_baseline() for _ in range(1000)])
+        l_std = np.std([large.next_char_baseline() for _ in range(1000)])
+        assert l_std > s_std * 5
+
+    def test_zero_sigma_returns_neutral(self):
+        cfg = AugmentConfig(
+            baseline_drift=0.0,
+            spacing_variation=0.0,
+            size_variation=0.0,
+            slant_variation=0.0,
+        )
+        aug = HandwritingAugmenter(cfg, seed=2)
+        for _ in range(20):
+            assert aug.next_line_baseline() == 0.0
+            assert aug.next_char_baseline() == 0.0
+            assert aug.next_char_spacing() == 0.0
+            assert aug.next_char_slant() == 0.0
+            assert aug.next_char_size_scale() == 1.0
+
+    def test_white_mode_amplitude_scales(self):
+        small = HandwritingAugmenter(
+            AugmentConfig(use_pink_noise=False, baseline_drift=0.1), seed=3
+        )
+        large = HandwritingAugmenter(
+            AugmentConfig(use_pink_noise=False, baseline_drift=1.0), seed=3
+        )
+        s_std = np.std([small.next_char_baseline() for _ in range(1000)])
+        l_std = np.std([large.next_char_baseline() for _ in range(1000)])
+        assert l_std > s_std * 5
