@@ -132,7 +132,9 @@ class TestStrokeRendererMethods:
 class TestAsciiMathSymbols:
     """数式で頻出する ASCII 記号は矩形フォールバックではなく幾何で描画する。"""
 
-    @pytest.mark.parametrize("char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%"])
+    @pytest.mark.parametrize(
+        "char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%", "[", "]", "~"]
+    )
     def test_ascii_math_renders_geometric(self, char):
         from src.layout.typesetter import CharPlacement
 
@@ -195,6 +197,17 @@ class TestAsciiMathSymbols:
         # 小円 2 本は閉じている（始点≈終点）
         for circle in result[1:]:
             assert np.allclose(circle[0], circle[-1], atol=1e-6)
+
+    @pytest.mark.parametrize("char", ["①", "②", "④", "⑩", "℃", "°"])
+    def test_composite_symbols_not_rect_fallback(self, char):
+        """丸数字・℃・° は合成字形で描画され□にならない。"""
+        from pathlib import Path
+
+        renderer = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+        strokes = renderer.generate_char_strokes(placement)
+        assert len(strokes) >= 1
+        assert char not in renderer._last_coverage.rect_fallback
 
     @pytest.mark.parametrize("char", ["S", "s"])
     def test_s_not_mirrored(self, char):
@@ -653,3 +666,62 @@ class TestGenerateCharStrokesWithFinishes:
         assert not isinstance(result, tuple)
         strokes, _ = renderer.generate_char_strokes_with_finishes(placement)
         assert len(result) == len(strokes)
+
+
+class TestAsciiLetterHandwriting:
+    """本文 ASCII 英字の手書き揺らぎ（きれいすぎ解消）。"""
+
+    def test_ascii_letter_gets_distortion_with_augmenter(self):
+        from src.layout.typesetter import CharPlacement
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        clean = StrokeRenderer()
+        hand = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
+        cp = CharPlacement(char="x", x=0.0, y=0.0, font_size=10.0)
+        s_clean = clean.generate_char_strokes(cp)
+        s_hand = hand.generate_char_strokes(cp)
+        assert len(s_clean) == len(s_hand)
+        # augmenter 有りでは素の幾何字形から変位する（きれいすぎない）
+        assert any(not np.allclose(c, h) for c, h in zip(s_clean, s_hand))
+
+    def test_ascii_letter_no_augmenter_is_clean(self):
+        from src.layout.typesetter import CharPlacement
+
+        r = StrokeRenderer()  # augmenter なし
+        cp = CharPlacement(char="x", x=0.0, y=0.0, font_size=10.0)
+        a = r.generate_char_strokes(cp)
+        b = r.generate_char_strokes(cp)
+        # augmenter 無しなら毎回同一（distortion no-op）
+        assert all(np.allclose(x, y) for x, y in zip(a, b))
+
+
+class TestAsciiLetterPrefersUserStroke:
+    """英字はユーザー実筆跡サンプルがあれば幾何フォントより優先（英語くそ対策）。"""
+
+    def test_letter_with_user_sample_uses_direct(self, tmp_path):
+        from src.layout.typesetter import CharPlacement
+
+        user_dir = tmp_path / "user_strokes"
+        # ユーザーが書いた "A"（特徴的な三角形状）
+        _create_user_stroke_json(
+            user_dir, "A", [[[0, 100], [50, 0]], [[50, 0], [100, 100]], [[25, 50], [75, 50]]]
+        )
+        r = StrokeRenderer(user_strokes_dir=user_dir)
+        r._last_coverage.geometric.clear()
+        r._last_coverage.user_strokes.clear()
+        r.generate_char_strokes(CharPlacement(char="A", x=0, y=0, font_size=7.0))
+        # 幾何でなく実筆跡経路（user_strokes）に入る
+        assert "A" in r._last_coverage.user_strokes
+        assert "A" not in r._last_coverage.geometric
+
+    def test_letter_without_sample_falls_back_to_geometric(self, tmp_path):
+        from src.layout.typesetter import CharPlacement
+
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(user_dir, "A", [[[0, 100], [50, 0]]])
+        r = StrokeRenderer(user_strokes_dir=user_dir)
+        r._last_coverage.geometric.clear()
+        r._last_coverage.user_strokes.clear()
+        # "Z" はサンプル無し → 幾何フォントへフォールバック
+        r.generate_char_strokes(CharPlacement(char="Z", x=0, y=0, font_size=7.0))
+        assert "Z" in r._last_coverage.geometric

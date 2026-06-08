@@ -16,6 +16,42 @@ from src.model.stroke_finishing import (
 Stroke = npt.NDArray[np.float64]
 
 
+def simplify_stroke(stroke: Stroke, tolerance_mm: float) -> Stroke:
+    """Ramer–Douglas–Peucker でストロークの冗長な共線点を畳む。
+
+    弦からの最大垂直偏差が ``tolerance_mm`` 以下になる区間を 1 セグメントへ統合する。
+    端点は必ず保持する。``tolerance_mm <= 0`` または 3 点未満はそのまま返す。
+    過剰なリサンプリング(32点固定)による極短セグメントを除去し、実機の加減速スタッター
+    （ガガガ）を抑える。曲率の高い箇所や手書き揺らぎ(tolerance超の偏差)は残る。
+    """
+    if tolerance_mm <= 0 or len(stroke) < 3:
+        return stroke
+    pts = np.asarray(stroke, dtype=np.float64)
+    keep = np.zeros(len(pts), dtype=bool)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(pts) - 1)]
+    while stack:
+        i, j = stack.pop()
+        if j <= i + 1:
+            continue
+        a, b = pts[i], pts[j]
+        ab = b - a
+        seg = pts[i + 1 : j] - a
+        length = float(np.hypot(ab[0], ab[1]))
+        if length < 1e-12:
+            dist = np.hypot(seg[:, 0], seg[:, 1])
+        else:
+            # 2D 外積の絶対値 / 弦長 = 弦からの垂直距離
+            dist = np.abs(ab[0] * seg[:, 1] - ab[1] * seg[:, 0]) / length
+        k = int(np.argmax(dist))
+        if dist[k] > tolerance_mm:
+            idx = i + 1 + k
+            keep[idx] = True
+            stack.append((i, idx))
+            stack.append((idx, j))
+    return pts[keep]
+
+
 class GCodeGenerator:
     """ストローク列からxDraw A4用G-codeを生成する"""
 
@@ -84,6 +120,9 @@ class GCodeGenerator:
         """
         if len(stroke) < 2:
             return []
+
+        # 冗長な共線点を畳み、極短セグメント連続による実機スタッター(ガガガ)を抑える。
+        stroke = simplify_stroke(stroke, self.config.simplify_tolerance_mm)
 
         lines: list[str] = []
         if not continue_from_prev:

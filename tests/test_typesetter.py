@@ -822,11 +822,16 @@ class TestInlineMath:
         assert "".join(chars) == "電圧V = IRです"
 
     def test_mixed_text_x_positions_monotonic(self):
-        """混在テキストのx座標が単調増加する（重なりなし）。"""
+        """混在テキストのx座標が単調増加する（重なりなし）。
+
+        数式は1枚の画像として math_bbox 内に描かれるため、内部の math_skip 文字
+        （論理スケールの幻の placement、非描画）は除外し、実描画される本文文字＋
+        数式先頭(math_source)の x が単調増加することを確認する。
+        """
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("式$x = 1$。")
         placements = pages[0]
-        xs = [p.x for p in placements]
+        xs = [p.x for p in placements if not p.math_skip]
         for i in range(1, len(xs)):
             assert xs[i] > xs[i - 1], f"x[{i}]={xs[i]} <= x[{i - 1}]={xs[i - 1]}"
 
@@ -1091,7 +1096,7 @@ class TestMathRealDrawWidth:
 
     def test_inline_width_matches_real_draw_width(self):
         from src.layout.math_layout import MathLayoutEngine, MathParser
-        from src.ui.math_skeletonize import formula_aspect
+        from src.ui.math_skeletonize import formula_aspect, formula_ink_em
 
         ts = Typesetter(PageConfig(), font_size=7.0)
         src = "E=mc^2"
@@ -1100,12 +1105,26 @@ class TestMathRealDrawWidth:
         elements = [e for e in MathParser.parse(src) if e.type != "tag"]
         box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=ts.font_size)
         logical = box.width
-        h_mm = box.ascent + box.descent
+        # 実描画: 高さ = ink_em*font_size、幅 = 高 * aspect
+        h_mm = formula_ink_em(src) * ts.font_size
         expected = h_mm * formula_aspect(src)
 
         # 実描画幅に一致し、論理幅とは異なる（^2 で論理幅は過小）
         assert reserved == pytest.approx(expected)
         assert reserved != pytest.approx(logical)
+
+    def test_inline_lowercase_letter_not_oversized(self):
+        """$u$ 等の小文字インライン数式は em いっぱいでなく ink 比に縮む（でかすぎ防止）。"""
+        from src.ui.math_skeletonize import formula_ink_em
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        _, h_mm = ts._inline_math_draw_size("u")
+        # 小文字 u のインク高は em の約 0.45 倍。font_size いっぱいにならない。
+        assert h_mm == pytest.approx(formula_ink_em("u") * ts.font_size)
+        assert h_mm < ts.font_size * 0.6
+        # 大文字 F はキャップ高(約0.69em)で u より大きい
+        _, h_F = ts._inline_math_draw_size("F")
+        assert h_F > h_mm
 
     def test_inline_cursor_advances_by_real_width(self):
         ts = Typesetter(PageConfig(), font_size=7.0)
@@ -1136,3 +1155,170 @@ class TestMathRealDrawWidth:
         draw_w = formula_draw_width_mm(long_src, h_mm)
         assert draw_w == pytest.approx(w_mm, abs=0.5) or w_mm <= area.width + 0.5
         assert x0 + w_mm <= area.x + area.width + 0.5
+
+
+class TestInlineMathBboxWidth:
+    """インライン数式 bbox の幅が実描画幅に一致し右隣文字とかぶらないテスト（バグ2）。
+
+    旧実装は bbox 幅に論理幅(box.width)を使い、実描画幅(h_mm*aspect)より小さいため
+    数式画像が予約枠からはみ出し右隣文字に重なっていた。
+    """
+
+    def test_inline_bbox_width_matches_real_draw_width(self):
+        from src.ui.math_skeletonize import formula_draw_width_mm
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        # 上付きを含む式は matplotlib 経路（単純変数は本文手書き経路で math_source なし）
+        pages = ts.typeset("A$E^2$B")
+        placements = pages[0]
+        mp = next(p for p in placements if p.math_source)
+        _, _, w_mm, h_mm = mp.math_bbox
+        expected = formula_draw_width_mm(mp.math_source, h_mm)
+        assert w_mm == pytest.approx(expected, abs=0.1)
+
+    def test_inline_math_does_not_overlap_next_char(self):
+        from src.ui.math_skeletonize import render_latex_to_strokes
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("A$E=mc^2$B")
+        placements = pages[0]
+        mp = next(p for p in placements if p.math_source)
+        strokes = render_latex_to_strokes(mp.math_source, mp.math_bbox, mp.math_align)
+        assert strokes, "inline math should render strokes"
+        math_right = max(float(s[:, 0].max()) for s in strokes)
+        next_char = next(p for p in placements if p.char == "B")
+        # 数式の実描画右端が右隣文字の開始 x を超えない（重なりなし）
+        assert math_right <= next_char.x + 0.5
+
+
+class TestMultiCharSubscript:
+    """複数文字添字 σ_{sU} の全文字が描画対象として保持されるテスト（バグ1）。
+
+    旧実装は複数文字 MathPlacement(text="sU") を1文字ずつ分割し、先頭以外を
+    math_skip=True・role=None に落として2文字目以降を取りこぼしていた。
+    画像レンダリングしない（math_source 無し）経路を直接検証する。
+    """
+
+    def _convert(self, src: str) -> list[CharPlacement]:
+        from src.layout.math_layout import MathLayoutEngine, MathParser
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        elements = [e for e in MathParser.parse(src) if e.type != "tag"]
+        box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=ts.font_size)
+        output: list[CharPlacement] = []
+        # math_source を渡さない＝個別文字描画経路（タグ等と同じ）
+        ts._convert_math_placements(box.placements, page_idx=0, output=output)
+        return output
+
+    def test_multichar_subscript_keeps_all_chars(self):
+        output = self._convert(r"\sigma_{sU}")
+        chars = "".join(p.char for p in output)
+        assert "s" in chars
+        assert "U" in chars
+
+    def test_multichar_subscript_all_have_role_and_no_skip(self):
+        output = self._convert(r"\sigma_{sL}")
+        sub_ps = [p for p in output if p.char in ("s", "L")]
+        assert len(sub_ps) == 2
+        for p in sub_ps:
+            assert p.role == "subscript", f"{p.char!r} lost subscript role"
+            assert not p.math_skip, f"{p.char!r} wrongly marked math_skip"
+            # 添字サイズは本文の 0.75 倍
+            assert p.font_size == pytest.approx(7.0 * 0.75, abs=0.01)
+
+    def test_multichar_subscript_chars_distinct_x(self):
+        output = self._convert(r"\sigma_{sU}")
+        xs = [p.x for p in output if p.char in ("s", "U")]
+        assert len(xs) == 2
+        assert xs[1] > xs[0], "添字2文字目が1文字目と同じ位置に重なっている"
+
+    def test_multichar_word_in_image_mode_still_skips(self):
+        """math_source 有り（画像描画）経路では従来どおり先頭以外 skip。"""
+        from src.layout.math_layout import MathLayoutEngine, MathParser
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        elements = [e for e in MathParser.parse(r"\sigma_{sU}") if e.type != "tag"]
+        box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=ts.font_size)
+        output: list[CharPlacement] = []
+        ts._convert_math_placements(
+            box.placements,
+            page_idx=0,
+            output=output,
+            math_source=r"\sigma_{sU}",
+            math_bbox=(0.0, 0.0, 10.0, 7.0),
+        )
+        # 先頭1つだけ math_source を持ち、残りは skip（画像が一括描画する）
+        head = [p for p in output if p.math_source]
+        assert len(head) == 1
+        rest = [p for p in output if not p.math_source]
+        assert all(p.math_skip for p in rest)
+
+
+class TestTablePlacement:
+    """Markdownパイプ表の組版（_place_table）。"""
+
+    _TABLE = "| 材料 | 引張強さ |\n|---|---|\n| 圧延鋼材 | 400 |\n| 焼鈍材 | 510 |\n"
+
+    def _segments_and_cells(self, font_size=4.5):
+        ts = Typesetter(PageConfig(), font_size=font_size)
+        pages = ts.typeset(self._TABLE)
+        placements = pages[0]
+        v_rules = sorted(
+            p.line_segment[0]
+            for p in placements
+            if p.line_segment is not None and p.line_segment[0] == p.line_segment[2]
+        )
+        cells = [p for p in placements if p.char and p.line_segment is None]
+        return ts, v_rules, cells
+
+    def test_cells_do_not_overflow_columns(self):
+        """各セル文字は所属列の縦罫線(右境界)を越えない（漢字混在でもはみ出さない）。"""
+        ts, v_rules, cells = self._segments_and_cells()
+        assert len(v_rules) >= 3  # 2列なら縦罫線3本
+        for cp in cells:
+            # この文字が属する列を、左境界 < x の最右な縦罫線で特定
+            left = max((x for x in v_rules if x <= cp.x + 1e-6), default=None)
+            right = min((x for x in v_rules if x > cp.x + 1e-6), default=None)
+            assert left is not None and right is not None
+            # 文字送り分も右境界内に収まること
+            adv = ts._body_char_advance(cp.char)
+            assert cp.x + adv <= right + 1e-6, (
+                f"セル文字 {cp.char!r} (x={cp.x:.2f}+{adv:.2f}) が右境界 {right:.2f} を越えた"
+            )
+
+    def test_table_fits_in_content_width(self):
+        """表全体は本文幅に収まる。"""
+        ts, v_rules, _ = self._segments_and_cells()
+        layout = PageLayout(PageConfig())
+        area = layout.content_area()
+        assert v_rules[0] >= area.x - 1e-6
+        assert v_rules[-1] <= area.x + area.width + 1e-6
+
+
+class TestPlainMathBodyRouting:
+    """単純数式の本文手書き経路ルーティングと□回避。"""
+
+    def test_plain_latin_routed_to_body(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset("$V = IR$")[0]
+        # 本文文字として配置（math_source なし）
+        assert all(p.math_source is None for p in placements)
+        assert "".join(p.char for p in placements) == "V = IR"
+
+    def test_plain_greek_routed_to_body(self):
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset(r"$\sigma$")[0]
+        assert all(p.math_source is None for p in placements)
+        assert "".join(p.char for p in placements) == "σ"
+
+    def test_prime_symbol_stays_matplotlib(self):
+        """σ' は本文に字形が無い ' を含むため matplotlib 経路（□回避）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset(r"$\sigma'$")[0]
+        assert any(p.math_source for p in placements)
+
+    def test_simeq_stays_matplotlib(self):
+        """≃ は本文に字形が無いため matplotlib 経路（□回避）。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset(r"$A \simeq B$")[0]
+        assert any(p.math_source for p in placements)

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from src.layout.line_breaking import break_paragraph_by_width, is_halfwidth
 from src.layout.math_layout import (
+    MathElement,
     MathLayoutEngine,
     MathParser,
     MathPlacement,
@@ -14,6 +15,17 @@ from src.layout.math_layout import (
 )
 from src.layout.page_layout import PageConfig, PageLayout
 from src.layout.table_layout import detect_pipe_table
+
+# 単純数式を本文手書き経路で描いてよい文字集合（stroke_renderer の幾何/記号/英字/数字
+# 経路が確実に字形を持つもの）。ここに無い記号(' " ^ _ | ≃ √ や未対応ギリシャ ικξουΑΒΕΞ
+# 等)を含む式は matplotlib のまま描く（本文経路だと□になるため）。renderer 側の対応を
+# 増やしたらここも追随する。診断ツール(layout_diagnostics)が□退行を検出する。
+_PLAIN_MATH_BODY_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789"
+    " =+-*/<>%:;!?()[]~.,"
+    "αβγδεζηθλμνπρστφχψωΓΔΘΛΠΣΦΨΩ"
+)
 
 _SMALL_KANA = set("っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ")
 _SMALL_PUNCT = set("・、。，．")
@@ -321,19 +333,35 @@ class Typesetter:
             return self._config.paper_size[0] - 10.0
         return area.x + area.width
 
-    def _inline_math_width(self, math_src: str) -> float:
-        # 予約幅を matplotlib 実描画幅に一致させる。論理幅（_CHAR_WIDTH_RATIO 等幅）は
-        # 上付き ^ を幅0・∑/∫を過大に見積もり、実描画(draw_w=h_mm*aspect)とずれて
-        # 行はみ出し／過大空白を起こすため。層の逆依存（layout → ui）を避け遅延 import。
-        from src.ui.math_skeletonize import formula_aspect
+    def _inline_math_draw_size(self, math_src: str) -> tuple[float, float]:
+        """インライン数式の実描画 (幅, 高さ) mm。stroke 描画と幅予約の単一ソース。
 
+        高さ = ink_em * font_size。matplotlib は墨範囲に crop するため、論理高
+        (ascent+descent=font_size) いっぱいへスケールすると小文字 u 等が em まで
+        拡大され「でかすぎ」になる。インクの em 比で縮め本文 em と縮尺を揃える。
+        幅 = 高 * aspect。層の逆依存（layout → ui）を避け遅延 import。
+        """
+        from src.ui.math_skeletonize import formula_aspect, formula_ink_em
+
+        body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src)
+        h_mm = formula_ink_em(body_src) * self.font_size
+        draw_w = h_mm * formula_aspect(body_src)
+        return draw_w, h_mm
+
+    def _inline_math_width(self, math_src: str) -> float:
+        # 予約幅を実配置幅に一致させる（measure/wrap と placement の整合）。
+        # 単純な変数列は本文手書き経路で描くため本文送りの合計。
+        # それ以外は matplotlib 実描画幅（論理幅は ^/∑ を誤見積もりするため不可）。
+        # draw_w<=0（墨なし等）は論理幅へフォールバック。
         elements = MathParser.parse(math_src)
         elements = [e for e in elements if e.type != "tag"]
+        if self._is_plain_math(elements):
+            return sum(self._body_char_advance(ch) for ch in self._plain_math_text(elements))
+        draw_w, _ = self._inline_math_draw_size(math_src)
+        if draw_w > 0:
+            return draw_w
         box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size)
-        h_mm = box.ascent + box.descent
-        body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src)
-        draw_w = h_mm * formula_aspect(body_src)
-        return draw_w if draw_w > 0 else box.width
+        return box.width
 
     def _line_neutral_width(
         self,
@@ -804,8 +832,6 @@ class Typesetter:
         本体の中心位置が tag 周辺空白の影響を受けないようにするため、
         tag 直前 text の末尾空白と直後 text の先頭空白も除去する。
         """
-        from src.layout.math_layout import MathElement
-
         result: list = []
         for elem in elements:
             if elem.type == "tag":
@@ -880,11 +906,20 @@ class Typesetter:
 
         fs = self.font_size
         pad = fs * 0.3
-        # 列幅: 各列の最大文字数 × 文字送り + 左右パディング
+        # 列幅: 各列セルの実文字送り(_body_char_advance)の最大 + 左右パディング。
+        # 文字数×fs だと半角(0.55倍)を過大・漢字(1.08倍)を過小に見積もり、配置(実送り)と
+        # ずれてセルが縦罫線を越える/過大空白になるため、配置と同じ実幅で算出する。
         col_w: list[float] = []
         for c in range(n_cols):
-            max_chars = max(len(rows[r][c]) for r in range(n_rows)) if n_cols > 0 else 1
-            col_w.append(max(max_chars, 1) * fs + 2 * pad)
+            cell_adv = (
+                max(
+                    sum(self._body_char_advance(ch) for ch in rows[r][c])
+                    for r in range(n_rows)
+                )
+                if n_rows > 0
+                else fs
+            )
+            col_w.append(max(cell_adv, fs) + 2 * pad)
         total_w = sum(col_w)
         scale = min(1.0, area.width / total_w) if total_w > 0 else 1.0
         col_w = [w * scale for w in col_w]
@@ -1065,6 +1100,28 @@ class Typesetter:
 
         return required_rows
 
+    @staticmethod
+    def _is_plain_math(elements: list[MathElement]) -> bool:
+        """数式が単純な変数列（添字/上付き/分数/根号を含まない）かを判定する。
+
+        単純な $u$ $S$ $\\sigma$ $x = 1$ $V = IR$ 等は matplotlib(Computer Modern
+        イタリック)で描くと手書き本文の中で書体が浮くため、本文と同じ手書き経路で描く。
+        sup/sub/frac/sqrt/accent/group や演算子語(\\cos 等)を含むものは matplotlib のまま
+        （=,+,- は text に含まれるので plain 対象。\\cos/\\sin は operator なので対象外）。
+        また本文経路に字形が無い記号(' ≃ 等)を含む式も matplotlib のまま（□回避）。
+        """
+        if not elements or not all(e.type in ("text", "symbol") for e in elements):
+            return False
+        return all(
+            ch in _PLAIN_MATH_BODY_CHARS
+            for e in elements
+            for ch in e.content
+        )
+
+    @staticmethod
+    def _plain_math_text(elements: list[MathElement]) -> str:
+        return "".join(e.content for e in elements)
+
     def _place_math(
         self,
         math_src: str,
@@ -1077,17 +1134,32 @@ class Typesetter:
         elements = MathParser.parse(math_src)
         # インライン数式中の \tag{} は配置しない（仕様: ブロック数式専用）
         elements = [e for e in elements if e.type != "tag"]
+        # 単純な変数列は本文と同じ手書き経路で描く（書体を本文に統一）。
+        if self._is_plain_math(elements):
+            cursor = x
+            # 本文文字と同様、空白も placement 化（描画なし）して文字列順を保つ。
+            for ch in self._plain_math_text(elements):
+                output.append(
+                    CharPlacement(
+                        char=ch, x=cursor, y=y, font_size=self.font_size, page=page_idx
+                    )
+                )
+                cursor += self._body_char_advance(ch)
+            return cursor
         box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
         # インライン: bbox[1] に本文ベースライン y を渡し、math_align="baseline" で
         # 数式のベースラインを本文行に揃える（中心配置のズレを根本解消）。
-        # 高さ h は ascent+descent（数式画像の縦範囲スケールに使う）。
-        math_bbox = (x, y, box.width, box.ascent + box.descent)
+        # 高さ h_mm = ink_em*font_size（墨の em 比で本文と同縮尺。論理高だと小文字が
+        # でかすぎる）。幅 draw_w = h_mm*aspect。カーソル前進・折り返し予約(_inline_math_width)
+        # とも一致し、数式画像が予約枠からはみ出して右隣文字に重なるのを防ぐ。
+        draw_w, h_mm = self._inline_math_draw_size(math_src)
+        math_bbox = (x, y, draw_w, h_mm)
         self._convert_math_placements(
             box.placements, page_idx, output, math_src, math_bbox, math_align="baseline"
         )
         # カーソル前進は実描画幅（_inline_math_width）に揃える。box.width(論理幅)では
-        # 上付き等で実描画が右隣へ食い込む。bbox は baseline 経路で h_mm*aspect 描画のため box.width のままでよい。
-        return x + self._inline_math_width(math_src)
+        # 上付き等で実描画が右隣へ食い込む。bbox 幅も同じ draw_w にして三者を一致させる。
+        return x + draw_w
 
     @staticmethod
     def _convert_math_placements(
@@ -1145,8 +1217,11 @@ class Typesetter:
                     )
                 )
             else:
+                # 複数文字 MathPlacement（例: 添字 _{sU} の "sU"）を1文字ずつ分割。
+                # role（subscript 等）は全文字に保持する。先頭だけにすると2文字目以降が
+                # 添字サイズ・位置を失い描画から取りこぼされる（バグ）。
+                # line_segment は単一の幾何要素なので先頭のみに付与する。
                 for i, ch in enumerate(mp.text):
-                    role = mp.role if i == 0 else None
                     seg = mp.line_segment if i == 0 else None
                     output.append(
                         make_cp(
@@ -1155,7 +1230,7 @@ class Typesetter:
                             y=mp.y,
                             font_size=mp.font_size,
                             page=page_idx,
-                            role=role,
+                            role=mp.role,
                             line_segment=seg,
                         )
                     )

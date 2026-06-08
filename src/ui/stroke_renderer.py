@@ -52,6 +52,9 @@ class StrokeRenderer:
         "\uff0b": "+",
         "\uff0d": "-",
         "\uff0f": "/",
+        "\u2212": "-",  # \u2212 \u6570\u5b66\u30de\u30a4\u30ca\u30b9 \u2192 ASCII -
+        "\u301c": "~",  # \u301c \u6ce2\u30c0\u30c3\u30b7\u30e5 \u2192 ~
+        "\uff5e": "~",  # \uff5e \u5168\u89d2\u30c1\u30eb\u30c0 \u2192 ~
     }
 
     _SMOOTH_CHARS = set(
@@ -299,15 +302,38 @@ class StrokeRenderer:
             positioned = self._position_strokes(math_strokes, placement)
             return positioned, ["none"] * len(positioned)
 
+        composite = self._composite_symbol_strokes(lookup_char)
+        if composite is not None:
+            cov.geometric.append(original_char)
+            positioned = self._position_strokes(composite, placement)
+            return positioned, ["none"] * len(positioned)
+
         word_strokes = self._math_word_strokes(lookup_char, placement)
         if word_strokes is not None:
             cov.geometric.append(original_char)
             return word_strokes, ["none"] * len(word_strokes)
 
+        # 英字はユーザーの実筆跡サンプルがあれば幾何フォントより最優先（自然・本人の字）。
+        # モデルは CJK のみ訓練で英字に使えないため、幾何フォント(_ascii_letter_strokes)が
+        # 粗く「英語がくそ」になる。書いた英字は直接ストロークで本人の手書きにする。
+        if lookup_char.isascii() and lookup_char.isalpha():
+            direct_letter = self._direct_stroke(lookup_char)
+            if direct_letter is not None:
+                cov.user_strokes.append(original_char)
+                positioned = self._position_strokes(direct_letter, placement)
+                waver = self._waver_scale(len(positioned))
+                positioned = (
+                    positioned if is_smooth else self._apply_distortion(positioned, waver)
+                )
+                return positioned, ["none"] * len(positioned)
+
         letter_strokes = self._ascii_letter_strokes(lookup_char)
         if letter_strokes is not None:
             cov.geometric.append(original_char)
             positioned = self._position_strokes(letter_strokes, placement)
+            # 幾何字形は完全な直線/円で「きれいすぎる」ため手書き揺らぎを乗せる。
+            # ML/直接ストローク(素値1.0)より強く、数式画像(6.0)より弱い中間値。
+            positioned = self._apply_distortion(positioned, waver_scale=3.0)
             return positioned, ["none"] * len(positioned)
 
         direct = self._direct_stroke(placement.char)
@@ -355,6 +381,9 @@ class StrokeRenderer:
                 cov.kanjivg.append(original_char)
                 positioned = self._position_strokes(char_strokes, placement)
                 finishes = self._resolve_finishes(char_types, positioned)
+                # 数字は終端リフト（はらい/はね）を当てると下線等が歪むため無効化
+                if not self._is_ml_deformable(placement.char):
+                    finishes = ["none"] * len(positioned)
                 positioned = apply_finishing(
                     positioned,
                     finishes,
@@ -709,7 +738,8 @@ class StrokeRenderer:
         if char in ("\u3001", ","):
             return [np.array([[0.6, 0.2], [0.3, 0.8]])]
         elif char == "\u3002":
-            return [self._small_dot(0.5, 0.5, r=0.12)]
+            # \u53e5\u70b9\u306f\u30ec\u30dd\u30fc\u30c8\u4f53\u88c1\u306b\u5408\u308f\u305b\u3001\u4e38(\u5186)\u3067\u306f\u306a\u304f\u30d4\u30ea\u30aa\u30c9\u98a8\u306e\u77ed\u3044\u70b9(\u63cf\u3051\u308b\u30c9\u30c3\u30c8)
+            return [np.array([[0.44, 0.2], [0.5, 0.2]], dtype=np.float64)]
         elif char == ".":
             return [np.array([[0.48, 0.22], [0.52, 0.22]], dtype=np.float64)]
         elif char == "\u30fb":
@@ -782,6 +812,63 @@ class StrokeRenderer:
             )
             stem = np.array([[0.7, 0.6], [0.55, 0.35]], dtype=np.float64)
             return [arc, stem, self._small_dot(0.55, 0.1)]
+        elif char == "[":
+            return [np.array([[0.62, 0.9], [0.4, 0.9], [0.4, 0.1], [0.62, 0.1]], dtype=np.float64)]
+        elif char == "]":
+            return [np.array([[0.38, 0.9], [0.6, 0.9], [0.6, 0.1], [0.38, 0.1]], dtype=np.float64)]
+        elif char == "~":
+            t = np.linspace(0.0, 1.0, 20)
+            x = 0.2 + 0.6 * t
+            y = 0.5 + 0.12 * np.sin(2.0 * np.pi * t)
+            return [np.stack([x, y], axis=1).astype(np.float64)]
+        return None
+
+    @staticmethod
+    def _unit_circle(cx: float, cy: float, r: float, n: int = 24) -> Stroke:
+        t = np.linspace(0.0, 2.0 * np.pi, n)
+        return np.stack([cx + r * np.cos(t), cy + r * np.sin(t)], axis=1).astype(np.float64)
+
+    @staticmethod
+    def _fit_into_box(
+        strokes: list[Stroke], x0: float, y0: float, x1: float, y1: float
+    ) -> list[Stroke]:
+        """ストローク群をアスペクト比保持で [x0,x1]×[y0,y1] に収める（Y-UP のまま）。"""
+        if not strokes:
+            return []
+        pts = np.concatenate(strokes, axis=0)
+        mn = pts.min(axis=0)
+        mx = pts.max(axis=0)
+        span = mx - mn
+        sx = (x1 - x0) / span[0] if span[0] > 1e-6 else 1.0
+        sy = (y1 - y0) / span[1] if span[1] > 1e-6 else 1.0
+        s = min(sx, sy)
+        w, h = span[0] * s, span[1] * s
+        ox = x0 + ((x1 - x0) - w) / 2 - mn[0] * s
+        oy = y0 + ((y1 - y0) - h) / 2 - mn[1] * s
+        return [stroke * s + np.array([ox, oy]) for stroke in strokes]
+
+    # 丸数字 ①..⑳ → 内側に入れる数字文字列
+    _CIRCLED_NUMBERS = {chr(0x2460 + i): str(i + 1) for i in range(20)}
+
+    def _composite_symbol_strokes(self, char: str) -> list[Stroke] | None:
+        """合成記号（℃・°・丸数字）を単位正方形内の幾何字形で返す。□回避。"""
+        if char == "°":
+            return [self._unit_circle(0.5, 0.78, 0.13)]
+        if char == "℃":
+            deg = self._unit_circle(0.22, 0.82, 0.1)
+            t = np.linspace(0.35 * np.pi, 1.65 * np.pi, 22)
+            c_arc = np.stack([0.62 + 0.3 * np.cos(t), 0.42 + 0.34 * np.sin(t)], axis=1).astype(
+                np.float64
+            )
+            return [deg, c_arc]
+        if char in self._CIRCLED_NUMBERS:
+            circle = self._unit_circle(0.5, 0.5, 0.46)
+            digit = self._CIRCLED_NUMBERS[char]
+            ref, _types = self._load_reference_strokes(digit)
+            if not ref:
+                return [circle]
+            inner = self._fit_into_box(ref, 0.3, 0.28, 0.7, 0.72)
+            return [circle, *inner]
         return None
 
     def _simple_paren_strokes(self, char: str, placement: CharPlacement) -> list[Stroke] | None:
@@ -873,12 +960,18 @@ class StrokeRenderer:
             stem = np.array([[0.5, 0.25], [0.5, 0.7]], dtype=np.float64)
             return [stem, self._small_dot(0.5, 0.88)]
         if char == "n":
-            left = np.array([[0.2, 0.2], [0.2, 0.75]], dtype=np.float64)
-            arch = np.array([[0.2, 0.75], [0.5, 0.2], [0.8, 0.75]], dtype=np.float64)
-            return [left, arch]
+            # 左の縦棒＋上に膨らむアーチ(∩)＋右脚。中央が下がる ν との混同を解消
+            stem = np.array([[0.22, 0.2], [0.22, 0.72]], dtype=np.float64)
+            t = np.linspace(np.pi, 0, 16)
+            arch = np.stack(
+                [0.5 + 0.28 * np.cos(t), 0.5 + 0.22 * np.sin(t)], axis=1
+            ).astype(np.float64)
+            right = np.array([[0.78, 0.5], [0.78, 0.2]], dtype=np.float64)
+            return [stem, arch, right]
         if char == "t":
-            stem = np.array([[0.5, 0.15], [0.5, 0.85]], dtype=np.float64)
-            cross = np.array([[0.25, 0.35], [0.75, 0.35]], dtype=np.float64)
+            # 縦棒の下端を右へ軽くはらい、クロスバーは上寄り → "+" と区別
+            stem = np.array([[0.48, 0.85], [0.48, 0.12], [0.62, 0.07]], dtype=np.float64)
+            cross = np.array([[0.28, 0.62], [0.72, 0.62]], dtype=np.float64)
             return [stem, cross]
         if char == "a":
             t = np.linspace(0, 2 * np.pi, 24)
@@ -893,10 +986,13 @@ class StrokeRenderer:
         if char == "g":
             t = np.linspace(0, 2 * np.pi, 24)
             body = np.stack(
-                [0.48 + 0.25 * np.cos(t), 0.45 + 0.25 * np.sin(t)],
+                [0.48 + 0.24 * np.cos(t), 0.52 + 0.22 * np.sin(t)],
                 axis=1,
             ).astype(np.float64)
-            tail = np.array([[0.65, 0.45], [0.6, 0.0], [0.35, 0.05]], dtype=np.float64)
+            # 右から下降しベースライン下(y<0)で左へカールする descender → "9" と区別
+            tail = np.array(
+                [[0.72, 0.52], [0.72, -0.05], [0.5, -0.2], [0.28, -0.1]], dtype=np.float64
+            )
             return [body, tail]
         if char == "e":
             t = np.linspace(0.2 * np.pi, 1.8 * np.pi, 24)

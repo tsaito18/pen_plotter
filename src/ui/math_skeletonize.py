@@ -29,6 +29,33 @@ _MATH_HEIGHT_STRETCH = 1.1  # 縦方向の引き伸ばし（matplotlib の分数
 # 下端 = y0 + h_mm*(0.5 + LIFT - STRETCH/2) を正に保ち、分母が下の行へはみ出さないこと
 
 
+@lru_cache(maxsize=128)
+def formula_ink_em(math_src: str) -> float:
+    """数式のインク高さが nominal em の何倍かを返す（小文字≈0.45, 大文字≈0.7）。
+
+    matplotlib は ``bbox_inches="tight"`` + crop でインク範囲に切り詰めるため、
+    そのまま論理高(font_size)へスケールすると小文字 u 等が em いっぱいまで拡大され
+    「でかすぎ」になる。インクの em 比を返し、描画高 = ink_em * font_size とすれば
+    本文 em と同じ縮尺で揃う。墨なし／失敗時は 1.0（従来挙動相当）。
+
+    Args:
+        math_src: LaTeX ソース（$ なし）。
+
+    Returns:
+        インク高 / nominal em。
+    """
+    gray = _render_to_gray(math_src)
+    if gray is None:
+        return 1.0
+    binary = _binarize(gray)
+    if not binary.any():
+        return 1.0
+    binary = _crop(binary)
+    h_px = binary.shape[0]
+    em_px = _FONT_SIZE_PT * _RENDER_DPI / 72.0
+    return h_px / em_px if em_px > 0 else 1.0
+
+
 @lru_cache(maxsize=64)
 def _render_formula_unit_strokes(
     math_src: str,

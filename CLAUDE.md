@@ -182,7 +182,13 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - リファクタリング済み: HTML分離、StrokeRenderer/PreviewRenderer分割、BaseFinetuner
 - **xDraw A4 ペンプロッタ実機テスト成功**（ホーミング・ペン制御・描画動作確認済み）
 - 幾何ストローク生成: 、。・（）／ASCII数式記号(+,-,=,<,>,*,/,%,:,;,!,?)は`_ascii_math_strokes`で幾何描画（矩形フォールバック回避）
-- 数字(0-9)はML変形を**スキップ**しKanjiVG素の参照字形を直接使う（`_is_ml_deformable`）。モデルはCJKのみ訓練のため数字にper-point offsetを当てると字形が壊れる（例: 「2」の下の横線が崩れる）
+- 数字(0-9)はML変形を**スキップ**しKanjiVG素の参照字形を直接使う（`_is_ml_deformable`）。モデルはCJKのみ訓練のため数字にper-point offsetを当てると字形が壊れる（例: 「2」の下の横線が崩れる）。数字は終端リフト（はらい/はね）も無効化（`finishes=["none"]`、下線等の歪み防止）
+- **句点。/ピリオド.** は丸(円)ではなくピリオド風の短い点(2点ダッシュ)で描く（`_simple_punct_strokes`、レポート体裁・「点が丸になる」回避）
+- **本文ASCII英字の手書き感**: 幾何字形(直線/円)は`_apply_distortion(waver_scale=3.0)`でelastic+tremorを乗せ「きれいすぎ」を解消（ML/直接=1.0、数式画像=6.0の中間）
+- **数式の書体統一**: 単純な変数列（添字/上付き/分数/根号/演算子語を含まない text/symbol のみ、かつ全文字が`_PLAIN_MATH_BODY_CHARS`に含まれる）は matplotlib でなく本文と同じ手書き経路で描画（`typesetter._place_math`の plain 分岐）。`$u$ $S$ $V=IR$ $\sigma$` 等＝手書き、`$E=mc^2$ $S_U$ $\frac{F}{A}$ $\cos$` ＝印刷体のまま。本文に字形が無い記号(' ≃ √ 等)を含む式は matplotlib（□退行防止、診断ツールが検出）
+- **インライン数式のサイズ**: matplotlibは`bbox_inches=tight`+cropで墨範囲に切るため論理高(font_size)へスケールすると小文字uがem高まで拡大され「でかすぎ」。`formula_ink_em()`でインク高/em比を測り描画高=ink_em*font_sizeとし本文emと同縮尺に（`_inline_math_draw_size`が幅予約・bbox・描画の単一ソース）
+- **G-codeストローク簡略化(RDP)**: リサンプリングが曲率に関係なく32点固定のため4.5mm字で約0.12mmの極短セグメントが連続しGRBLが加減速しきれず実機が「ガガガ」と震えて遅くなる。`simplify_stroke`(許容`PlotterConfig.simplify_tolerance_mm=0.05`)で共線冗長点を畳む（実測G1点数47%減・中央セグメント0.24→0.87mm、tremor温存・見た目不変）
+- **表(パイプ表)の列幅**は`_body_char_advance`の実文字送りの最大で算出（文字数×fsだと半角過大・漢字過小でセルが縦罫線を越える）
 - 訓練サーバー: homesrv (i5-9600K, GTX 1050 Ti 4GB, CUDA 12.1, PyTorch 2.5.1) — mise + uv でパッケージ管理
 - Colab Pro: A100 40GB, AMP対応
 

@@ -147,12 +147,11 @@ class TestAppSmoke:
         assert "webserial-log" in elem_ids
         assert "webserial-connect-btn" in elem_ids
         assert "webserial-disconnect-btn" in elem_ids
-        assert "webserial-home-btn" in elem_ids
-        assert "webserial-pen-up-btn" in elem_ids
-        assert "webserial-pen-down-btn" in elem_ids
         assert "webserial-start-btn" in elem_ids
         assert "webserial-stop-btn" in elem_ids
         assert "webserial-emergency-btn" in elem_ids
+        assert "webserial-resume-btn" in elem_ids
+        assert "webserial-preview" in elem_ids
 
     def test_generation_and_webserial_are_separate_tabs(self, app):
         tab_labels = {
@@ -177,9 +176,10 @@ class TestWebSerialScript:
         assert "navigator.serial.requestPort()" in _WEBSERIAL_SCRIPT
         assert "baudRate: BAUD_RATE" in _WEBSERIAL_SCRIPT
         assert "const BAUD_RATE = 115200" in _WEBSERIAL_SCRIPT
-        assert '"$H", "G4 P1", "G92 X0 Y297 Z0", "G90"' in _WEBSERIAL_SCRIPT
-        assert 'const PEN_UP_COMMAND = "G1G90 Z0.5 F5000"' in _WEBSERIAL_SCRIPT
-        assert 'const PEN_DOWN_COMMAND = "G1G90 Z5 F5000"' in _WEBSERIAL_SCRIPT
+        # ホーミング($H)・ペンZはG-code内に内包し送信ループで処理する。
+        # $H は長時間待ち、紙接触判定は PEN_CONTACT_Z で行う。
+        assert "const HOME_TIMEOUT_MS = 120000" in _WEBSERIAL_SCRIPT
+        assert "const PEN_CONTACT_Z = 1.5" in _WEBSERIAL_SCRIPT
 
     def test_script_has_stream_safety_guards(self):
         assert "state.cancelRequested" in _WEBSERIAL_SCRIPT
