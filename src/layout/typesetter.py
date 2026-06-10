@@ -488,9 +488,6 @@ class Typesetter:
             body_level = doc.line_body_level.get(global_line_idx, 0)
             is_para_start = global_line_idx in doc.para_start_indices
             is_page_first = line_idx == 0
-            prev_is_heading = (global_line_idx - 1) in doc.heading_lines or (
-                global_line_idx - 2
-            ) in doc.heading_lines
 
             placements = self._place_line(
                 line_text=line_text,
@@ -502,7 +499,6 @@ class Typesetter:
                 body_level=body_level,
                 is_para_start=is_para_start,
                 is_page_first=is_page_first,
-                prev_is_heading=prev_is_heading,
                 heading_x=_HEADING_X,
                 body_x=_BODY_X,
                 heading_font_scales=_HEADING_FONT_SCALES,
@@ -731,7 +727,6 @@ class Typesetter:
         body_level: int,
         is_para_start: bool,
         is_page_first: bool,
-        prev_is_heading: bool,
         heading_x: dict[int, float],
         body_x: dict[int, float],
         heading_font_scales: dict[int, float],
@@ -749,7 +744,7 @@ class Typesetter:
             else:
                 x = area.x
 
-        if is_para_start and not is_page_first and not is_heading and not prev_is_heading:
+        if is_para_start and not is_page_first and not is_heading:
             x += self.font_size
 
         if self._augmenter is not None:

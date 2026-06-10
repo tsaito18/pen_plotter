@@ -1197,6 +1197,24 @@ class TestHeadings:
         # h1見出しは15mmから開始
         assert heading_chars[0].x == pytest.approx(15.0)
 
+    @pytest.mark.parametrize(
+        ("marker", "body_x"),
+        [
+            ("#", 25.0),
+            ("##", 35.0),
+            ("###", 45.0),
+        ],
+    )
+    def test_heading_following_body_paragraph_indented(self, marker, body_x):
+        """見出し直後の本文段落も1文字字下げする。"""
+        ts = Typesetter(PageConfig(), font_size=6.0)
+        pages = ts.typeset(f"{marker} 見出し\n本文")
+        placements = pages[0]
+
+        body_chars = [p for p in placements if p.char == "本"]
+        assert len(body_chars) == 1
+        assert body_chars[0].x == pytest.approx(body_x + ts.font_size)
+
     def test_period_replaced_with_kuten(self):
         """半角ピリオドは句点（。）に全置換される。"""
         ts = Typesetter(PageConfig(), font_size=7.0)
