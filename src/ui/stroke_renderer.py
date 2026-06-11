@@ -747,9 +747,9 @@ class StrokeRenderer:
             return [np.array([[0.6, 0.2], [0.3, 0.8]])]
         elif char == "\u3002":
             # \u53e5\u70b9\u306f\u30ec\u30dd\u30fc\u30c8\u4f53\u88c1\u306b\u5408\u308f\u305b\u3001\u4e38(\u5186)\u3067\u306f\u306a\u304f\u30d4\u30ea\u30aa\u30c9\u98a8\u306e\u77ed\u3044\u70b9(\u63cf\u3051\u308b\u30c9\u30c3\u30c8)
-            return [np.array([[0.44, 0.2], [0.5, 0.2]], dtype=np.float64)]
+            return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
         elif char == ".":
-            return [np.array([[0.48, 0.22], [0.52, 0.22]], dtype=np.float64)]
+            return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
         elif char == "\u30fb":
             angles = np.linspace(0, 2 * np.pi, 12)
             r = 0.15
@@ -1351,6 +1351,8 @@ class StrokeRenderer:
     def _position_strokes(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
         if not strokes:
             return []
+        if placement.char in (".", "\u3002"):
+            return [self._position_period_dot(placement)]
 
         all_pts = np.concatenate(strokes, axis=0)
         mins = all_pts.min(axis=0)
@@ -1399,6 +1401,22 @@ class StrokeRenderer:
             positioned = [(s - center) @ rot.T + center for s in positioned]
 
         return positioned
+
+    def _position_period_dot(self, placement: CharPlacement) -> Stroke:
+        fs = placement.font_size
+        line_spacing = self._page_config.line_spacing
+        cell_width = fs * 0.55
+        dot_w = min(0.58, max(0.38, fs * 0.08))
+        dot_h = dot_w * 0.75
+        center_x = placement.x + cell_width * 0.5
+        center_y = placement.y + line_spacing * 0.14
+        return np.array(
+            [
+                [center_x - dot_w / 2, center_y + dot_h / 2],
+                [center_x + dot_w / 2, center_y - dot_h / 2],
+            ],
+            dtype=np.float64,
+        )
 
     @staticmethod
     def _rect_fallback(p: CharPlacement) -> list[Stroke]:

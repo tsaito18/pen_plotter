@@ -901,7 +901,7 @@ class TestSimplePunctStrokes:
         return PlotterPipeline()
 
     def test_ascii_period_is_short_drawable_dot(self, pipeline):
-        """ASCIIピリオドは円ではなく、G-codeで描ける短い点線。"""
+        """ASCIIピリオドは円ではなく、G-codeで描ける短い右下がりの点線。"""
         result = pipeline._simple_punct_strokes(".")
 
         assert result is not None
@@ -910,20 +910,70 @@ class TestSimplePunctStrokes:
         assert stroke.shape == (2, 2)
         assert stroke.dtype == np.float64
         assert not np.allclose(stroke[0], stroke[-1])
-        assert np.ptp(stroke[:, 0]) <= 0.05
-        assert np.ptp(stroke[:, 1]) == 0.0
+        assert 0.04 <= np.ptp(stroke[:, 0]) <= 0.06
+        assert 0.03 <= np.ptp(stroke[:, 1]) <= 0.05
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
+
+    def test_ascii_period_positioned_as_tiny_downward_dot(self, pipeline):
+        """配置後も半角セル幅まで拡大されず、手書き点として残る。"""
+        strokes = pipeline._simple_punct_strokes(".")
+        placement = CharPlacement(char=".", x=10.0, y=20.0, font_size=6.0)
+
+        positioned = pipeline._position_strokes(strokes, placement)
+
+        assert len(positioned) == 1
+        stroke = positioned[0]
+        assert stroke.shape == (2, 2)
+        assert 0.35 <= np.ptp(stroke[:, 0]) <= 0.65
+        assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
 
     def test_japanese_period_is_short_dot(self, pipeline):
-        """句点は丸(円)ではなくピリオド風の短い点（描けるドット）。"""
+        """句点も水平線ではなく、G-codeで描ける短い右下がりの点線。"""
         result = pipeline._simple_punct_strokes("。")
 
         assert result is not None
         assert len(result) == 1
         stroke = result[0]
         assert stroke.shape == (2, 2)
+        assert stroke.dtype == np.float64
         assert not np.allclose(stroke[0], stroke[-1])
-        assert np.ptp(stroke[:, 0]) <= 0.1
-        assert np.ptp(stroke[:, 1]) == 0.0
+        assert 0.04 <= np.ptp(stroke[:, 0]) <= 0.06
+        assert 0.03 <= np.ptp(stroke[:, 1]) <= 0.05
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
+
+    def test_japanese_period_positioned_as_tiny_downward_dot(self, pipeline):
+        """本文の ASCII ピリオドは句点に置換されるため、句点側も小さい点にする。"""
+        strokes = pipeline._simple_punct_strokes("。")
+        placement = CharPlacement(char="。", x=10.0, y=20.0, font_size=6.0)
+
+        positioned = pipeline._position_strokes(strokes, placement)
+
+        assert len(positioned) == 1
+        stroke = positioned[0]
+        assert stroke.shape == (2, 2)
+        assert 0.35 <= np.ptp(stroke[:, 0]) <= 0.65
+        assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
+
+    def test_typeset_period_replacement_renders_tiny_downward_dot(self, pipeline):
+        """本文経路で ASCII ピリオドが句点化されても、水平線に戻らない。"""
+        placements = pipeline.text_to_placements("0.2")[0]
+        placement = next(p for p in placements if p.char == "。")
+
+        strokes = pipeline._generate_char_strokes(placement)
+
+        assert len(strokes) == 1
+        stroke = strokes[0]
+        assert stroke.shape == (2, 2)
+        assert 0.35 <= np.ptp(stroke[:, 0]) <= 0.65
+        assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
 
 
 class TestMathSymbolStrokes:
