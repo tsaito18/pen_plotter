@@ -73,6 +73,90 @@ class TestStrokeRendererMethods:
         # 点数・本数は不変
         assert [s.shape for s in straight] == [s.shape for s in slanted]
 
+    def _rendered_height(self, strokes):
+        pts = np.concatenate(strokes, axis=0)
+        return float(pts[:, 1].max() - pts[:, 1].min())
+
+    def test_ascii_lowercase_shorter_than_uppercase(self):
+        """論理フィットで小文字 a (x-height) は大文字 A (cap height) より低く描かれる。"""
+        renderer = StrokeRenderer()
+        fs = 5.0
+        lower = renderer._ascii_letter_strokes("a")
+        upper = renderer._ascii_letter_strokes("A")
+        lower_pos = renderer._position_strokes(
+            lower, CharPlacement(char="a", x=10.0, y=20.0, font_size=fs), logical_ascii=True
+        )
+        upper_pos = renderer._position_strokes(
+            upper, CharPlacement(char="A", x=10.0, y=20.0, font_size=fs), logical_ascii=True
+        )
+
+        assert self._rendered_height(lower_pos) < self._rendered_height(upper_pos)
+
+    def test_ascii_uppercase_near_cap_height(self):
+        """大文字 A は cap height 基準で論理高が font_size の概ね 0.8〜1.0 倍になる。
+
+        横は半角セル幅で抑えるため厳密 font_size には届かないが、x-height 系の
+        小文字より明確に高い。
+        """
+        renderer = StrokeRenderer()
+        fs = 5.0
+        upper = renderer._ascii_letter_strokes("A")
+        upper_pos = renderer._position_strokes(
+            upper, CharPlacement(char="A", x=10.0, y=20.0, font_size=fs), logical_ascii=True
+        )
+
+        h = self._rendered_height(upper_pos)
+        assert 0.8 * fs <= h <= 1.0 * fs
+
+    def test_ascii_descender_extends_below_baseline(self):
+        """ディセンダ字 g は論理フィットでもベースライン下へ伸びる形を保つ。"""
+        renderer = StrokeRenderer()
+        fs = 5.0
+        glyph = renderer._ascii_letter_strokes("g")
+        no_desc = renderer._ascii_letter_strokes("o")
+        g_pos = renderer._position_strokes(
+            glyph, CharPlacement(char="g", x=10.0, y=20.0, font_size=fs), logical_ascii=True
+        )
+        o_pos = renderer._position_strokes(
+            no_desc, CharPlacement(char="o", x=10.0, y=20.0, font_size=fs), logical_ascii=True
+        )
+        # g のディセンダは o の最下点より下に出る
+        assert np.concatenate(g_pos, axis=0)[:, 1].min() < np.concatenate(o_pos, axis=0)[:, 1].min()
+
+    def test_logical_ascii_default_off_preserves_bbox_fit(self):
+        """logical_ascii 既定 False は実bboxフィットで、論理フィットと結果が異なる。
+
+        小文字 a は実bboxフィットだとセル内で拡大され、論理フィット(x-height 抑制)
+        より高く描かれる。
+        """
+        renderer = StrokeRenderer()
+        fs = 5.0
+        glyph = renderer._ascii_letter_strokes("a")
+        bbox_pos = renderer._position_strokes(
+            glyph, CharPlacement(char="a", x=10.0, y=20.0, font_size=fs)
+        )
+        logical_pos = renderer._position_strokes(
+            glyph, CharPlacement(char="a", x=10.0, y=20.0, font_size=fs), logical_ascii=True
+        )
+        # 実bboxフィットは小文字 a を論理フィット(x-height)より高く拡大する
+        assert self._rendered_height(bbox_pos) > self._rendered_height(logical_pos)
+
+    def test_cjk_unaffected_by_logical_fit(self):
+        """CJK 字形は logical_ascii の有無に関わらず実bboxフィットのまま（非回帰）。"""
+        renderer = StrokeRenderer()
+        fs = 5.0
+        # 縦長字形（横律速を避け実bboxフィットで高さ＝font_size になる形）。
+        strokes = [np.array([[0.3, 0.0], [0.5, 1.0]]), np.array([[0.3, 0.0], [0.6, 0.5]])]
+        default_pos = renderer._position_strokes(
+            strokes, CharPlacement(char="漢", x=10.0, y=20.0, font_size=fs)
+        )
+        flagged_pos = renderer._position_strokes(
+            strokes, CharPlacement(char="漢", x=10.0, y=20.0, font_size=fs), logical_ascii=True
+        )
+        # CJK は logical_ascii を無視し、実bboxフィット（高さ＝font_size）を維持
+        assert self._rendered_height(default_pos) == pytest.approx(fs, rel=0.02)
+        assert np.allclose(np.concatenate(default_pos), np.concatenate(flagged_pos))
+
     def test_math_symbol_strokes(self):
         renderer = StrokeRenderer()
         result = renderer._math_symbol_strokes("π")

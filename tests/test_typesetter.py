@@ -56,7 +56,7 @@ class TestTypesetter:
         ts = Typesetter(PageConfig())
         pages = ts.typeset("ab")
         placements = pages[0]
-        # 半角文字は_char_size_scaleにより0.6倍幅（本文トラッキング加算込み）
+        # 半角文字は本文字送りで0.55倍幅固定（本文トラッキング加算込み）
         width = placements[1].x - placements[0].x
         assert width == pytest.approx(ts.font_size * (0.55 + _LETTER_SPACING_SCALE))
 
@@ -72,12 +72,16 @@ class TestTypesetter:
         assert half_w < full_w
 
     def test_body_char_advance_tracks_size_scale(self):
+        from src.layout.char_metrics import effective_char_scale
+
         ts = Typesetter(PageConfig(), font_size=10.0)
         placements = ts.typeset("あ漢")[0]
 
         width = placements[1].x - placements[0].x
 
-        assert width == pytest.approx(10.0 * (0.45 + 0.55 * 0.85) + 10.0 * _LETTER_SPACING_SCALE)
+        assert width == pytest.approx(
+            10.0 * (0.45 + 0.55 * effective_char_scale("あ")) + 10.0 * _LETTER_SPACING_SCALE
+        )
 
     def test_kanji_advance_adds_breathing_room(self):
         ts = Typesetter(PageConfig(), font_size=10.0)
@@ -89,6 +93,8 @@ class TestTypesetter:
 
     def test_body_advance_adds_letter_spacing_all_kinds(self):
         """本文の字送りは字種に依らず一律トラッキングが加算される。"""
+        from src.layout.char_metrics import effective_char_scale
+
         ts = Typesetter(PageConfig(), font_size=10.0)
 
         ls = ts.font_size * _LETTER_SPACING_SCALE
@@ -96,17 +102,54 @@ class TestTypesetter:
         assert ts._body_char_advance("a") == pytest.approx(10.0 * 0.55 + ls)
         # 漢字
         assert ts._body_char_advance("漢") == pytest.approx(10.0 * 1.08 + ls)
-        # かな（_char_size_scale=0.85）
-        assert ts._body_char_advance("あ") == pytest.approx(10.0 * (0.45 + 0.55 * 0.85) + ls)
+        # かな（字送りは effective_char_scale=種別×密度 を反映）
+        assert ts._body_char_advance("あ") == pytest.approx(
+            10.0 * (0.45 + 0.55 * effective_char_scale("あ")) + ls
+        )
 
-    def test_heading_advance_unaffected_by_letter_spacing(self):
-        """見出し経路の字送りは line_font_size のままで、本文トラッキングを加えない。"""
+    def test_heading_advance_applies_char_scale_without_letter_spacing(self):
+        """見出しの字送りは effective_char_scale を反映するが本文トラッキングは加えない。"""
+        from src.layout.char_metrics import effective_char_scale
+
         ts = Typesetter(PageConfig(), font_size=10.0)
         line_font_size = 11.5
 
         adv = ts._char_advance("漢", is_heading=True, line_font_size=line_font_size)
 
-        assert adv == pytest.approx(line_font_size)
+        assert adv == pytest.approx(line_font_size * effective_char_scale("漢"))
+
+    def test_heading_advance_complex_kanji_wider_than_simple(self):
+        """見出し字送りは密度補正で複雑字（鬱）が簡単字（一）より広い。"""
+        ts = Typesetter(PageConfig(), font_size=10.0)
+        line_font_size = 11.5
+
+        complex_adv = ts._char_advance("鬱", is_heading=True, line_font_size=line_font_size)
+        simple_adv = ts._char_advance("一", is_heading=True, line_font_size=line_font_size)
+
+        assert complex_adv > simple_adv
+
+    def test_heading_ascii_advance_smaller_than_kanji(self):
+        """見出し内の半角英字は種別スケール 0.7 が効き漢字より字送りが狭い。"""
+        ts = Typesetter(PageConfig(), font_size=10.0)
+        line_font_size = 11.5
+
+        ascii_adv = ts._char_advance("A", is_heading=True, line_font_size=line_font_size)
+        kanji_adv = ts._char_advance("漢", is_heading=True, line_font_size=line_font_size)
+
+        assert ascii_adv < kanji_adv
+
+    def test_heading_char_font_size_applies_char_scale(self):
+        """見出し配置の font_size に effective_char_scale が焼かれる（複雑字＞簡単字、英字＜漢字）。"""
+        from src.layout.char_metrics import effective_char_scale
+
+        ts = Typesetter(PageConfig(), font_size=10.0)
+        placements = {p.char: p for p in ts.typeset("# 鬱一A")[0]}
+
+        line_fs = 10.0 * 1.15  # 見出しレベル1
+        assert placements["鬱"].font_size == pytest.approx(line_fs * effective_char_scale("鬱"))
+        assert placements["一"].font_size == pytest.approx(line_fs * effective_char_scale("一"))
+        assert placements["鬱"].font_size > placements["一"].font_size
+        assert placements["A"].font_size < placements["鬱"].font_size
 
     def test_kanji_wrap_keeps_dynamic_advance_inside_content_edge(self):
         cfg = PageConfig()
@@ -141,7 +184,7 @@ class TestTypesetter:
         layout = PageLayout(cfg)
         lines = layout.line_positions()
         area = layout.content_area()
-        char_advance = ts.font_size * (0.45 + 0.55 * 0.85) + ts.font_size * _LETTER_SPACING_SCALE
+        char_advance = ts._body_char_advance("あ")
         chars_per_line = int(area.width / char_advance)
         # 1ページの行数 * 行あたり文字数 + α でオーバーフロー
         text = "あ" * (len(lines) * chars_per_line + 10)
@@ -545,59 +588,68 @@ class TestPinkNoiseLayoutWiring:
 
 
 class TestCharSizeScale:
-    """文字種別サイズスケールのテスト。"""
+    """文字種別サイズスケールのテスト。種別倍率は char_type_scale が「正」。"""
 
     def test_kanji_scale_is_1(self):
-        from src.layout.typesetter import _char_size_scale
+        from src.layout.char_metrics import char_type_scale
 
-        assert _char_size_scale("漢") == 1.0
-        assert _char_size_scale("字") == 1.0
+        assert char_type_scale("漢") == 1.0
+        assert char_type_scale("字") == 1.0
 
     def test_hiragana_scale(self):
-        from src.layout.typesetter import _char_size_scale
+        from src.layout.char_metrics import char_type_scale
 
-        assert _char_size_scale("あ") == 0.85
-        assert _char_size_scale("ん") == 0.80
+        assert char_type_scale("あ") == 0.85
+        assert char_type_scale("ん") == 0.80
 
     def test_katakana_scale(self):
-        from src.layout.typesetter import _char_size_scale
+        from src.layout.char_metrics import char_type_scale
 
-        assert _char_size_scale("ア") == 0.85  # override table
-        assert _char_size_scale("ン") == 0.78
+        assert char_type_scale("ア") == 0.85  # override table
+        assert char_type_scale("ン") == 0.78
 
     def test_small_kana_scale(self):
-        from src.layout.typesetter import _char_size_scale
+        from src.layout.char_metrics import char_type_scale
 
-        assert _char_size_scale("っ") == 0.55
-        assert _char_size_scale("ょ") == 0.55
-        assert _char_size_scale("ッ") == 0.55
-        assert _char_size_scale("ャ") == 0.55
+        assert char_type_scale("っ") == 0.55
+        assert char_type_scale("ょ") == 0.55
+        assert char_type_scale("ッ") == 0.55
+        assert char_type_scale("ャ") == 0.55
 
     def test_halfwidth_scale(self):
-        from src.layout.typesetter import _char_size_scale
+        from src.layout.char_metrics import char_type_scale
 
-        assert _char_size_scale("a") == 0.7
-        assert _char_size_scale("1") == 0.7
+        assert char_type_scale("a") == 0.7
+        assert char_type_scale("1") == 0.7
+
+    def test_effective_scale_includes_density(self):
+        """effective は種別×密度。複雑な漢字ほど大きく、簡単な漢字ほど小さい。"""
+        from src.layout.char_metrics import effective_char_scale
+
+        # 同一種別(漢字=1.0)内で密度が大小関係を生む。
+        assert effective_char_scale("一") < effective_char_scale("鬱")
 
     def test_typeset_hiragana_smaller_than_kanji(self):
         """組版時、ひらがなは漢字より小さいfont_sizeで配置される。"""
+        from src.layout.char_metrics import effective_char_scale
         from src.layout.page_layout import PageConfig
 
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("漢あ")
         placements = pages[0]
         assert placements[0].font_size > placements[1].font_size
-        assert placements[0].font_size == pytest.approx(7.0)
-        assert placements[1].font_size == pytest.approx(7.0 * 0.85)
+        assert placements[0].font_size == pytest.approx(7.0 * effective_char_scale("漢"))
+        assert placements[1].font_size == pytest.approx(7.0 * effective_char_scale("あ"))
 
     def test_typeset_small_kana_smallest(self):
         """小書き文字は最小のfont_sizeで配置される。"""
+        from src.layout.char_metrics import effective_char_scale
         from src.layout.page_layout import PageConfig
 
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("漢っ")
         placements = pages[0]
-        assert placements[1].font_size == pytest.approx(7.0 * 0.55)
+        assert placements[1].font_size == pytest.approx(7.0 * effective_char_scale("っ"))
 
     def test_typeset_with_augmenter_applies_scale(self):
         """augmenter有効時もスケールが適用される。"""
@@ -1110,7 +1162,9 @@ class TestHeadings:
     """セクション見出し（# で大きく表示）のテスト。"""
 
     def test_h1_larger_font_size(self):
-        """# 見出し が通常テキストより大きい font_size（1.15倍）で配置される。"""
+        """# 見出し は見出し倍率 1.15 を基準に字種×密度スケールが乗って配置される。"""
+        from src.layout.char_metrics import effective_char_scale
+
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("# 見出し")
         placements = pages[0]
@@ -1118,10 +1172,12 @@ class TestHeadings:
         assert "見" in chars
         assert "#" not in chars
         for p in placements:
-            assert p.font_size == pytest.approx(7.0 * 1.15)
+            assert p.font_size == pytest.approx(7.0 * 1.15 * effective_char_scale(p.char))
 
     def test_h2_medium_font_size(self):
-        """## 小見出し が font_size * 1.15 で配置される。"""
+        """## 小見出し は見出し倍率 1.08 を基準に字種×密度スケールが乗る。"""
+        from src.layout.char_metrics import effective_char_scale
+
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("## 小見出し")
         placements = pages[0]
@@ -1129,10 +1185,12 @@ class TestHeadings:
         assert "小" in chars
         assert "#" not in chars
         for p in placements:
-            assert p.font_size == pytest.approx(7.0 * 1.08)
+            assert p.font_size == pytest.approx(7.0 * 1.08 * effective_char_scale(p.char))
 
     def test_h3_normal_font_size(self):
-        """### 見出し3 は通常サイズ（1.0倍）で配置される。"""
+        """### 見出し3 は見出し倍率 1.0 を基準に字種×密度スケールが乗る。"""
+        from src.layout.char_metrics import effective_char_scale
+
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("### 見出し3")
         placements = pages[0]
@@ -1140,7 +1198,7 @@ class TestHeadings:
         assert "見" in chars
         assert "#" not in chars
         for p in placements:
-            assert p.font_size == pytest.approx(7.0 * 1.0)
+            assert p.font_size == pytest.approx(7.0 * 1.0 * effective_char_scale(p.char))
 
     def test_heading_preceded_by_blank_line(self):
         """見出し前に空行が入る（ページ先頭では不要）。"""
@@ -1172,12 +1230,16 @@ class TestHeadings:
 
     def test_no_heading_unchanged(self):
         """# なしテキストは既存動作と同じ。"""
+        from src.layout.char_metrics import effective_char_scale
+
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("あいうえお")
         assert len(pages[0]) == 5
         for p in pages[0]:
             assert p.font_size < 7.0  # ひらがなは漢字より小さい
-            assert p.font_size >= 7.0 * 0.75  # 最小でも75%
+            # 配置サイズは統一API(種別×密度)に一致し、小書き域(0.55)までは下がらない
+            assert p.font_size == pytest.approx(7.0 * effective_char_scale(p.char))
+            assert p.font_size > 7.0 * 0.55
 
     def test_heading_strips_hash_and_space(self):
         """# と後続スペースが除去され、テキスト部分のみ配置される。"""

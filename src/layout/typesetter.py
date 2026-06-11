@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from src.layout.char_metrics import effective_char_scale
 from src.layout.line_breaking import break_paragraph_by_width, is_halfwidth
 from src.layout.math_layout import (
     MathElement,
@@ -27,8 +28,6 @@ _PLAIN_MATH_BODY_CHARS = frozenset(
     "αβγδεζηθλμνπρστφχψωΓΔΘΛΠΣΦΨΩ"
 )
 
-_SMALL_KANA = set("っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ")
-_SMALL_PUNCT = set("・、。，．")
 _HEADING_X: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
 _BODY_X: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
 _HEADING_FONT_SCALES: dict[int, float] = {1: 1.15, 2: 1.08, 3: 1.0}
@@ -36,171 +35,6 @@ _KANJI_ADVANCE_SCALE = 1.08
 # 本文字間トラッキング(font_size比)。手書きは字が詰まって見えるため、字種に依らず
 # 本文の字送りへ一律の隙間を加える(乗算でなく加算で全字種に均一な間隔を与える)。
 _LETTER_SPACING_SCALE = 0.05
-
-# 手書きバランス調整: 画数が少なく視覚的に軽い文字は小さめにする
-_KANA_SIZE_OVERRIDES: dict[str, float] = {
-    # カタカナ: 画数少・形が小さい文字 → 小さめ
-    "ロ": 0.68,
-    "ハ": 0.78,
-    "ニ": 0.78,
-    "ノ": 0.75,
-    "ヘ": 0.78,
-    "フ": 0.80,
-    "ク": 0.80,
-    "ワ": 0.80,
-    "カ": 0.82,
-    "コ": 0.80,
-    "ン": 0.78,
-    "ソ": 0.78,
-    "リ": 0.78,
-    "ル": 0.80,
-    "レ": 0.78,
-    "イ": 0.80,
-    "ト": 0.78,
-    "チ": 0.82,
-    "ラ": 0.82,
-    # カタカナ: 画数多・形が大きい文字 → やや大きめ
-    "ス": 0.85,
-    "テ": 0.85,
-    "セ": 0.85,
-    "サ": 0.85,
-    "タ": 0.85,
-    "ナ": 0.85,
-    "マ": 0.85,
-    "ミ": 0.82,
-    "ム": 0.85,
-    "メ": 0.82,
-    "モ": 0.85,
-    "ヤ": 0.85,
-    "ユ": 0.82,
-    "ヨ": 0.82,
-    "キ": 0.85,
-    "ケ": 0.82,
-    "シ": 0.82,
-    "ネ": 0.85,
-    "ヌ": 0.85,
-    "オ": 0.85,
-    "エ": 0.82,
-    "ア": 0.85,
-    "ウ": 0.85,
-    "ダ": 0.88,
-    "デ": 0.88,
-    "ド": 0.88,
-    "バ": 0.85,
-    "パ": 0.85,
-    "ガ": 0.88,
-    "ギ": 0.88,
-    "グ": 0.85,
-    "ゲ": 0.85,
-    "ゴ": 0.85,
-    "ザ": 0.88,
-    "ジ": 0.85,
-    "ズ": 0.88,
-    "ゼ": 0.88,
-    "ゾ": 0.85,
-    "ビ": 0.85,
-    "ブ": 0.85,
-    "ベ": 0.82,
-    "ボ": 0.88,
-    "ピ": 0.85,
-    "プ": 0.82,
-    "ペ": 0.82,
-    "ポ": 0.85,
-    "ヒ": 0.78,
-    "ホ": 0.85,
-    # ひらがな: 画数少・形が小さい文字 → 小さめ
-    "の": 0.78,
-    "く": 0.75,
-    "し": 0.78,
-    "へ": 0.78,
-    "つ": 0.80,
-    "り": 0.78,
-    "い": 0.80,
-    "こ": 0.78,
-    "て": 0.72,
-    "に": 0.80,
-    "と": 0.80,
-    "う": 0.80,
-    "か": 0.82,
-    "る": 0.80,
-    "を": 0.80,
-    # ひらがな: 標準〜やや大きめ
-    "あ": 0.85,
-    "お": 0.85,
-    "き": 0.85,
-    "け": 0.82,
-    "さ": 0.82,
-    "す": 0.82,
-    "せ": 0.85,
-    "そ": 0.82,
-    "た": 0.85,
-    "ち": 0.82,
-    "な": 0.85,
-    "ぬ": 0.85,
-    "ね": 0.85,
-    "は": 0.85,
-    "ひ": 0.78,
-    "ふ": 0.85,
-    "ほ": 0.85,
-    "ま": 0.85,
-    "み": 0.82,
-    "む": 0.85,
-    "め": 0.82,
-    "も": 0.82,
-    "や": 0.85,
-    "ゆ": 0.85,
-    "よ": 0.82,
-    "ら": 0.82,
-    "れ": 0.82,
-    "ろ": 0.80,
-    "わ": 0.82,
-    "ん": 0.80,
-    "え": 0.82,
-    # 濁音ひらがな
-    "が": 0.88,
-    "ぎ": 0.88,
-    "ぐ": 0.85,
-    "げ": 0.85,
-    "ご": 0.85,
-    "ざ": 0.88,
-    "じ": 0.85,
-    "ず": 0.85,
-    "ぜ": 0.88,
-    "ぞ": 0.85,
-    "だ": 0.88,
-    "ぢ": 0.85,
-    "づ": 0.85,
-    "で": 0.85,
-    "ど": 0.88,
-    "ば": 0.88,
-    "び": 0.85,
-    "ぶ": 0.88,
-    "べ": 0.85,
-    "ぼ": 0.88,
-    "ぱ": 0.88,
-    "ぴ": 0.85,
-    "ぷ": 0.85,
-    "ぺ": 0.85,
-    "ぽ": 0.88,
-}
-
-
-def _char_size_scale(ch: str) -> float:
-    """文字種別に応じたサイズスケールを返す。個別調整テーブルあり。"""
-    if ch in _SMALL_KANA:
-        return 0.55
-    if ch in _SMALL_PUNCT:
-        return 0.35
-    if ch in _KANA_SIZE_OVERRIDES:
-        return _KANA_SIZE_OVERRIDES[ch]
-    cp = ord(ch)
-    if 0x3040 <= cp <= 0x309F:
-        return 0.85
-    if 0x30A0 <= cp <= 0x30FF:
-        return 0.85
-    if is_halfwidth(ch):
-        return 0.7
-    return 1.0
 
 
 def _is_kanji(ch: str) -> bool:
@@ -325,11 +159,13 @@ class Typesetter:
             return self.font_size * 0.55 + letter_spacing
         if _is_kanji(ch):
             return self.font_size * _KANJI_ADVANCE_SCALE + letter_spacing
-        return self.font_size * (0.45 + 0.55 * _char_size_scale(ch)) + letter_spacing
+        return self.font_size * (0.45 + 0.55 * effective_char_scale(ch)) + letter_spacing
 
     def _char_advance(self, ch: str, is_heading: bool, line_font_size: float) -> float:
         if is_heading:
-            return line_font_size
+            # 見出しも本文と同じ字種×密度スケールで字送りを伸縮させる（英字小文字は
+            # 種別 0.7、複雑漢字は密度補正で広く）。本文トラッキングは見出しに加えない。
+            return line_font_size * effective_char_scale(ch)
         return self._body_char_advance(ch)
 
     def _line_right_x(self, area: object, is_heading: bool, body_level: int) -> float:
@@ -778,9 +614,12 @@ class Typesetter:
                         continue
 
                     cur_halfwidth = is_halfwidth(ch)
-                    size_scale = _char_size_scale(ch)
+                    size_scale = effective_char_scale(ch)
                     if is_heading:
-                        char_font_size = line_font_size
+                        # 見出しも字種×密度を反映（旧実装は line_font_size 固定で英字小文字が
+                        # 大文字と同サイズ・漢字の密度差も消えていた）。基準は見出し用拡大後の
+                        # line_font_size。
+                        char_font_size = line_font_size * size_scale
                     else:
                         char_font_size = self.font_size * size_scale
                     char_advance = self._char_advance(ch, is_heading, line_font_size)

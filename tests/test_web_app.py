@@ -264,21 +264,36 @@ class TestFallbackStrokes:
         expected_y = 20.0 + (line_spacing - cell_w) / 2 + cell_w / 2
         assert np.isclose(center_y, expected_y, atol=0.01)
 
-    def test_position_strokes_hiragana_scaled(self):
-        """平仮名は漢字より小さくスケーリングされる。"""
+    def test_position_strokes_renderer_size_is_char_type_neutral(self):
+        """サイズ係数は typesetter が font_size に焼くため、renderer は字種で縮めない。
+
+        同一 font_size を渡せば平仮名も漢字も同じ目標高に収まる（renderer 中立化）。
+        平仮名を小さくするのは typesetter の effective_char_scale の役目。
+        """
         pipeline = PlotterPipeline()
         normalized = [
             np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]),
         ]
-        placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=6.0)
-        result = pipeline._position_strokes(normalized, placement)
+        hira = pipeline._position_strokes(
+            normalized, CharPlacement(char="あ", x=10.0, y=20.0, font_size=6.0)
+        )
+        kanji = pipeline._position_strokes(
+            normalized, CharPlacement(char="漢", x=10.0, y=20.0, font_size=6.0)
+        )
 
-        all_pts = np.concatenate(result, axis=0)
-        rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
-        rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
-        expected_size = 6.0 * 0.85
-        assert rendered_w <= expected_size + 0.5
-        assert rendered_h <= expected_size + 0.5
+        def _size(strokes):
+            pts = np.concatenate(strokes, axis=0)
+            return (
+                pts[:, 0].max() - pts[:, 0].min(),
+                pts[:, 1].max() - pts[:, 1].min(),
+            )
+
+        hira_w, hira_h = _size(hira)
+        kanji_w, kanji_h = _size(kanji)
+        assert np.isclose(hira_w, kanji_w, atol=1e-9)
+        assert np.isclose(hira_h, kanji_h, atol=1e-9)
+        # 目標高は font_size そのもの（二重適用なし）。対角線ストロークは cell_width(0.95fs)律速。
+        assert hira_w <= 6.0 * 0.95 + 1e-9
 
     def test_position_strokes_halfwidth(self):
         """半角文字のアスペクト比が保持され、セル内で中央配置される。"""
@@ -294,6 +309,8 @@ class TestFallbackStrokes:
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
         rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
         assert rendered_h > rendered_w
+        # 二重適用解消後、高さは font_size そのもの（typesetter で 0.7 を1回だけ焼く）。
+        # 半角の縦長アスペクトは cell_width=0.55*fs で表現され、高さ側が target_h=fs を支配する。
         assert np.isclose(rendered_h, 6.0, atol=0.01)
 
     def test_halfwidth_wide_char_constrained(self):
