@@ -41,6 +41,9 @@ class TestCharTypeScale:
     def test_punctuation_is_035(self) -> None:
         assert char_type_scale("。") == 0.35
         assert char_type_scale("、") == 0.35
+        # 正規化後の本文句読点（全角「，」「．」）も同じ小サイズで扱う
+        assert char_type_scale("，") == 0.35
+        assert char_type_scale("．") == 0.35
 
     def test_override_table_applied(self) -> None:
         # 個別調整テーブルの値が種別デフォルトより優先される

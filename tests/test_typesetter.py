@@ -1277,21 +1277,41 @@ class TestHeadings:
         assert len(body_chars) == 1
         assert body_chars[0].x == pytest.approx(body_x + ts.font_size)
 
-    def test_period_replaced_with_kuten(self):
-        """半角ピリオドは句点（。）に全置換される。"""
+    def test_period_replaced_with_zenkaku(self):
+        """句点系（. 。）は本文で全角「．」(U+FF0E)に統一される。"""
         ts = Typesetter(PageConfig(), font_size=7.0)
-        pages = ts.typeset("これはテストです。")
+        pages = ts.typeset("これはテストです。半角も.")
         chars = [p.char for p in pages[0]]
         assert "." not in chars
-        assert "。" in chars
+        assert "。" not in chars
+        assert "．" in chars
 
     def test_period_in_number_also_replaced(self):
-        """数値中のピリオドも句点に置換される（一律置換の仕様）。"""
+        """数値中のピリオドも全角「．」に置換される（本文一律統一の仕様）。"""
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("0.2")
         chars = [p.char for p in pages[0]]
         assert "." not in chars
-        assert "。" in chars
+        assert "．" in chars
+
+    def test_comma_replaced_with_zenkaku(self):
+        """読点系（, 、）は本文で全角「，」(U+FF0C)に統一される。"""
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("A、B,C")
+        chars = [p.char for p in pages[0]]
+        assert "," not in chars
+        assert "、" not in chars
+        assert "，" in chars
+
+    def test_normalize_protects_math_punctuation(self):
+        """数式内の . , は変換せず保護する（小数点・引数区切り）。"""
+        from src.layout.typesetter import _normalize_body_punctuation
+
+        assert _normalize_body_punctuation("値は$3.14$である。") == "値は$3.14$である．"
+        assert (
+            _normalize_body_punctuation("f(x,y)と$f(a,b)$、終わり.")
+            == "f(x，y)と$f(a,b)$，終わり．"
+        )
 
 
 class TestMathRealDrawWidth:
