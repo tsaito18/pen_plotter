@@ -128,6 +128,39 @@ class TestStrokeRendererMethods:
         assert arr[0].tolist() == [10.0, 20.0]
         assert arr[1].tolist() == [50.0, 20.0]
 
+    def test_inline_math_baseline_aligns_with_body_line(self):
+        """インライン数式(matplotlib画像経路)のベースラインが本文文字の下端に揃う。
+
+        本文文字は placement.y を行ボックス下端とみなし line_spacing 内で縦中央に
+        配置する(_position_strokes)。数式画像も同じ下端ラインへ揃えないと、行高と
+        数式インク高の差の半分だけ下にずれる(issue #24)。
+        """
+        from pathlib import Path
+
+        from src.layout.page_layout import PageConfig
+        from src.layout.typesetter import Typesetter
+
+        if not Path("data/strokes/国").exists():
+            pytest.skip("KanjiVG reference strokes (data/strokes) not available")
+
+        cfg = PageConfig()
+        ts = Typesetter(cfg, font_size=4.5)
+        placements = ts.typeset(r"国$E=mc^2$")[0]
+
+        renderer = StrokeRenderer(page_config=cfg, kanjivg_dir=Path("data/strokes"))
+        kanji_p = next(p for p in placements if p.char == "国")
+        math_p = next(p for p in placements if getattr(p, "math_source", None))
+
+        k_strokes, _ = renderer.generate_char_strokes_with_finishes(kanji_p)
+        m_strokes, _ = renderer.generate_char_strokes_with_finishes(math_p)
+        assert k_strokes and m_strokes
+
+        kanji_bottom = min(float(s[:, 1].min()) for s in k_strokes)
+        math_bottom = min(float(s[:, 1].min()) for s in m_strokes)
+
+        # ベースライン揃え: 数式の下端(≈ベースライン)が本文漢字の下端に揃う
+        assert math_bottom == pytest.approx(kanji_bottom, abs=0.6)
+
 
 class TestAsciiMathSymbols:
     """数式で頻出する ASCII 記号は矩形フォールバックではなく幾何で描画する。"""

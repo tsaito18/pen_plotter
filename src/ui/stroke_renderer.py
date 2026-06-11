@@ -269,7 +269,15 @@ class StrokeRenderer:
         # 数式ブロック: $$単位でレンダリング（math_source + math_bbox で直接 mm 座標を返す）
         if getattr(placement, "math_source", None) and getattr(placement, "math_bbox", None):
             align = getattr(placement, "math_align", "center")
-            strokes = render_latex_to_strokes(placement.math_source, placement.math_bbox, align)
+            bbox = placement.math_bbox
+            if align == "baseline":
+                # 本文文字は placement.y を行ボックス下端とみなし line_spacing 内で縦中央
+                # 配置する(_position_strokes)。インライン数式のベースラインも同じ下端ライン
+                # へ揃えないと、行高と数式インク高の差の半分だけ下へずれる(issue #24)。
+                x0, y0, w, h = bbox
+                baseline_y = y0 + (self._page_config.line_spacing - placement.font_size) / 2
+                bbox = (x0, baseline_y, w, h)
+            strokes = render_latex_to_strokes(placement.math_source, bbox, align)
             if strokes:
                 cov.geometric.append(original_char)
                 # matplotlib フォントのままだと整いすぎるので手書き揺らぎを乗せる。
