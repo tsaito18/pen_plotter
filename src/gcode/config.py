@@ -16,8 +16,8 @@ class PlotterConfig:
     paper_height: float = 297.0
 
     # 速度 (mm/min)
-    travel_speed: float = 5000.0
-    draw_speed: float = 3000.0
+    travel_speed: float = 12000.0
+    draw_speed: float = 6000.0
 
     # ペン制御 (Z軸)
     pen_down_command: str = "G1G90 Z5.0 F5000"

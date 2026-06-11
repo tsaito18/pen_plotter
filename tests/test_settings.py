@@ -24,9 +24,6 @@ class TestUISettingsDefault:
         assert s.margin_bottom == 34.0
         assert s.margin_left == 5.0
         assert s.margin_right == 5.0
-        assert s.draw_speed == 3000.0
-        assert s.travel_speed == 5000.0
-        assert s.pen_delay == 0.0
         assert s.temperature == 1.0
         assert s.messiness == 1.0
         assert s.pressure_variation == 0.0
@@ -69,9 +66,6 @@ class TestUISettingsValidate:
             margin_bottom=200.0,
             margin_left=s.margin_left,
             margin_right=s.margin_right,
-            draw_speed=s.draw_speed,
-            travel_speed=s.travel_speed,
-            pen_delay=s.pen_delay,
             temperature=s.temperature,
         )
         errs = invalid.validate()
@@ -88,9 +82,6 @@ class TestUISettingsValidate:
             margin_bottom=s.margin_bottom,
             margin_left=150.0,
             margin_right=150.0,
-            draw_speed=s.draw_speed,
-            travel_speed=s.travel_speed,
-            pen_delay=s.pen_delay,
             temperature=s.temperature,
         )
         errs = invalid.validate()
@@ -106,9 +97,6 @@ class TestUISettingsValidate:
             margin_bottom=s.margin_bottom,
             margin_left=s.margin_left,
             margin_right=s.margin_right,
-            draw_speed=s.draw_speed,
-            travel_speed=s.travel_speed,
-            pen_delay=s.pen_delay,
             temperature=s.temperature,
         )
         errs = invalid.validate()
@@ -139,45 +127,6 @@ class TestUISettingsValidate:
             margin_bottom=s.margin_bottom,
             margin_left=s.margin_left,
             margin_right=s.margin_right,
-            draw_speed=s.draw_speed,
-            travel_speed=s.travel_speed,
-            pen_delay=s.pen_delay,
-            temperature=s.temperature,
-        )
-        errs = invalid.validate()
-        assert len(errs) >= 1
-
-    def test_zero_draw_speed_invalid(self):
-        """draw_speed <= 0 はエラー。"""
-        s = UISettings.default()
-        invalid = UISettings(
-            font_size=s.font_size,
-            line_spacing=s.line_spacing,
-            margin_top=s.margin_top,
-            margin_bottom=s.margin_bottom,
-            margin_left=s.margin_left,
-            margin_right=s.margin_right,
-            draw_speed=0.0,
-            travel_speed=s.travel_speed,
-            pen_delay=s.pen_delay,
-            temperature=s.temperature,
-        )
-        errs = invalid.validate()
-        assert len(errs) >= 1
-
-    def test_zero_travel_speed_invalid(self):
-        """travel_speed <= 0 はエラー。"""
-        s = UISettings.default()
-        invalid = UISettings(
-            font_size=s.font_size,
-            line_spacing=s.line_spacing,
-            margin_top=s.margin_top,
-            margin_bottom=s.margin_bottom,
-            margin_left=s.margin_left,
-            margin_right=s.margin_right,
-            draw_speed=s.draw_speed,
-            travel_speed=0.0,
-            pen_delay=s.pen_delay,
             temperature=s.temperature,
         )
         errs = invalid.validate()
@@ -193,9 +142,6 @@ class TestUISettingsValidate:
             margin_bottom=s.margin_bottom,
             margin_left=s.margin_left,
             margin_right=s.margin_right,
-            draw_speed=s.draw_speed,
-            travel_speed=s.travel_speed,
-            pen_delay=s.pen_delay,
             temperature=0.0,
         )
         errs = invalid.validate()
@@ -221,9 +167,6 @@ class TestUISettingsSerialization:
             "margin_bottom",
             "margin_left",
             "margin_right",
-            "draw_speed",
-            "travel_speed",
-            "pen_delay",
             "temperature",
             "messiness",
             "pressure_variation",
@@ -244,9 +187,6 @@ class TestUISettingsSerialization:
             margin_bottom=20.0,
             margin_left=15.0,
             margin_right=15.0,
-            draw_speed=1500.0,
-            travel_speed=4000.0,
-            pen_delay=0.1,
             temperature=1.5,
         )
         assert UISettings.from_dict(s.to_dict()) == s
@@ -270,6 +210,20 @@ class TestUISettingsSerialization:
         s = UISettings.from_dict({"font_size": 7.0, "bogus_key": 99})
         assert s.font_size == 7.0
         assert not hasattr(s, "bogus_key")
+
+    def test_from_dict_ignores_removed_plotter_keys(self):
+        """削除済みの速度・遅延キーは旧 localStorage 互換のため無視される。"""
+        s = UISettings.from_dict(
+            {
+                "draw_speed": 1500.0,
+                "travel_speed": 4000.0,
+                "pen_delay": 0.1,
+            }
+        )
+        assert not hasattr(s, "draw_speed")
+        assert not hasattr(s, "travel_speed")
+        assert not hasattr(s, "pen_delay")
+        assert s == UISettings.default()
 
     def test_from_dict_ignores_invalid_values(self):
         """float 化できない値は無視され default 値が残る。"""
@@ -306,9 +260,6 @@ class TestBuildPipeline:
             margin_bottom=20.0,
             margin_left=15.0,
             margin_right=15.0,
-            draw_speed=1500.0,
-            travel_speed=4000.0,
-            pen_delay=0.1,
             temperature=1.5,
         )
         pipeline = build_pipeline(s)
@@ -319,9 +270,9 @@ class TestBuildPipeline:
         assert pipeline._page_config.margin_left == 15.0
         assert pipeline._page_config.margin_right == 15.0
         assert pipeline._typesetter.font_size == 6.0
-        assert pipeline._plotter_config.draw_speed == 1500.0
-        assert pipeline._plotter_config.travel_speed == 4000.0
-        assert pipeline._plotter_config.pen_delay == 0.1
+        assert pipeline._plotter_config.draw_speed == 6000.0
+        assert pipeline._plotter_config.travel_speed == 12000.0
+        assert pipeline._plotter_config.pen_delay == 0.0
         assert pipeline._temperature == 1.5
 
     def test_build_pipeline_default_matches_pipeline_init_default(self):

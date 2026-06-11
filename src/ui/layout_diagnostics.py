@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from src.layout.typesetter import CharPlacement
+from src.ui.math_skeletonize import _baseline_frac_from_top
 
 
 @dataclass
@@ -69,8 +70,11 @@ def _x_extent(p: CharPlacement, fallback_w: float) -> tuple[float, float]:
 def _y_extent(p: CharPlacement, line_spacing: float) -> tuple[float, float]:
     """配置要素の垂直範囲 (y_bottom, y_top) を返す。数式は math_bbox を使う。"""
     if p.math_bbox is not None:
-        _x, y_bottom, _w, h = p.math_bbox
-        return y_bottom, y_bottom + h
+        _x, y, _w, h = p.math_bbox
+        if getattr(p, "math_align", "center") == "baseline":
+            bf = _baseline_frac_from_top(p.math_source or "")
+            y = y + (line_spacing - p.font_size) / 2 - (1.0 - bf) * h
+        return y, y + h
     # 通常文字は baseline(y) から line_spacing 帯に収まる想定
     return p.y, p.y + line_spacing
 

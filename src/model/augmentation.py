@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+from src.model.pink_noise import PinkNoise1D
+
 Stroke = NDArray[np.float64]
 
 
@@ -20,12 +22,114 @@ class AugmentConfig:
     line_density_variation: float = 0.05
     char_density_variation: float = 0.02
     enabled: bool = True
+    # 手書き揺らぎを白色から1/f(ピンク)ノイズへ。隣接文字/行で揺らぎが相関し
+    # 自然な低周波のうねり(行のうねり・字間のばらつき)を生む
+    use_pink_noise: bool = True
+    pink_octaves: int = 16
 
 
 class HandwritingAugmenter:
+    # 各1/fストリームの seed 派生オフセット。同一masterから互いに独立な系列を得る
+    _PINK_SEED_OFFSETS = {
+        "line_baseline": 0,
+        "char_baseline": 1,
+        "spacing": 2,
+        "size": 3,
+        "slant": 4,
+    }
+
     def __init__(self, config: AugmentConfig | None = None, seed: int | None = None) -> None:
         self._config = config or AugmentConfig()
+        self._seed = seed
         self._rng = np.random.default_rng(seed)
+
+        # 用途別の1/fストリーム(行baseline/文字baseline/字間/サイズ/傾き)。
+        # master seed が None なら各ストリームも None(非決定論)、指定時は
+        # seed + 固定オフセットで互いに独立かつ再現可能にする
+        if self._config.use_pink_noise:
+            octaves = self._config.pink_octaves
+            self._pink_line_baseline = self._make_pink("line_baseline", octaves)
+            self._pink_char_baseline = self._make_pink("char_baseline", octaves)
+            self._pink_spacing = self._make_pink("spacing", octaves)
+            self._pink_size = self._make_pink("size", octaves)
+            self._pink_slant = self._make_pink("slant", octaves)
+
+    def _make_pink(self, stream: str, octaves: int) -> PinkNoise1D:
+        """ストリーム名から seed を派生し PinkNoise1D を生成する。"""
+        if self._seed is None:
+            stream_seed: int | None = None
+        else:
+            stream_seed = self._seed + self._PINK_SEED_OFFSETS[stream]
+        return PinkNoise1D(octaves=octaves, seed=stream_seed)
+
+    def next_line_baseline(self) -> float:
+        """次の行のベースラインオフセット(mm)を返し系列を1つ前進させる。
+
+        行ごとの上下のうねり用。1/f化により隣接行で緩やかに相関する。
+
+        Returns:
+            ベースラインオフセット(mm)。enabled=False のとき 0.0。
+        """
+        if not self._config.enabled:
+            return 0.0
+        amp = self._config.baseline_drift * 0.7
+        if self._config.use_pink_noise:
+            return amp * self._pink_line_baseline.sample()
+        return float(self._rng.normal(0, amp))
+
+    def next_char_baseline(self) -> float:
+        """行内の次の文字のベースラインオフセット(mm)を返す。
+
+        行内の中心線蛇行用。1/f化で隣接文字が相関し滑らかにうねる。
+
+        Returns:
+            ベースラインオフセット(mm)。enabled=False のとき 0.0。
+        """
+        if not self._config.enabled:
+            return 0.0
+        amp = self._config.baseline_drift * 0.5
+        if self._config.use_pink_noise:
+            return amp * self._pink_char_baseline.sample()
+        return float(self._rng.normal(0, amp))
+
+    def next_char_spacing(self) -> float:
+        """次の文字の字間オフセット(mm)を返し系列を1つ前進させる。
+
+        Returns:
+            字間オフセット(mm)。enabled=False のとき 0.0。
+        """
+        if not self._config.enabled:
+            return 0.0
+        amp = self._config.spacing_variation
+        if self._config.use_pink_noise:
+            return amp * self._pink_spacing.sample()
+        return float(self._rng.normal(0, amp))
+
+    def next_char_size_scale(self) -> float:
+        """次の文字のサイズ倍率を返し系列を1つ前進させる。
+
+        Returns:
+            サイズ倍率(1.0中心)。enabled=False のとき 1.0。
+        """
+        if not self._config.enabled:
+            return 1.0
+        amp = self._config.size_variation
+        if self._config.use_pink_noise:
+            return 1.0 + amp * self._pink_size.sample()
+        return 1.0 + float(self._rng.normal(0, amp))
+
+    def next_char_slant(self) -> float:
+        """次の文字の傾き角(rad)を返し系列を1つ前進させる。
+
+        Returns:
+            傾き角(rad)。enabled=False のとき 0.0。
+        """
+        if not self._config.enabled:
+            return 0.0
+        amp = self._config.slant_variation
+        if self._config.use_pink_noise:
+            return amp * self._pink_slant.sample()
+        return float(self._rng.normal(0, amp))
 
     def augment_page(self, strokes: list[Stroke]) -> list[Stroke]:
         """ページ全体のストロークにリアルな変動を加える。"""

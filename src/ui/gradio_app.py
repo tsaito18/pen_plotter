@@ -850,31 +850,6 @@ def create_app(
                         )
 
                         gr.HTML(
-                            '<div class="pp-section-title pp-section-title--rule">プロッタ</div>'
-                        )
-                        draw_speed = gr.Slider(
-                            200,
-                            3000,
-                            value=default_settings.draw_speed,
-                            step=50,
-                            label="描画速度 (mm/min)",
-                        )
-                        travel_speed = gr.Slider(
-                            1000,
-                            5000,
-                            value=default_settings.travel_speed,
-                            step=100,
-                            label="移動速度 (mm/min)",
-                        )
-                        pen_delay = gr.Slider(
-                            0.0,
-                            0.50,
-                            value=default_settings.pen_delay,
-                            step=0.01,
-                            label="ペン遅延 (s)",
-                        )
-
-                        gr.HTML(
                             '<div class="pp-section-title pp-section-title--rule">ML モデル</div>'
                         )
                         profile_select = gr.Dropdown(
@@ -1039,9 +1014,6 @@ def create_app(
             margin_bottom,
             margin_left,
             margin_right,
-            draw_speed,
-            travel_speed,
-            pen_delay,
             temperature,
             messiness,
             pressure_variation,
@@ -1095,9 +1067,6 @@ def create_app(
             margin_bottom: "margin_bottom",
             margin_left: "margin_left",
             margin_right: "margin_right",
-            draw_speed: "draw_speed",
-            travel_speed: "travel_speed",
-            pen_delay: "pen_delay",
             temperature: "temperature",
             messiness: "messiness",
             pressure_variation: "pressure_variation",
@@ -1431,9 +1400,6 @@ def create_app(
                 d.margin_bottom,
                 d.margin_left,
                 d.margin_right,
-                d.draw_speed,
-                d.travel_speed,
-                d.pen_delay,
                 d.temperature,
                 d.messiness,
                 d.pressure_variation,
@@ -1480,9 +1446,6 @@ def create_app(
                 settings.margin_bottom,
                 settings.margin_left,
                 settings.margin_right,
-                settings.draw_speed,
-                settings.travel_speed,
-                settings.pen_delay,
                 settings.temperature,
                 settings.messiness,
                 settings.pressure_variation,

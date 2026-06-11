@@ -264,21 +264,36 @@ class TestFallbackStrokes:
         expected_y = 20.0 + (line_spacing - cell_w) / 2 + cell_w / 2
         assert np.isclose(center_y, expected_y, atol=0.01)
 
-    def test_position_strokes_hiragana_scaled(self):
-        """平仮名は漢字より小さくスケーリングされる。"""
+    def test_position_strokes_renderer_size_is_char_type_neutral(self):
+        """サイズ係数は typesetter が font_size に焼くため、renderer は字種で縮めない。
+
+        同一 font_size を渡せば平仮名も漢字も同じ目標高に収まる（renderer 中立化）。
+        平仮名を小さくするのは typesetter の effective_char_scale の役目。
+        """
         pipeline = PlotterPipeline()
         normalized = [
             np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]),
         ]
-        placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=6.0)
-        result = pipeline._position_strokes(normalized, placement)
+        hira = pipeline._position_strokes(
+            normalized, CharPlacement(char="あ", x=10.0, y=20.0, font_size=6.0)
+        )
+        kanji = pipeline._position_strokes(
+            normalized, CharPlacement(char="漢", x=10.0, y=20.0, font_size=6.0)
+        )
 
-        all_pts = np.concatenate(result, axis=0)
-        rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
-        rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
-        expected_size = 6.0 * 0.85
-        assert rendered_w <= expected_size + 0.5
-        assert rendered_h <= expected_size + 0.5
+        def _size(strokes):
+            pts = np.concatenate(strokes, axis=0)
+            return (
+                pts[:, 0].max() - pts[:, 0].min(),
+                pts[:, 1].max() - pts[:, 1].min(),
+            )
+
+        hira_w, hira_h = _size(hira)
+        kanji_w, kanji_h = _size(kanji)
+        assert np.isclose(hira_w, kanji_w, atol=1e-9)
+        assert np.isclose(hira_h, kanji_h, atol=1e-9)
+        # 目標高は font_size そのもの（二重適用なし）。対角線ストロークは cell_width(0.95fs)律速。
+        assert hira_w <= 6.0 * 0.95 + 1e-9
 
     def test_position_strokes_halfwidth(self):
         """半角文字のアスペクト比が保持され、セル内で中央配置される。"""
@@ -294,6 +309,8 @@ class TestFallbackStrokes:
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
         rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
         assert rendered_h > rendered_w
+        # 二重適用解消後、高さは font_size そのもの（typesetter で 0.7 を1回だけ焼く）。
+        # 半角の縦長アスペクトは cell_width=0.55*fs で表現され、高さ側が target_h=fs を支配する。
         assert np.isclose(rendered_h, 6.0, atol=0.01)
 
     def test_halfwidth_wide_char_constrained(self):
@@ -901,7 +918,7 @@ class TestSimplePunctStrokes:
         return PlotterPipeline()
 
     def test_ascii_period_is_short_drawable_dot(self, pipeline):
-        """ASCIIピリオドは円ではなく、G-codeで描ける短い点線。"""
+        """ASCIIピリオドは円ではなく、G-codeで描ける短い右下がりの点線。"""
         result = pipeline._simple_punct_strokes(".")
 
         assert result is not None
@@ -910,20 +927,116 @@ class TestSimplePunctStrokes:
         assert stroke.shape == (2, 2)
         assert stroke.dtype == np.float64
         assert not np.allclose(stroke[0], stroke[-1])
-        assert np.ptp(stroke[:, 0]) <= 0.05
-        assert np.ptp(stroke[:, 1]) == 0.0
+        assert 0.04 <= np.ptp(stroke[:, 0]) <= 0.06
+        assert 0.03 <= np.ptp(stroke[:, 1]) <= 0.05
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
+
+    def test_ascii_period_positioned_as_tiny_downward_dot(self, pipeline):
+        """配置後も半角セル幅まで拡大されず、手書き点として残る。"""
+        strokes = pipeline._simple_punct_strokes(".")
+        placement = CharPlacement(char=".", x=10.0, y=20.0, font_size=6.0)
+
+        positioned = pipeline._position_strokes(strokes, placement)
+
+        assert len(positioned) == 1
+        stroke = positioned[0]
+        assert stroke.shape == (2, 2)
+        assert 0.35 <= np.ptp(stroke[:, 0]) <= 0.65
+        assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
 
     def test_japanese_period_is_short_dot(self, pipeline):
-        """句点は丸(円)ではなくピリオド風の短い点（描けるドット）。"""
+        """句点も水平線ではなく、G-codeで描ける短い右下がりの点線。"""
         result = pipeline._simple_punct_strokes("。")
 
         assert result is not None
         assert len(result) == 1
         stroke = result[0]
         assert stroke.shape == (2, 2)
+        assert stroke.dtype == np.float64
         assert not np.allclose(stroke[0], stroke[-1])
-        assert np.ptp(stroke[:, 0]) <= 0.1
-        assert np.ptp(stroke[:, 1]) == 0.0
+        assert 0.04 <= np.ptp(stroke[:, 0]) <= 0.06
+        assert 0.03 <= np.ptp(stroke[:, 1]) <= 0.05
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
+
+    def test_japanese_period_positioned_as_tiny_downward_dot(self, pipeline):
+        """本文の ASCII ピリオドは句点に置換されるため、句点側も小さい点にする。"""
+        strokes = pipeline._simple_punct_strokes("。")
+        placement = CharPlacement(char="。", x=10.0, y=20.0, font_size=6.0)
+
+        positioned = pipeline._position_strokes(strokes, placement)
+
+        assert len(positioned) == 1
+        stroke = positioned[0]
+        assert stroke.shape == (2, 2)
+        assert 0.35 <= np.ptp(stroke[:, 0]) <= 0.65
+        assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
+
+    def test_middle_dot_is_filled_circular_spiral(self, pipeline):
+        """中黒は白抜き円ではなく、外周から中心へ丸く塗る連続ストローク。"""
+        result = pipeline._simple_punct_strokes("・")
+
+        assert result is not None
+        assert len(result) == 1
+        stroke = result[0]
+        assert stroke.dtype == np.float64
+        assert stroke.shape[0] >= 40
+        assert not np.allclose(stroke[0], stroke[-1])
+
+        center = np.array([0.5, 0.5])
+        radii = np.linalg.norm(stroke - center, axis=1)
+        assert 0.14 <= radii[0] <= 0.16
+        assert radii[-1] <= 0.01
+        assert radii[-1] < radii[0] * 0.1
+        assert np.all(np.diff(radii) <= 1e-9)
+        assert 0.26 <= np.ptp(stroke[:, 0]) <= 0.31
+        assert 0.26 <= np.ptp(stroke[:, 1]) <= 0.31
+
+    def test_middle_dot_positioned_centered_at_half_old_hollow_circle_size(self, pipeline):
+        """配置後の中黒は旧白抜き円の約半分サイズで、全角セル中央に残る。"""
+        strokes = pipeline._simple_punct_strokes("・")
+        placement = CharPlacement(char="・", x=10.0, y=20.0, font_size=6.0)
+
+        positioned = pipeline._position_strokes(strokes, placement)
+
+        assert len(positioned) == 1
+        stroke = positioned[0]
+        width = np.ptp(stroke[:, 0])
+        height = np.ptp(stroke[:, 1])
+        old_hollow_diameter = placement.font_size * 0.95
+        assert old_hollow_diameter * 0.42 <= width <= old_hollow_diameter * 0.52
+        assert old_hollow_diameter * 0.42 <= height <= old_hollow_diameter * 0.52
+
+        cell_center_x = placement.x + placement.font_size * 0.95 / 2
+        line_center_y = placement.y + pipeline._page_config.line_spacing / 2
+        dot_center = np.array(
+            [
+                (stroke[:, 0].min() + stroke[:, 0].max()) / 2,
+                (stroke[:, 1].min() + stroke[:, 1].max()) / 2,
+            ]
+        )
+        assert abs(dot_center[0] - cell_center_x) <= 0.08
+        assert abs(dot_center[1] - line_center_y) <= 0.08
+
+    def test_typeset_period_replacement_renders_tiny_downward_dot(self, pipeline):
+        """本文経路で ASCII ピリオドが句点化されても、水平線に戻らない。"""
+        placements = pipeline.text_to_placements("0.2")[0]
+        placement = next(p for p in placements if p.char == "。")
+
+        strokes = pipeline._generate_char_strokes(placement)
+
+        assert len(strokes) == 1
+        stroke = strokes[0]
+        assert stroke.shape == (2, 2)
+        assert 0.35 <= np.ptp(stroke[:, 0]) <= 0.65
+        assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
+        assert stroke[1, 0] > stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
 
 
 class TestMathSymbolStrokes:
@@ -1087,6 +1200,42 @@ class TestPlacementsToStrokesWithFinishes:
         result = pipeline.generate_preview("テスト漢字", save_path=preview_path)
         assert isinstance(result, list)
         assert preview_path.exists()
+
+    def test_serpentine_plot_order_keeps_layout_coordinates(self, pipeline):
+        """通常文字の描画順だけ行ごとに蛇行させ、配置座標は変えない。"""
+        placements = [
+            CharPlacement(char="a", x=10.0, y=30.0, font_size=4.0),
+            CharPlacement(char="b", x=20.0, y=30.0, font_size=4.0),
+            CharPlacement(char="c", x=30.0, y=30.0, font_size=4.0),
+            CharPlacement(char="d", x=10.0, y=20.0, font_size=4.0),
+            CharPlacement(char="e", x=20.0, y=20.0, font_size=4.0),
+            CharPlacement(char="f", x=30.0, y=20.0, font_size=4.0),
+            CharPlacement(char="g", x=10.0, y=10.0, font_size=4.0),
+            CharPlacement(char="h", x=20.0, y=10.0, font_size=4.0),
+            CharPlacement(char="i", x=30.0, y=10.0, font_size=4.0),
+        ]
+        original_positions = [(p.char, p.x, p.y) for p in placements]
+
+        def fake_generate(p):
+            return [np.array([[p.x, p.y], [p.x + 1.0, p.y]])], [p.char]
+
+        pipeline._stroke_renderer.generate_char_strokes_with_finishes = fake_generate
+        strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements)
+
+        assert [float(stroke[0, 0]) for stroke in strokes] == [
+            10.0,
+            20.0,
+            30.0,
+            30.0,
+            20.0,
+            10.0,
+            10.0,
+            20.0,
+            30.0,
+        ]
+        assert finishes == ["a", "b", "c", "f", "e", "d", "g", "h", "i"]
+        assert len(strokes) == len(finishes)
+        assert [(p.char, p.x, p.y) for p in placements] == original_positions
 
 
 class TestMultiPagePreview:

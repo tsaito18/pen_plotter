@@ -7,6 +7,7 @@ import numpy as np
 import numpy.typing as npt
 
 from src.collector.data_format import StrokeSample
+from src.layout.char_metrics import char_type_scale
 from src.layout.line_breaking import is_halfwidth
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement
@@ -62,11 +63,6 @@ class StrokeRenderer:
     )
 
     _NOISE_SCALE = 0.15
-
-    _SMALL_KANA = set(
-        "\u3041\u3043\u3045\u3047\u3049\u3063\u3083\u3085\u3087\u308e\u30a1\u30a3\u30a5\u30a7\u30a9\u30c3\u30e3\u30e5\u30e7\u30ee"
-    )
-    _SMALL_PUNCT = set("\u3002\u3001.,")
 
     def __init__(
         self,
@@ -269,7 +265,15 @@ class StrokeRenderer:
         # 数式ブロック: $$単位でレンダリング（math_source + math_bbox で直接 mm 座標を返す）
         if getattr(placement, "math_source", None) and getattr(placement, "math_bbox", None):
             align = getattr(placement, "math_align", "center")
-            strokes = render_latex_to_strokes(placement.math_source, placement.math_bbox, align)
+            bbox = placement.math_bbox
+            if align == "baseline":
+                # 本文文字は placement.y を行ボックス下端とみなし line_spacing 内で縦中央
+                # 配置する(_position_strokes)。インライン数式のベースラインも同じ下端ライン
+                # へ揃えないと、行高と数式インク高の差の半分だけ下へずれる(issue #24)。
+                x0, y0, w, h = bbox
+                baseline_y = y0 + (self._page_config.line_spacing - placement.font_size) / 2
+                bbox = (x0, baseline_y, w, h)
+            strokes = render_latex_to_strokes(placement.math_source, bbox, align)
             if strokes:
                 cov.geometric.append(original_char)
                 # matplotlib フォントのままだと整いすぎるので手書き揺らぎを乗せる。
@@ -322,15 +326,15 @@ class StrokeRenderer:
                 cov.user_strokes.append(original_char)
                 positioned = self._position_strokes(direct_letter, placement)
                 waver = self._waver_scale(len(positioned))
-                positioned = (
-                    positioned if is_smooth else self._apply_distortion(positioned, waver)
-                )
+                positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
                 return positioned, ["none"] * len(positioned)
 
         letter_strokes = self._ascii_letter_strokes(lookup_char)
         if letter_strokes is not None:
             cov.geometric.append(original_char)
-            positioned = self._position_strokes(letter_strokes, placement)
+            # 幾何字形は単位系で正しい高さ(小文字=x-height, 大文字=cap)を持つ。実 bbox
+            # フィットはこれを潰すため論理フィットで大小差・ベースラインを保つ。
+            positioned = self._position_strokes(letter_strokes, placement, logical_ascii=True)
             # 幾何字形は完全な直線/円で「きれいすぎる」ため手書き揺らぎを乗せる。
             # ML/直接ストローク(素値1.0)より強く、数式画像(6.0)より弱い中間値。
             positioned = self._apply_distortion(positioned, waver_scale=3.0)
@@ -739,14 +743,20 @@ class StrokeRenderer:
             return [np.array([[0.6, 0.2], [0.3, 0.8]])]
         elif char == "\u3002":
             # \u53e5\u70b9\u306f\u30ec\u30dd\u30fc\u30c8\u4f53\u88c1\u306b\u5408\u308f\u305b\u3001\u4e38(\u5186)\u3067\u306f\u306a\u304f\u30d4\u30ea\u30aa\u30c9\u98a8\u306e\u77ed\u3044\u70b9(\u63cf\u3051\u308b\u30c9\u30c3\u30c8)
-            return [np.array([[0.44, 0.2], [0.5, 0.2]], dtype=np.float64)]
+            return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
         elif char == ".":
-            return [np.array([[0.48, 0.22], [0.52, 0.22]], dtype=np.float64)]
+            return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
         elif char == "\u30fb":
-            angles = np.linspace(0, 2 * np.pi, 12)
-            r = 0.15
-            return [np.stack([0.5 + r * np.cos(angles), 0.5 + r * np.sin(angles)], axis=1)]
+            return [self._middle_dot_spiral()]
         return None
+
+    @staticmethod
+    def _middle_dot_spiral() -> Stroke:
+        t = np.linspace(0.0, 12.0 * np.pi, 145)
+        r = np.linspace(0.15, 0.0, t.size)
+        return np.stack([0.5 + r * np.cos(t), 0.5 + r * np.sin(t)], axis=1).astype(
+            np.float64
+        )
 
     @staticmethod
     def _small_dot(cx: float, cy: float, r: float = 0.06) -> Stroke:
@@ -963,9 +973,9 @@ class StrokeRenderer:
             # 左の縦棒＋上に膨らむアーチ(∩)＋右脚。中央が下がる ν との混同を解消
             stem = np.array([[0.22, 0.2], [0.22, 0.72]], dtype=np.float64)
             t = np.linspace(np.pi, 0, 16)
-            arch = np.stack(
-                [0.5 + 0.28 * np.cos(t), 0.5 + 0.22 * np.sin(t)], axis=1
-            ).astype(np.float64)
+            arch = np.stack([0.5 + 0.28 * np.cos(t), 0.5 + 0.22 * np.sin(t)], axis=1).astype(
+                np.float64
+            )
             right = np.array([[0.78, 0.5], [0.78, 0.2]], dtype=np.float64)
             return [stem, arch, right]
         if char == "t":
@@ -1327,22 +1337,97 @@ class StrokeRenderer:
             logger.warning("KanjiVG JSON load failed for '%s'", placement.char, exc_info=True)
             return None, []
 
-    def _char_scale_factor(self, char: str) -> float:
-        cp = ord(char)
-        if char in self._SMALL_KANA:
-            return 0.55
-        elif char in self._SMALL_PUNCT:
-            return 0.35
-        elif 0x3040 <= cp <= 0x309F:
-            return 0.88
-        elif 0x30A0 <= cp <= 0x30FF:
-            return 0.85
-        else:
-            return 1.0
+    # 幾何 ASCII 字形(_ascii_letter_strokes)の cap height 上端 y。大文字は y∈[0,0.95]、
+    # 小文字 x-height 系は [0.2,0.8]、ディセンダ字は y<0 を使う。この値を font_size に
+    # 対応させ全英字を同一スケールで配置することで大小の高さ差・ベースラインを保つ。
+    _ASCII_CAP_TOP = 0.95
 
-    def _position_strokes(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
+    def _position_ascii_logical(
+        self, strokes: list[Stroke], placement: CharPlacement
+    ) -> list[Stroke]:
+        """幾何 ASCII 英字を論理座標でフィットする（実 bbox フィットの代替）。
+
+        実 bbox フィットは小文字を cap height まで拡大し大文字と同高にしてしまう。
+        ここでは字形 y を cap top(``_ASCII_CAP_TOP``)＝font_size 高として全英字を同一
+        スケールで写し、ベースライン(y=0)を CJK 字の下端ラインへ揃える。x はセル幅で
+        はみ出しを抑える。
+
+        Args:
+            strokes: 単位系字形のストローク列。
+            placement: 配置情報。
+
+        Returns:
+            配置済みストローク列。
+        """
+        all_pts = np.concatenate(strokes, axis=0)
+        x_min = float(all_pts[:, 0].min())
+        x_max = float(all_pts[:, 0].max())
+        x_range = x_max - x_min
+
+        fs = placement.font_size
+        target_h = fs
+        cell_width = fs * 0.55  # ASCII 英字は半角セル幅
+
+        # cap top を font_size 高に対応させる縦スケール。横はみ出し時のみ縮める
+        # （アスペクト維持のため両軸同一スケール、ただし基準は cap height）。
+        scale_h = target_h / self._ASCII_CAP_TOP
+        scale_w = cell_width / x_range if x_range > 1e-6 else float("inf")
+        scale = min(scale_h, scale_w)
+
+        rendered_w = x_range * scale
+        x_offset = placement.x + (cell_width - rendered_w) / 2
+
+        line_spacing = self._page_config.line_spacing
+        # ベースライン(字形 y=0)を CJK 字(font_size 高・行box中央寄せ)の下端へ合わせる。
+        baseline_y = placement.y + (line_spacing - target_h) / 2
+
+        positioned: list[Stroke] = []
+        for stroke in strokes:
+            shifted = stroke.copy()
+            shifted[:, 0] = (stroke[:, 0] - x_min) * scale + x_offset
+            shifted[:, 1] = stroke[:, 1] * scale + baseline_y
+            positioned.append(shifted)
+
+        slant = getattr(placement, "slant", 0.0)
+        if slant:
+            cx = x_offset + rendered_w / 2
+            cy = baseline_y + target_h / 2
+            cos_a, sin_a = np.cos(slant), np.sin(slant)
+            rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+            center = np.array([cx, cy])
+            positioned = [(s - center) @ rot.T + center for s in positioned]
+
+        return positioned
+
+    def _position_strokes(
+        self,
+        strokes: list[Stroke],
+        placement: CharPlacement,
+        *,
+        logical_ascii: bool = False,
+    ) -> list[Stroke]:
+        """\u5b57\u5f62\u3092\u914d\u7f6e\u5ea7\u6a19\u3078\u30b9\u30b1\u30fc\u30eb\u30fb\u79fb\u52d5\u3059\u308b\u3002
+
+        Args:
+            strokes: \u5358\u4f4d\u7cfb\u5b57\u5f62\u306e\u30b9\u30c8\u30ed\u30fc\u30af\u5217\u3002
+            placement: \u914d\u7f6e\u60c5\u5831\uff08x, y, font_size, char, slant\uff09\u3002
+            logical_ascii: ``True`` \u304b\u3064\u5bfe\u8c61\u304c ASCII \u82f1\u5b57\u306e\u3068\u304d\u3001\u5b9f bbox \u3067\u306f\u306a\u304f
+                \u8ad6\u7406\u5ea7\u6a19\uff08cap height=``_ASCII_CAP_TOP``, \u30d9\u30fc\u30b9\u30e9\u30a4\u30f3=y=0\uff09\u3067\u30d5\u30a3\u30c3\u30c8
+                \u3059\u308b\u3002\u5c0f\u6587\u5b57(x-height)\u306f\u5927\u6587\u5b57(cap)\u3088\u308a\u4f4e\u304f\u63cf\u304b\u308c\u3001\u30c7\u30a3\u30bb\u30f3\u30c0\u5b57\u306f
+                \u30d9\u30fc\u30b9\u30e9\u30a4\u30f3\u4e0b\u3078\u4f38\u3073\u308b\u3002CJK\u30fb\u304b\u306a\u30fb\u8a18\u53f7\u30fb\u6570\u5b57\u306f\u5e38\u306b\u5b9f bbox \u30d5\u30a3\u30c3\u30c8\u3002
+
+        Returns:
+            \u914d\u7f6e\u6e08\u307f\u30b9\u30c8\u30ed\u30fc\u30af\u5217\u3002
+        """
         if not strokes:
             return []
+        if placement.char in (".", "\u3002"):
+            return [self._position_period_dot(placement)]
+        if placement.char == "\u30fb":
+            return self._position_middle_dot(strokes, placement)
+
+        if logical_ascii and placement.char.isascii() and placement.char.isalpha():
+            return self._position_ascii_logical(strokes, placement)
 
         all_pts = np.concatenate(strokes, axis=0)
         mins = all_pts.min(axis=0)
@@ -1350,13 +1435,16 @@ class StrokeRenderer:
         ranges = maxs - mins
 
         fs = placement.font_size
-        char_scale = self._char_scale_factor(placement.char)
-        target_h = fs * char_scale
+        # サイズ係数(種別×密度)は typesetter が placement.font_size に1回だけ焼く。
+        # renderer は font_size を最終目標高として扱い、再適用しない(二重縮小防止)。
+        target_h = fs
 
         if is_halfwidth(placement.char):
+            # 半角の縦長アスペクトはセル幅で表現する(係数の再適用ではない)。
             cell_width = fs * 0.55
         else:
-            cell_width = fs * min(char_scale, 0.95)
+            # 全角セルの横はみ出し抑制。effective ではなく固定係数で保つ。
+            cell_width = fs * 0.95
 
         scale_w = cell_width / ranges[0] if ranges[0] > 1e-6 else float("inf")
         scale_h = target_h / ranges[1] if ranges[1] > 1e-6 else float("inf")
@@ -1372,7 +1460,10 @@ class StrokeRenderer:
             x_offset = placement.x + (cell_width - rendered_w) / 2
 
         line_spacing = self._page_config.line_spacing
-        if char_scale < 0.5:
+        # 小書き仮名・句読点は字種スケールが小さく、行box中央だと浮くため下寄せにする。
+        # font_size に係数が焼かれた後は字種判定でしか小書き/句読点を見分けられないので
+        # char_type_scale(係数の再適用ではなく分類用)で旧 effective<0.5 と同じ集合を選ぶ。
+        if char_type_scale(placement.char) < 0.6:
             y_offset = placement.y + 0.1 * line_spacing
         else:
             y_offset = placement.y + (line_spacing - rendered_h) / 2
@@ -1391,6 +1482,46 @@ class StrokeRenderer:
             positioned = [(s - center) @ rot.T + center for s in positioned]
 
         return positioned
+
+    def _position_middle_dot(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
+        fs = placement.font_size
+        cell_width = fs * 0.95
+        dot_diameter = cell_width * 0.5
+        scale = dot_diameter / 0.3
+
+        center = np.array(
+            [
+                placement.x + cell_width / 2,
+                placement.y + self._page_config.line_spacing / 2,
+            ],
+            dtype=np.float64,
+        )
+        raw_center = np.array([0.5, 0.5], dtype=np.float64)
+        positioned = [(stroke - raw_center) * scale + center for stroke in strokes]
+
+        slant = getattr(placement, "slant", 0.0)
+        if slant:
+            cos_a, sin_a = np.cos(slant), np.sin(slant)
+            rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+            positioned = [(stroke - center) @ rot.T + center for stroke in positioned]
+
+        return positioned
+
+    def _position_period_dot(self, placement: CharPlacement) -> Stroke:
+        fs = placement.font_size
+        line_spacing = self._page_config.line_spacing
+        cell_width = fs * 0.55
+        dot_w = min(0.58, max(0.38, fs * 0.08))
+        dot_h = dot_w * 0.75
+        center_x = placement.x + cell_width * 0.5
+        center_y = placement.y + line_spacing * 0.14
+        return np.array(
+            [
+                [center_x - dot_w / 2, center_y + dot_h / 2],
+                [center_x + dot_w / 2, center_y - dot_h / 2],
+            ],
+            dtype=np.float64,
+        )
 
     @staticmethod
     def _rect_fallback(p: CharPlacement) -> list[Stroke]:

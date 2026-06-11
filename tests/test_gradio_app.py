@@ -166,6 +166,12 @@ class TestAppSmoke:
         assert "G-code ダウンロード" in labels
         assert "アップロード G-code (.gcode/.nc/.txt)" in labels
 
+    def test_plotter_speed_delay_options_are_hidden(self, app):
+        labels = {getattr(b, "label", None) for b in app.blocks.values()}
+        assert "描画速度 (mm/min)" not in labels
+        assert "移動速度 (mm/min)" not in labels
+        assert "ペン遅延 (s)" not in labels
+
 
 class TestWebSerialScript:
     def test_head_injects_webserial_script(self):
