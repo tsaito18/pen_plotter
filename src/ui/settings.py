@@ -25,9 +25,6 @@ class UISettings:
         margin_bottom: 下余白 (mm)。
         margin_left: 左余白 (mm)。
         margin_right: 右余白 (mm)。
-        draw_speed: 描画速度 (mm/min)。
-        travel_speed: 移動速度 (mm/min)。
-        pen_delay: ペン昇降後の待機 (s)。
         temperature: ML モデル温度（字形そのものの揺らぎの強度）。
         messiness: レイアウトの汚さ倍率。baseline_drift/字間/サイズ/傾きを
             一括スケール。1.0=標準、0=整った字、2=大きく乱れる。temperature
@@ -52,9 +49,6 @@ class UISettings:
     margin_bottom: float
     margin_left: float
     margin_right: float
-    draw_speed: float
-    travel_speed: float
-    pen_delay: float
     temperature: float
     messiness: float = 1.0
     pressure_variation: float = 0.0
@@ -79,9 +73,6 @@ class UISettings:
             margin_bottom=34.0,
             margin_left=5.0,
             margin_right=5.0,
-            draw_speed=3000.0,
-            travel_speed=5000.0,
-            pen_delay=0.0,
             temperature=1.0,
             messiness=1.0,
             pressure_variation=0.0,
@@ -120,10 +111,6 @@ class UISettings:
                 f"font_size の 60% ({self.font_size * 0.6:.2f}mm)未満です"
             )
 
-        if self.draw_speed <= 0:
-            errors.append(f"draw_speed は正の値である必要があります (現在: {self.draw_speed})")
-        if self.travel_speed <= 0:
-            errors.append(f"travel_speed は正の値である必要があります (現在: {self.travel_speed})")
         if self.temperature <= 0:
             errors.append(f"temperature は正の値である必要があります (現在: {self.temperature})")
         if self.messiness < 0:

@@ -661,9 +661,6 @@ def build_pipeline(
         paper_origin_y=0.0,
         paper_width=settings.paper_width,
         paper_height=settings.paper_height,
-        draw_speed=settings.draw_speed,
-        travel_speed=settings.travel_speed,
-        pen_delay=settings.pen_delay,
         pressure_variation=settings.pressure_variation,
         entry_taper=settings.entry_taper,
     )

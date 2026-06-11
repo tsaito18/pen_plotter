@@ -13,8 +13,8 @@ class TestPlotterConfigDefaults:
         assert plotter_config.paper_height == 297.0
 
     def test_speed_settings(self, plotter_config: PlotterConfig):
-        assert plotter_config.travel_speed == 5000.0
-        assert plotter_config.draw_speed == 3000.0
+        assert plotter_config.travel_speed == 12000.0
+        assert plotter_config.draw_speed == 6000.0
 
     def test_pen_commands(self, plotter_config: PlotterConfig):
         assert plotter_config.pen_down_command == "G1G90 Z5.0 F5000"
