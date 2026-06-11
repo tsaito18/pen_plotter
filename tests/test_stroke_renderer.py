@@ -171,14 +171,15 @@ class TestStrokeRendererMethods:
     def test_fullwidth_punct_match_touten_kuten(self):
         """全角「，」「．」は読点「、」句点「。」と同一形で描く（本文正規化先）。"""
         renderer = StrokeRenderer()
-        assert np.allclose(
-            renderer._simple_punct_strokes("，")[0],
-            renderer._simple_punct_strokes("、")[0],
-        )
-        assert np.allclose(
-            renderer._simple_punct_strokes("．")[0],
-            renderer._simple_punct_strokes("。")[0],
-        )
+        comma = renderer._simple_punct_strokes("，")
+        touten = renderer._simple_punct_strokes("、")
+        assert comma is not None and touten is not None
+        assert np.allclose(comma[0], touten[0])
+
+        period = renderer._simple_punct_strokes("．")
+        kuten = renderer._simple_punct_strokes("。")
+        assert period is not None and kuten is not None
+        assert np.allclose(period[0], kuten[0])
 
     def test_simple_paren_strokes(self):
         from src.layout.typesetter import CharPlacement
