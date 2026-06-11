@@ -739,12 +739,12 @@ class StrokeRenderer:
         return None
 
     def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
-        if char in ("\u3001", ","):
+        if char in ("\u3001", ",", "\uff0c"):
+            # \u6b63\u898f\u5316\u5f8c\u306e\u672c\u6587\u8aad\u70b9\u306f\u3059\u3079\u3066\u300c\uff0c\u300d(U+FF0C)\u306b\u5bc4\u305b\u308b\u305f\u3081\u540c\u4e00\u5f62\u306b\u3059\u308b
             return [np.array([[0.6, 0.2], [0.3, 0.8]])]
-        elif char == "\u3002":
+        elif char in ("\u3002", ".", "\uff0e"):
             # \u53e5\u70b9\u306f\u30ec\u30dd\u30fc\u30c8\u4f53\u88c1\u306b\u5408\u308f\u305b\u3001\u4e38(\u5186)\u3067\u306f\u306a\u304f\u30d4\u30ea\u30aa\u30c9\u98a8\u306e\u77ed\u3044\u70b9(\u63cf\u3051\u308b\u30c9\u30c3\u30c8)
-            return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
-        elif char == ".":
+            # \u6b63\u898f\u5316\u5f8c\u306e\u672c\u6587\u53e5\u70b9\u306f\u3059\u3079\u3066\u300c\uff0e\u300d(U+FF0E)\u306b\u5bc4\u305b\u308b\u305f\u3081\u540c\u4e00\u5f62\u306b\u3059\u308b
             return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
         elif char == "\u30fb":
             return [self._middle_dot_spiral()]
@@ -1421,7 +1421,7 @@ class StrokeRenderer:
         """
         if not strokes:
             return []
-        if placement.char in (".", "\u3002"):
+        if placement.char in (".", "\u3002", "\uff0e"):
             return [self._position_period_dot(placement)]
         if placement.char == "\u30fb":
             return self._position_middle_dot(strokes, placement)

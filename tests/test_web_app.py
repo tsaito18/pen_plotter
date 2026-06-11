@@ -977,6 +977,35 @@ class TestSimplePunctStrokes:
         assert stroke[1, 0] > stroke[0, 0]
         assert stroke[1, 1] < stroke[0, 1]
 
+    def test_fullwidth_comma_matches_touten(self, pipeline):
+        """全角「，」は読点「、」と同一形（本文読点はすべて「，」へ正規化される）。"""
+        comma = pipeline._simple_punct_strokes("，")
+        touten = pipeline._simple_punct_strokes("、")
+        assert comma is not None and touten is not None
+        assert len(comma) == len(touten) == 1
+        assert np.allclose(comma[0], touten[0])
+
+    def test_fullwidth_period_matches_kuten(self, pipeline):
+        """全角「．」は句点「。」と同一形（本文句点はすべて「．」へ正規化される）。"""
+        period = pipeline._simple_punct_strokes("．")
+        kuten = pipeline._simple_punct_strokes("。")
+        assert period is not None and kuten is not None
+        assert len(period) == len(kuten) == 1
+        assert np.allclose(period[0], kuten[0])
+
+    def test_fullwidth_period_positioned_as_tiny_downward_dot(self, pipeline):
+        """全角「．」も句点と同じ period dot 経路を通り、矩形化しない。"""
+        strokes = pipeline._simple_punct_strokes("．")
+        placement = CharPlacement(char="．", x=10.0, y=20.0, font_size=6.0)
+
+        positioned = pipeline._position_strokes(strokes, placement)
+
+        assert len(positioned) == 1
+        stroke = positioned[0]
+        assert stroke.shape == (2, 2)
+        assert 0.35 <= np.ptp(stroke[:, 0]) <= 0.65
+        assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
+
     def test_middle_dot_is_filled_circular_spiral(self, pipeline):
         """中黒は白抜き円ではなく、外周から中心へ丸く塗る連続ストローク。"""
         result = pipeline._simple_punct_strokes("・")
@@ -1024,9 +1053,9 @@ class TestSimplePunctStrokes:
         assert abs(dot_center[1] - line_center_y) <= 0.08
 
     def test_typeset_period_replacement_renders_tiny_downward_dot(self, pipeline):
-        """本文経路で ASCII ピリオドが句点化されても、水平線に戻らない。"""
+        """本文経路で ASCII ピリオドが全角「．」化されても、水平線に戻らない。"""
         placements = pipeline.text_to_placements("0.2")[0]
-        placement = next(p for p in placements if p.char == "。")
+        placement = next(p for p in placements if p.char == "．")
 
         strokes = pipeline._generate_char_strokes(placement)
 

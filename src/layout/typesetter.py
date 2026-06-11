@@ -61,19 +61,29 @@ _INLINE_MATH_PLACEHOLDER_BASE = 0xE000
 _TABLE_PLACEHOLDER_PREFIX = "\x00TBL\x00"
 _TABLE_PLACEHOLDER_SUFFIX = "\x00TBL\x00"
 
-# 数式内の . は変換しない（小数点は LaTeX で . のまま使う）
+# 数式内の . , は変換しない（小数点・引数区切りは LaTeX でそのまま使う）
 _MATH_OR_BLOCK_RE = re.compile(r"\$\$.*?\$\$|\$[^$]+?\$", re.DOTALL)
 
 
-def _replace_ascii_period(text: str) -> str:
-    """テキスト部分の ASCII . を 。 に変換（$...$, $$...$$ 内は除外）。"""
+def _normalize_body_punctuation(text: str) -> str:
+    """本文の句読点を全角に統一する（$...$, $$...$$ 内は除外）。
+
+    読点系 ``,`` ``，`` ``、`` を全角「，」(U+FF0C)、句点系 ``.`` ``．`` ``。`` を
+    全角「．」(U+FF0E)へ寄せる。理系レポート表記の揺れを吸収するための統一で、
+    数式内の ``.`` ``,`` は小数点・引数区切りなので変換しない。
+    """
+
+    def _normalize(seg: str) -> str:
+        seg = seg.replace(",", "，").replace("、", "，")
+        return seg.replace(".", "．").replace("。", "．")
+
     result: list[str] = []
     last_end = 0
     for m in _MATH_OR_BLOCK_RE.finditer(text):
-        result.append(text[last_end : m.start()].replace(".", "。"))
+        result.append(_normalize(text[last_end : m.start()]))
         result.append(m.group(0))
         last_end = m.end()
-    result.append(text[last_end:].replace(".", "。"))
+    result.append(_normalize(text[last_end:]))
     return "".join(result)
 
 
@@ -238,7 +248,7 @@ class Typesetter:
         if not text:
             return [[]]
 
-        text = _replace_ascii_period(text)
+        text = _normalize_body_punctuation(text)
 
         area = self._layout.content_area()
         line_positions = self._layout.line_positions()
