@@ -72,8 +72,8 @@ def _y_extent(p: CharPlacement, line_spacing: float) -> tuple[float, float]:
     if p.math_bbox is not None:
         _x, y, _w, h = p.math_bbox
         if getattr(p, "math_align", "center") == "baseline":
-            baseline_frac = _baseline_frac_from_top(p.math_source or "")
-            y = y - (1.0 - baseline_frac) * h
+            bf = _baseline_frac_from_top(p.math_source or "")
+            y = y + (line_spacing - p.font_size) / 2 - (1.0 - bf) * h
         return y, y + h
     # 通常文字は baseline(y) から line_spacing 帯に収まる想定
     return p.y, p.y + line_spacing
