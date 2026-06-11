@@ -977,6 +977,52 @@ class TestSimplePunctStrokes:
         assert stroke[1, 0] > stroke[0, 0]
         assert stroke[1, 1] < stroke[0, 1]
 
+    def test_middle_dot_is_filled_circular_spiral(self, pipeline):
+        """中黒は白抜き円ではなく、外周から中心へ丸く塗る連続ストローク。"""
+        result = pipeline._simple_punct_strokes("・")
+
+        assert result is not None
+        assert len(result) == 1
+        stroke = result[0]
+        assert stroke.dtype == np.float64
+        assert stroke.shape[0] >= 40
+        assert not np.allclose(stroke[0], stroke[-1])
+
+        center = np.array([0.5, 0.5])
+        radii = np.linalg.norm(stroke - center, axis=1)
+        assert 0.14 <= radii[0] <= 0.16
+        assert radii[-1] <= 0.01
+        assert radii[-1] < radii[0] * 0.1
+        assert np.all(np.diff(radii) <= 1e-9)
+        assert 0.26 <= np.ptp(stroke[:, 0]) <= 0.31
+        assert 0.26 <= np.ptp(stroke[:, 1]) <= 0.31
+
+    def test_middle_dot_positioned_centered_at_half_old_hollow_circle_size(self, pipeline):
+        """配置後の中黒は旧白抜き円の約半分サイズで、全角セル中央に残る。"""
+        strokes = pipeline._simple_punct_strokes("・")
+        placement = CharPlacement(char="・", x=10.0, y=20.0, font_size=6.0)
+
+        positioned = pipeline._position_strokes(strokes, placement)
+
+        assert len(positioned) == 1
+        stroke = positioned[0]
+        width = np.ptp(stroke[:, 0])
+        height = np.ptp(stroke[:, 1])
+        old_hollow_diameter = placement.font_size * 0.95
+        assert old_hollow_diameter * 0.42 <= width <= old_hollow_diameter * 0.52
+        assert old_hollow_diameter * 0.42 <= height <= old_hollow_diameter * 0.52
+
+        cell_center_x = placement.x + placement.font_size * 0.95 / 2
+        line_center_y = placement.y + pipeline._page_config.line_spacing / 2
+        dot_center = np.array(
+            [
+                (stroke[:, 0].min() + stroke[:, 0].max()) / 2,
+                (stroke[:, 1].min() + stroke[:, 1].max()) / 2,
+            ]
+        )
+        assert abs(dot_center[0] - cell_center_x) <= 0.08
+        assert abs(dot_center[1] - line_center_y) <= 0.08
+
     def test_typeset_period_replacement_renders_tiny_downward_dot(self, pipeline):
         """本文経路で ASCII ピリオドが句点化されても、水平線に戻らない。"""
         placements = pipeline.text_to_placements("0.2")[0]

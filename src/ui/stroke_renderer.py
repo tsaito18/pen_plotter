@@ -747,10 +747,16 @@ class StrokeRenderer:
         elif char == ".":
             return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
         elif char == "\u30fb":
-            angles = np.linspace(0, 2 * np.pi, 12)
-            r = 0.15
-            return [np.stack([0.5 + r * np.cos(angles), 0.5 + r * np.sin(angles)], axis=1)]
+            return [self._middle_dot_spiral()]
         return None
+
+    @staticmethod
+    def _middle_dot_spiral() -> Stroke:
+        t = np.linspace(0.0, 12.0 * np.pi, 145)
+        r = np.linspace(0.15, 0.0, t.size)
+        return np.stack([0.5 + r * np.cos(t), 0.5 + r * np.sin(t)], axis=1).astype(
+            np.float64
+        )
 
     @staticmethod
     def _small_dot(cx: float, cy: float, r: float = 0.06) -> Stroke:
@@ -1417,6 +1423,8 @@ class StrokeRenderer:
             return []
         if placement.char in (".", "\u3002"):
             return [self._position_period_dot(placement)]
+        if placement.char == "\u30fb":
+            return self._position_middle_dot(strokes, placement)
 
         if logical_ascii and placement.char.isascii() and placement.char.isalpha():
             return self._position_ascii_logical(strokes, placement)
@@ -1472,6 +1480,30 @@ class StrokeRenderer:
             rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
             center = np.array([cx, cy])
             positioned = [(s - center) @ rot.T + center for s in positioned]
+
+        return positioned
+
+    def _position_middle_dot(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
+        fs = placement.font_size
+        cell_width = fs * 0.95
+        dot_diameter = cell_width * 0.5
+        scale = dot_diameter / 0.3
+
+        center = np.array(
+            [
+                placement.x + cell_width / 2,
+                placement.y + self._page_config.line_spacing / 2,
+            ],
+            dtype=np.float64,
+        )
+        raw_center = np.array([0.5, 0.5], dtype=np.float64)
+        positioned = [(stroke - raw_center) * scale + center for stroke in strokes]
+
+        slant = getattr(placement, "slant", 0.0)
+        if slant:
+            cos_a, sin_a = np.cos(slant), np.sin(slant)
+            rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+            positioned = [(stroke - center) @ rot.T + center for stroke in positioned]
 
         return positioned
 
