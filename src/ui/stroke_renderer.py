@@ -213,8 +213,8 @@ class StrokeRenderer:
             return False
         code = ord(char)
         return (
-            0x3041 <= code <= 0x3096
-            or 0x30A1 <= code <= 0x30FA
+            0x3040 <= code <= 0x309F
+            or 0x30A0 <= code <= 0x30FF
             or 0x31F0 <= code <= 0x31FF
             or 0x3400 <= code <= 0x4DBF
             or 0x4E00 <= code <= 0x9FFF
