@@ -65,6 +65,7 @@ class PlotterPipeline:
         messiness: float = 1.0,
         instance_variation: float = 0.5,
         connection_strength: float = 0.0,
+        skip_non_japanese: bool = False,
     ) -> None:
         self._connection_strength = connection_strength
         self._page_config = page_config or PageConfig(
@@ -102,6 +103,7 @@ class PlotterPipeline:
             augmenter=self._typesetter.augmenter,
             page_config=self._page_config,
             instance_variation=instance_variation,
+            skip_non_japanese=skip_non_japanese,
         )
 
         default_bg = Path("data/report_paper.jpg")
@@ -625,6 +627,7 @@ def build_pipeline(
     kanjivg_dir: Path | str | None = None,
     style_sample: object | None = None,
     user_strokes_dir: Path | str | None = None,
+    skip_non_japanese: bool = False,
 ) -> PlotterPipeline:
     """UISettings から副作用なしで PlotterPipeline を構築するファクトリ。
 
@@ -637,6 +640,7 @@ def build_pipeline(
         kanjivg_dir: KanjiVG JSON ディレクトリ。
         style_sample: 明示的な style_sample（指定時は user_strokes より優先）。
         user_strokes_dir: ユーザーストローク JSON ディレクトリ。
+        skip_non_japanese: 日本語文字以外の描画を一時的にスキップする。
 
     Returns:
         構築済みの PlotterPipeline。
@@ -675,6 +679,7 @@ def build_pipeline(
         messiness=settings.messiness,
         instance_variation=settings.instance_variation,
         connection_strength=settings.connection_strength,
+        skip_non_japanese=skip_non_japanese,
     )
     # PlotterPipeline.__init__ は font_size=4.5 ハードコーディングのため、
     # UISettings.font_size を反映するため Typesetter を再構築する
