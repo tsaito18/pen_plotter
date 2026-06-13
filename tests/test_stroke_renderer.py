@@ -236,7 +236,7 @@ class TestStrokeRendererMethods:
         assert finishes == []
         assert char in renderer._last_coverage.skipped
 
-    @pytest.mark.parametrize("char", ["あ", "漢", "カ"])
+    @pytest.mark.parametrize("char", ["あ", "漢", "カ", "ー", "ヴ"])
     def test_skip_non_japanese_keeps_japanese_chars(self, char):
         renderer = StrokeRenderer(skip_non_japanese=True)
         placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
