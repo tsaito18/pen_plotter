@@ -166,16 +166,6 @@ class TrainingJobManager:
                 device=device,
                 use_aligner=use_aligner,
             )
-        if kind == "pretrain":
-            pot_dir = Path(config.get("pot_dir") or "data/casia_raw/train")
-            return self._run_pretrain(
-                pot_dir=pot_dir,
-                output_dir=output_dir,
-                epochs=epochs,
-                batch_size=batch_size,
-                learning_rate=learning_rate,
-                device=device,
-            )
         return self._run_user_train(
             data_arg=data_arg,
             output_dir=output_dir,
@@ -283,40 +273,3 @@ class TrainingJobManager:
         self._attach_epoch_callback(trainer, epochs)
         trainer.train()
         return output_dir / "finetuned.pt"
-
-    def _run_pretrain(
-        self,
-        *,
-        pot_dir: Path,
-        output_dir: Path,
-        epochs: int,
-        batch_size: int,
-        learning_rate: float,
-        device: str | None,
-    ) -> Path:
-        from src.model.pretrain import DeformationConfig, DeformationPretrainer
-
-        cfg = DeformationConfig(
-            epochs=epochs,
-            batch_size=batch_size,
-            learning_rate=learning_rate,
-        )
-        trainer = DeformationPretrainer(
-            config=cfg,
-            ref_dir=self.ref_dir,
-            output_dir=output_dir,
-            device=device,
-            pot_dir=pot_dir,
-        )
-        setattr(
-            trainer,
-            "progress_callback",
-            lambda epoch, total, loss: self._on_epoch(epoch, total, loss),
-        )
-        setattr(
-            trainer,
-            "cancel_callback",
-            lambda: self._cancel_requested,
-        )
-        trainer.train()
-        return output_dir / "pretrain_checkpoint.pt"

@@ -1,4 +1,7 @@
-"""事前学習 CLI。"""
+"""ユーザー手書きデータによる訓練 CLI（v3-user / UserDeformationTrainer）。
+
+ユーザーの手書きサンプルのみで StrokeDeformer + StyleEncoder をスクラッチ訓練する（CASIA不使用）。
+"""
 
 from __future__ import annotations
 
@@ -8,12 +11,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.model.pretrain import PretrainConfig, Pretrainer
 from src.collector.profiles import list_profiles
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Pre-train handwriting model")
+    parser = argparse.ArgumentParser(description="Train deformer on user handwriting (v3-user)")
     parser.add_argument(
         "--hand-dir",
         type=Path,
@@ -37,21 +39,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--grad-clip-norm", type=float, default=5.0)
     parser.add_argument("--style-dim", type=int, default=128)
-    parser.add_argument("--char-dim", type=int, default=128)
     parser.add_argument("--hidden-dim", type=int, default=128)
-    parser.add_argument("--num-mixtures", type=int, default=20)
-    parser.add_argument(
-        "--pot-dir",
-        type=Path,
-        default=None,
-        help="Directory containing CASIA .pot files (alternative to --hand-dir)",
-    )
-    parser.add_argument(
-        "--max-samples",
-        type=int,
-        default=0,
-        help="Max CASIA samples to load (0=all)",
-    )
     parser.add_argument(
         "--device",
         type=str,
@@ -65,28 +53,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="DataLoader worker processes (0=main process)",
     )
     parser.add_argument(
-        "--amp",
-        action="store_true",
-        help="Enable mixed precision training",
-    )
-    parser.add_argument(
-        "--model-version",
-        type=str,
-        default="v3",
-        choices=["v2", "v3", "v3-user"],
-        help="Model architecture version (v2=LSTM+MDN, v3=deformation, v3-user=user-data-only)",
-    )
-    parser.add_argument(
         "--dropout",
         type=float,
         default=0.2,
-        help="Dropout rate for StrokeDeformer (v3-user only)",
+        help="Dropout rate for StrokeDeformer",
     )
     parser.add_argument(
         "--weight-decay",
         type=float,
         default=0.01,
-        help="Weight decay for AdamW (v3-user only)",
+        help="Weight decay for AdamW",
     )
     parser.add_argument(
         "--use-aligner",
@@ -96,9 +72,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--deformer-type",
         type=str,
-        default="offset",
+        default="twostage",
         choices=["offset", "transformer", "twostage"],
-        help="Deformer type (v3-user only): offset=MLP, transformer=Transformer, twostage=Affine+Transformer",
+        help="Deformer type: offset=MLP, transformer=Transformer, twostage=Affine+Transformer",
     )
     return parser.parse_args(argv)
 
@@ -107,33 +83,19 @@ def main(argv: list[str] | None = None) -> dict:
     args = parse_args(argv)
 
     hand_dir = args.hand_dir
-    hand_data_arg: Path | list[Path] = hand_dir
+    if not hand_dir.exists():
+        print(f"Error: hand directory not found: {hand_dir}")
+        sys.exit(1)
+    profiles = list_profiles(hand_dir)
+    hand_data_arg: Path | list[Path] = [p.path for p in profiles] if profiles else hand_dir
+    hand_dirs = hand_data_arg if isinstance(hand_data_arg, list) else [hand_data_arg]
+    hand_json = sum(len(list(Path(d).rglob("*.json"))) for d in hand_dirs)
+    if hand_json == 0:
+        print(f"Error: no stroke data found in {hand_dir}")
+        sys.exit(1)
+    print(f"Hand data: {', '.join(str(d) for d in hand_dirs)} ({hand_json} files)")
+
     ref_dir = args.ref_dir
-    pot_dir = args.pot_dir
-
-    if pot_dir is not None:
-        if not pot_dir.exists():
-            print(f"Error: pot directory not found: {pot_dir}")
-            sys.exit(1)
-        pot_files = list(pot_dir.glob("*.pot"))
-        if len(pot_files) == 0:
-            print(f"Error: no .pot files found in {pot_dir}")
-            sys.exit(1)
-        print(f"CASIA data: {pot_dir} ({len(pot_files)} .pot files)")
-    else:
-        if not hand_dir.exists():
-            print(f"Error: hand directory not found: {hand_dir}")
-            sys.exit(1)
-        profiles = list_profiles(hand_dir)
-        if profiles:
-            hand_data_arg = [p.path for p in profiles]
-        hand_dirs = hand_data_arg if isinstance(hand_data_arg, list) else [hand_data_arg]
-        hand_json = sum(len(list(Path(d).rglob("*.json"))) for d in hand_dirs)
-        if hand_json == 0:
-            print(f"Error: no stroke data found in {hand_dir}")
-            sys.exit(1)
-        print(f"Hand data: {', '.join(str(d) for d in hand_dirs)} ({hand_json} files)")
-
     if not ref_dir.exists():
         print(f"Error: reference directory not found: {ref_dir}")
         sys.exit(1)
@@ -145,75 +107,31 @@ def main(argv: list[str] | None = None) -> dict:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.model_version == "v3-user":
-        from src.model.finetune import UserDeformationTrainer, UserTrainConfig
+    from src.model.finetune import UserDeformationTrainer, UserTrainConfig
 
-        user_config = UserTrainConfig(
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            grad_clip_norm=args.grad_clip_norm,
-            style_dim=args.style_dim,
-            hidden_dim=args.hidden_dim,
-            dropout=args.dropout,
-            weight_decay=args.weight_decay,
-            deformer_type=args.deformer_type,
-        )
-        pretrainer = UserDeformationTrainer(
-            config=user_config,
-            user_data_dir=hand_data_arg,
-            ref_dir=ref_dir,
-            output_dir=args.output_dir,
-            device=args.device,
-            num_workers=args.num_workers,
-            use_aligner=args.use_aligner,
-        )
-    elif args.model_version == "v3":
-        from src.model.pretrain import DeformationConfig, DeformationPretrainer
+    config = UserTrainConfig(
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        grad_clip_norm=args.grad_clip_norm,
+        style_dim=args.style_dim,
+        hidden_dim=args.hidden_dim,
+        dropout=args.dropout,
+        weight_decay=args.weight_decay,
+        deformer_type=args.deformer_type,
+    )
+    trainer = UserDeformationTrainer(
+        config=config,
+        user_data_dir=hand_data_arg,
+        ref_dir=ref_dir,
+        output_dir=args.output_dir,
+        device=args.device,
+        num_workers=args.num_workers,
+        use_aligner=args.use_aligner,
+    )
 
-        config_v3 = DeformationConfig(
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            grad_clip_norm=args.grad_clip_norm,
-            style_dim=args.style_dim,
-            hidden_dim=args.hidden_dim,
-        )
-        pretrainer = DeformationPretrainer(
-            config=config_v3,
-            ref_dir=ref_dir,
-            output_dir=args.output_dir,
-            device=args.device,
-            pot_dir=pot_dir,
-            max_samples=args.max_samples,
-            num_workers=args.num_workers,
-            amp=args.amp,
-        )
-    else:
-        config = PretrainConfig(
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            grad_clip_norm=args.grad_clip_norm,
-            style_dim=args.style_dim,
-            char_dim=args.char_dim,
-            hidden_dim=args.hidden_dim,
-            num_mixtures=args.num_mixtures,
-        )
-        pretrainer = Pretrainer(
-            config=config,
-            hand_dir=hand_data_arg,
-            ref_dir=ref_dir,
-            output_dir=args.output_dir,
-            device=args.device,
-            pot_dir=pot_dir,
-            max_samples=args.max_samples,
-            num_workers=args.num_workers,
-            amp=args.amp,
-        )
-
-    result = pretrainer.train()
-    print(f"Pre-training complete. Final loss: {result['losses'][-1]:.4f}")
+    result = trainer.train()
+    print(f"Training complete. Final loss: {result['losses'][-1]:.4f}")
     print(f"Checkpoint saved to: {args.output_dir / 'pretrain_checkpoint.pt'}")
     return result
 

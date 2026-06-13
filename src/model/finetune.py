@@ -25,12 +25,22 @@ from src.model.data_utils import (
     strokes_to_deltas,
 )
 from src.model.data_utils import compute_normalization_stats
-from src.model.pretrain import _detect_device
 from src.model.stroke_model import StrokeGenerator, mdn_loss
 from src.model.style_encoder import StyleEncoder
 
 OFFSET_CLAMP = 0.4
 SMOOTHING_KERNEL_SIZE = 15
+
+
+def _detect_device(device: str | None = None) -> torch.device:
+    """利用可能なアクセラレータを自動検出する。明示指定時はそれを使用。"""
+    if device is not None:
+        return torch.device(device)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return torch.device("xpu")
+    return torch.device("cpu")
 
 
 def _scan_char_pairs(user_dir: Path | list[Path], ref_dir: Path) -> list[tuple[str, Path, Path]]:

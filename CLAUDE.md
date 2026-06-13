@@ -28,7 +28,7 @@
 
 ### ディレクトリ構成
 - `src/gcode/` — G-code生成・最適化・プレビュー
-- `src/collector/` — 手書きサンプル収集（iPad UI, KanjiVGパーサー, CASIAパーサー）
+- `src/collector/` — 手書きサンプル収集（iPad UI, KanjiVGパーサー）
 - `src/model/` — ML モデル（V3: StrokeDeformer/TransformerDeformer per-point offset + StyleEncoder + Contrastive Learning）
 - `src/layout/` — 組版エンジン
 - `src/comm/` — GRBL シリアル通信
@@ -74,7 +74,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 | スクリプト | 用途 |
 |-----------|------|
 | `scripts/prepare_kanjivg.py --download` | KanjiVGデータ取得・変換（6,699文字） |
-| `scripts/pretrain.py` | 事前訓練（CharEncoder+StyleEncoder+Generator） |
+| `scripts/pretrain.py` | ユーザーデータ直接訓練（v3-user / UserDeformationTrainer） |
 | `scripts/finetune.py` | ファインチューニング（StyleEncoderのみ） |
 | `scripts/train_model.py` | V1訓練（旧方式、char_dimなし） |
 | `scripts/collect_strokes.py` | ガイド付き手書きサンプル収集（381文字セット） |

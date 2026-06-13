@@ -193,8 +193,7 @@ pen_plotter/
 │   │   ├── templates/collector.html
 │   │   ├── stroke_recorder.py
 │   │   ├── data_format.py
-│   │   ├── kanjivg_parser.py
-│   │   └── casia_parser.py
+│   │   └── kanjivg_parser.py
 │   ├── model/              # ML モデル
 │   │   ├── stroke_deformer.py
 │   │   ├── stroke_aligner.py
@@ -202,7 +201,6 @@ pen_plotter/
 │   │   ├── dataset.py
 │   │   ├── data_utils.py
 │   │   ├── finetune.py
-│   │   ├── pretrain.py
 │   │   ├── inference.py
 │   │   ├── augmentation.py
 │   │   ├── stroke_model.py
