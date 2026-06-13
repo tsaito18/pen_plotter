@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ml = ["torch==2.10.0", "torchvision==0.25.0", "scipy"]
+ml = ["torch==2.10.0", "torchvision==0.27.0", "scipy"]
 ui = ["gradio"]
 dev = ["pytest", "ruff"]
 build = ["pyinstaller"]
