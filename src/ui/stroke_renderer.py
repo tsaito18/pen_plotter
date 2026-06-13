@@ -77,10 +77,12 @@ class StrokeRenderer:
         finishing_config: FinishingConfig | None = None,
         enable_finishing: bool = True,
         instance_variation: float = 0.5,
+        skip_non_japanese: bool = False,
     ) -> None:
         self._page_config = page_config or PageConfig()
         self._temperature = temperature
         self._augmenter = augmenter
+        self._skip_non_japanese = skip_non_japanese
         # 同一字の繰り返しで形を変える per-stroke ランダムaffineの強度（0=無効）
         self._instance_variation = instance_variation
 
@@ -204,6 +206,36 @@ class StrokeRenderer:
         """
         return self.generate_char_strokes_with_finishes(placement)[0]
 
+    @staticmethod
+    def _is_japanese_text_char(char: str) -> bool:
+        """一時オプション用の描画許可判定。漢字・ひらがな・カタカナだけ通す。"""
+        if len(char) != 1:
+            return False
+        code = ord(char)
+        return (
+            0x3040 <= code <= 0x309F
+            or 0x30A0 <= code <= 0x30FF
+            or 0x31F0 <= code <= 0x31FF
+            or 0x3400 <= code <= 0x4DBF
+            or 0x4E00 <= code <= 0x9FFF
+            or 0xF900 <= code <= 0xFAFF
+            or 0xFF66 <= code <= 0xFF9D
+            or 0x20000 <= code <= 0x2A6DF
+            or 0x2A700 <= code <= 0x2B73F
+            or 0x2B740 <= code <= 0x2B81F
+            or 0x2B820 <= code <= 0x2CEAF
+            or 0x2CEB0 <= code <= 0x2EBEF
+            or 0x30000 <= code <= 0x3134F
+        )
+
+    @classmethod
+    def _should_skip_non_japanese(cls, placement: CharPlacement) -> bool:
+        if placement.line_segment is not None:
+            return getattr(placement, "role", None) is not None
+        if getattr(placement, "math_source", None) or getattr(placement, "math_skip", False):
+            return True
+        return not cls._is_japanese_text_char(placement.char)
+
     def _resolve_finishes(self, raw_types: list[str], positioned: list[Stroke]) -> list[str]:
         """筆画タイプを決める。kvg:type があれば分類、無ければ軌跡から推定。
 
@@ -235,6 +267,10 @@ class StrokeRenderer:
             ``_SKIP_RENDER`` 該当字は ``([], [])``。
         """
         cov = self._last_coverage
+
+        if self._skip_non_japanese and self._should_skip_non_japanese(placement):
+            cov.skipped.append(placement.char)
+            return [], []
 
         # math_skip=True: 先頭の数式 CharPlacement がまとめて描画済みなのでスキップ
         if getattr(placement, "math_skip", False):

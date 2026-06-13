@@ -693,12 +693,17 @@ def create_app(
                 return path
         return profile_options[0][1]
 
-    def _build(settings: UISettings, profile_id: str | None = None) -> PlotterPipeline:
+    def _build(
+        settings: UISettings,
+        profile_id: str | None = None,
+        skip_non_japanese: bool = False,
+    ) -> PlotterPipeline:
         return build_pipeline(
             settings,
             checkpoint_path=env_kwargs["checkpoint_path"],
             kanjivg_dir=env_kwargs["kanjivg_dir"],
             user_strokes_dir=_profile_dir(profile_id),
+            skip_non_japanese=skip_non_japanese,
         )
 
     default_settings = UISettings.default()
@@ -845,6 +850,10 @@ def create_app(
                             label="人物プロファイル",
                             visible=bool(profile_options),
                             interactive=bool(profile_options),
+                        )
+                        skip_non_japanese = gr.Checkbox(
+                            value=False,
+                            label="日本語文字だけプロット（英数字・数式・記号をスキップ）",
                         )
                         temperature = gr.Slider(
                             0.1,
@@ -1089,10 +1098,17 @@ def create_app(
             outputs=[preview_stale, stale_banner, persisted_profile],
         )
 
+        skip_non_japanese.change(
+            lambda _value: (True, gr.update(value=_STALE_BANNER_HTML, visible=True)),
+            inputs=[skip_non_japanese],
+            outputs=[preview_stale, stale_banner],
+        )
+
         def _on_preview(
             text: str,
             settings: UISettings,
             profile_id: str | None,
+            skip_non_japanese: bool,
             old_paths: list[str],
             progress=gr.Progress(),
         ):
@@ -1128,7 +1144,7 @@ def create_app(
 
             generated: list[Path] = []
             try:
-                pipeline = _build(settings, profile_id)
+                pipeline = _build(settings, profile_id, skip_non_japanese)
 
                 start = time.time()
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp:
@@ -1166,7 +1182,13 @@ def create_app(
 
         preview_btn.click(
             _on_preview,
-            inputs=[text_input, settings_state, profile_select, prev_preview_paths],
+            inputs=[
+                text_input,
+                settings_state,
+                profile_select,
+                skip_non_japanese,
+                prev_preview_paths,
+            ],
             outputs=[
                 preview_gallery,
                 prev_preview_paths,
@@ -1181,6 +1203,7 @@ def create_app(
             text: str,
             settings: UISettings,
             profile_id: str | None,
+            skip_non_japanese: bool,
             old_tmpdir: str | None,
             progress=gr.Progress(),
         ):
@@ -1210,7 +1233,7 @@ def create_app(
 
             tmp_dir: Path | None = None
             try:
-                pipeline = _build(settings, profile_id)
+                pipeline = _build(settings, profile_id, skip_non_japanese)
                 tmp_dir = Path(tempfile.mkdtemp(prefix="penplotter_"))
                 base_path = tmp_dir / "output.gcode"
 
@@ -1245,7 +1268,13 @@ def create_app(
 
         gcode_btn.click(
             _on_generate,
-            inputs=[text_input, settings_state, profile_select, prev_gcode_tmpdir],
+            inputs=[
+                text_input,
+                settings_state,
+                profile_select,
+                skip_non_japanese,
+                prev_gcode_tmpdir,
+            ],
             outputs=[gcode_files, prev_gcode_tmpdir, status_md, webserial_pages],
         ).then(
             fn=None,
@@ -1393,6 +1422,7 @@ def create_app(
                 d.instance_variation,
                 d.entry_taper,
                 d.connection_strength,
+                False,
                 d.to_dict(),  # ブラウザ永続化もデフォルトへ
             )
 
@@ -1406,6 +1436,7 @@ def create_app(
                 preview_btn,
                 gcode_btn,
                 *slider_components,
+                skip_non_japanese,
                 persisted_settings,
             ],
         )
