@@ -1393,6 +1393,12 @@ class StrokeRenderer:
     # 対応させ全英字を同一スケールで配置することで大小の高さ差・ベースラインを保つ。
     _ASCII_CAP_TOP = 0.95
 
+    # 半角セル幅 = font_size × この係数。typesetter は字送りを font*0.55 で予約し、
+    # 字種係数(半角=0.8)を font_size に焼くため fs=font*0.8。箱を予約と一致させるには
+    # fs*(0.55/0.8)=fs*0.6875≈0.7 が必要。これより小さいと数字・英字が横ボックス律速で
+    # 縦に潰れ(二重縮小)、漢字比0.6域へ縮む。
+    _HALFWIDTH_CELL_FACTOR = 0.7
+
     def _position_ascii_logical(
         self, strokes: list[Stroke], placement: CharPlacement
     ) -> list[Stroke]:
@@ -1417,7 +1423,7 @@ class StrokeRenderer:
 
         fs = placement.font_size
         target_h = fs
-        cell_width = fs * 0.55  # ASCII 英字は半角セル幅
+        cell_width = fs * self._HALFWIDTH_CELL_FACTOR  # ASCII 英字は半角セル幅
 
         # cap top を font_size 高に対応させる縦スケール。横はみ出し時のみ縮める
         # （アスペクト維持のため両軸同一スケール、ただし基準は cap height）。
@@ -1492,7 +1498,8 @@ class StrokeRenderer:
 
         if is_halfwidth(placement.char):
             # 半角の縦長アスペクトはセル幅で表現する(係数の再適用ではない)。
-            cell_width = fs * 0.55
+            # 箱は字送り予約(font*0.55)と整合する fs*0.7。狭いと横律速で縦潰れ(二重縮小)。
+            cell_width = fs * self._HALFWIDTH_CELL_FACTOR
         else:
             # 全角セルの横はみ出し抑制。effective ではなく固定係数で保つ。
             cell_width = fs * 0.95
@@ -1505,10 +1512,8 @@ class StrokeRenderer:
         rendered_w = ranges[0] * scale
         rendered_h = ranges[1] * scale
 
-        if is_halfwidth(placement.char):
-            x_offset = placement.x + (fs * 0.55 - rendered_w) / 2
-        else:
-            x_offset = placement.x + (cell_width - rendered_w) / 2
+        # 半角・全角とも cell_width 基準で中央寄せ(箱拡大と整合させ左ズレを防ぐ)。
+        x_offset = placement.x + (cell_width - rendered_w) / 2
 
         line_spacing = self._page_config.line_spacing
         # 小書き仮名・句読点は字種スケールが小さく、行box中央だと浮くため下寄せにする。

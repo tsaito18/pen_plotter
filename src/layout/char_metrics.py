@@ -320,7 +320,7 @@ _KANA_SIZE_OVERRIDES: dict[str, float] = {
 _KANJI_SCALE = 1.0
 _HIRAGANA_SCALE = 0.85
 _KATAKANA_SCALE = 0.85
-_HALFWIDTH_SCALE = 0.7
+_HALFWIDTH_SCALE = 0.8
 _SMALL_KANA_SCALE = 0.55
 _SMALL_PUNCT_SCALE = 0.35
 
@@ -334,7 +334,7 @@ def char_type_scale(ch: str) -> float:
         ch: 対象文字（1文字）。
 
     Returns:
-        サイズ倍率。漢字 1.0 / かな 0.85 / 半角 0.7 / 小書き 0.55 / 句読点 0.35。
+        サイズ倍率。漢字 1.0 / かな 0.85 / 半角 0.8 / 小書き 0.55 / 句読点 0.35。
     """
     if ch in _SMALL_KANA:
         return _SMALL_KANA_SCALE

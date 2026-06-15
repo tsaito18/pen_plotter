@@ -619,8 +619,8 @@ class TestCharSizeScale:
     def test_halfwidth_scale(self):
         from src.layout.char_metrics import char_type_scale
 
-        assert char_type_scale("a") == 0.7
-        assert char_type_scale("1") == 0.7
+        assert char_type_scale("a") == 0.8
+        assert char_type_scale("1") == 0.8
 
     def test_effective_scale_includes_density(self):
         """effective は種別×密度。複雑な漢字ほど大きく、簡単な漢字ほど小さい。"""

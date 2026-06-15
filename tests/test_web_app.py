@@ -326,12 +326,12 @@ class TestFallbackStrokes:
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
         rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
         assert rendered_h > rendered_w
-        # 二重適用解消後、高さは font_size そのもの（typesetter で 0.7 を1回だけ焼く）。
-        # 半角の縦長アスペクトは cell_width=0.55*fs で表現され、高さ側が target_h=fs を支配する。
+        # 二重適用解消後、高さは font_size そのもの（typesetter で字種係数を1回だけ焼く）。
+        # 半角の縦長アスペクトは cell_width=0.7*fs で表現され、高さ側が target_h=fs を支配する。
         assert np.isclose(rendered_h, 6.0, atol=0.01)
 
     def test_halfwidth_wide_char_constrained(self):
-        """幅広の半角文字がセル幅(0.6*fs)を超えないこと。"""
+        """幅広の半角文字がセル幅(0.7*fs)を超えないこと。"""
         pipeline = PlotterPipeline()
         # 正方形ストローク（幅=高さ）→ セル幅に制約される
         normalized = [
@@ -342,8 +342,42 @@ class TestFallbackStrokes:
 
         all_pts = np.concatenate(result, axis=0)
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
-        cell_width = 6.0 * 0.6
+        cell_width = 6.0 * 0.7
         assert rendered_w <= cell_width + 0.01
+
+    def test_digit_height_matches_halfwidth_scale(self):
+        """数字の描画高が漢字の約0.8倍に収まる（二重縮小バグの回帰防止）。
+
+        typesetter は字種係数を placement.font_size に焼くため、呼び出し側で
+        数字=font_size*0.8 / 漢字=font_size*1.0 を渡してその焼込みを再現する。
+        renderer の半角セル幅が予約字送り(font*0.55)と整合する値(fs*0.7)になって
+        いれば、縦長アスペクトの数字でも高さが target_h(=fs) を支配し、漢字に対し
+        字種係数どおり 0.8 倍域へ収まる。旧バグでは半角箱が fs*0.55 と狭く、字幅が
+        その箱より広い数字で横ボックス律速になり高さが 0.6 倍域へ潰れていた（aspect
+        0.7 は旧箱 0.55 を超え新箱 0.7 に収まるため、この回帰を弁別できる）。
+        """
+        pipeline = PlotterPipeline()
+        base_fs = 6.0
+        # 漢字相当: ほぼ正方形（aspect~0.95）。数字相当: 縦長だが旧箱より広い（aspect~0.7）。
+        kanji_unit = [
+            np.array([[0.0, 0.0], [0.95, 0.0], [0.95, 1.0], [0.0, 1.0]]),
+        ]
+        digit_unit = [
+            np.array([[0.0, 0.0], [0.7, 0.0], [0.7, 1.0], [0.0, 1.0]]),
+        ]
+
+        def _height(strokes, char, fs):
+            placed = pipeline._position_strokes(
+                strokes, CharPlacement(char=char, x=10.0, y=20.0, font_size=fs)
+            )
+            pts = np.concatenate(placed, axis=0)
+            return float(pts[:, 1].max() - pts[:, 1].min())
+
+        kanji_h = _height(kanji_unit, "漢", base_fs * 1.0)
+        digit_h = _height(digit_unit, "2", base_fs * 0.8)
+
+        ratio = digit_h / kanji_h
+        assert np.isclose(ratio, 0.8, atol=0.08)
 
     def test_inference_v2_with_reference(self, tmp_path):
         """V2推論時にreference_strokesがKanjiVGから渡される。"""
