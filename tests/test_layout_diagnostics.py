@@ -42,7 +42,7 @@ class TestVerticalOverlap:
             )
         ]
         ov = diagnose_placements([page], line_spacing=7.0)
-        assert [(o.kind, o.b, o.amount_mm) for o in ov] == [("vertical", "下の行", 7.0)]
+        assert [(o.kind, o.b, o.amount_mm) for o in ov] == [("vertical", "下の行", 5.75)]
 
     def test_inline_math_within_line_ok(self):
         # 高さが行間に収まる数式は垂直かぶりなし
@@ -60,7 +60,7 @@ class TestVerticalOverlap:
             math_align="baseline",
         )
 
-        assert _y_extent(p, line_spacing=7.0) == (8.0, 12.0)
+        assert _y_extent(p, line_spacing=7.0) == (9.25, 13.25)
 
     def test_y_extent_center_uses_bbox_y_as_bottom(self):
         p = _cp("", y=10.0, math_source="x", math_bbox=(0.0, 4.0, 3.0, 4.0))

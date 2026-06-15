@@ -225,7 +225,7 @@ class TestStrokeRendererMethods:
         assert arr[0].tolist() == [10.0, 20.0]
         assert arr[1].tolist() == [50.0, 20.0]
 
-    @pytest.mark.parametrize("char", ["A", "1", "。", "+"])
+    @pytest.mark.parametrize("char", ["A", "+"])
     def test_skip_non_japanese_skips_non_japanese_chars(self, char):
         renderer = StrokeRenderer(skip_non_japanese=True)
         placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
@@ -238,6 +238,17 @@ class TestStrokeRendererMethods:
 
     @pytest.mark.parametrize("char", ["あ", "漢", "カ", "ー", "ヴ"])
     def test_skip_non_japanese_keeps_japanese_chars(self, char):
+        renderer = StrokeRenderer(skip_non_japanese=True)
+        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) > 0
+        assert len(strokes) == len(finishes)
+        assert char not in renderer._last_coverage.skipped
+
+    @pytest.mark.parametrize("char", ["0", "1", "９", "、", "。", "，", "．", ",", "."])
+    def test_skip_non_japanese_keeps_digits_and_punctuation(self, char):
         renderer = StrokeRenderer(skip_non_japanese=True)
         placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
 

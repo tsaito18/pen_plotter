@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 class StrokeRenderer:
     _SKIP_RENDER = set(" \t\u3000")
+    _NON_JAPANESE_MODE_ALLOWED_CHARS = set("、。，．,.")
 
     _CHAR_SUBSTITUTIONS: dict[str, str] = {
         "\uff5b": "{",
@@ -208,7 +209,7 @@ class StrokeRenderer:
 
     @staticmethod
     def _is_japanese_text_char(char: str) -> bool:
-        """一時オプション用の描画許可判定。漢字・ひらがな・カタカナだけ通す。"""
+        """一時オプション用の描画許可判定。日本語文で必要な字だけ通す。"""
         if len(char) != 1:
             return False
         code = ord(char)
@@ -229,12 +230,26 @@ class StrokeRenderer:
         )
 
     @classmethod
+    def _is_allowed_non_japanese_mode_char(cls, char: str) -> bool:
+        if len(char) != 1:
+            return False
+        code = ord(char)
+        return (
+            char in cls._NON_JAPANESE_MODE_ALLOWED_CHARS
+            or 0x30 <= code <= 0x39
+            or 0xFF10 <= code <= 0xFF19
+        )
+
+    @classmethod
     def _should_skip_non_japanese(cls, placement: CharPlacement) -> bool:
         if placement.line_segment is not None:
             return getattr(placement, "role", None) is not None
         if getattr(placement, "math_source", None) or getattr(placement, "math_skip", False):
             return True
-        return not cls._is_japanese_text_char(placement.char)
+        return not (
+            cls._is_japanese_text_char(placement.char)
+            or cls._is_allowed_non_japanese_mode_char(placement.char)
+        )
 
     def _resolve_finishes(self, raw_types: list[str], positioned: list[Stroke]) -> list[str]:
         """筆画タイプを決める。kvg:type があれば分類、無ければ軌跡から推定。
