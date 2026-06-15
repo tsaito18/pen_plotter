@@ -59,14 +59,15 @@ class TestPlotterPipeline:
             CharPlacement(char="A", x=8.0, y=0.0, font_size=8.0),
             CharPlacement(char="1", x=12.0, y=0.0, font_size=8.0),
             CharPlacement(char="。", x=16.0, y=0.0, font_size=8.0),
-            CharPlacement(char="い", x=20.0, y=0.0, font_size=8.0),
+            CharPlacement(char="ー", x=20.0, y=0.0, font_size=8.0),
+            CharPlacement(char="い", x=24.0, y=0.0, font_size=8.0),
         ]
 
         strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements)
 
-        assert len(strokes) == 2
-        assert len(finishes) == 2
-        assert pipeline._last_coverage.skipped == ["A", "1", "。"]
+        assert len(strokes) == 5
+        assert len(finishes) == 5
+        assert pipeline._last_coverage.skipped == ["A"]
 
     def test_strokes_to_gcode(self, pipeline):
         placements = pipeline.text_to_placements("あ")
