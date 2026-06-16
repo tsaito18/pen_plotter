@@ -24,10 +24,10 @@ class TestUISettingsDefault:
         assert s.margin_bottom == 34.0
         assert s.margin_left == 5.0
         assert s.margin_right == 5.0
-        assert s.temperature == 1.0
-        assert s.messiness == 1.0
+        assert s.temperature == 0.2
+        assert s.messiness == 0.4
         assert s.pressure_variation == 0.0
-        assert s.instance_variation == 0.5
+        assert s.instance_variation == 0.1
         assert s.entry_taper == 0.0
         assert s.connection_strength == 0.0
 
@@ -321,16 +321,29 @@ class TestBuildPipeline:
         assert cfg.size_variation == 0.0
         assert cfg.slant_variation == 0.0
 
-    def test_build_pipeline_default_messiness_unchanged(self):
-        """messiness=1.0（デフォルト）は AugmentConfig の素の値と一致。"""
+    def test_build_pipeline_messiness_one_is_identity_scale(self):
+        """messiness=1.0 は AugmentConfig の素の値と一致（恒等スケール）。"""
+        from dataclasses import replace
+
+        from src.model.augmentation import AugmentConfig
+        from src.ui.web_app import build_pipeline
+
+        base = AugmentConfig()
+        pipeline = build_pipeline(replace(UISettings.default(), messiness=1.0))
+        cfg = pipeline._typesetter.augmenter._config
+        assert cfg.baseline_drift == pytest.approx(base.baseline_drift)
+        assert cfg.slant_variation == pytest.approx(base.slant_variation)
+
+    def test_build_pipeline_default_messiness_scales_below_one(self):
+        """既定 messiness=0.4 は揺らぎ最小寄り。素値より小さくスケールされる。"""
         from src.model.augmentation import AugmentConfig
         from src.ui.web_app import build_pipeline
 
         base = AugmentConfig()
         pipeline = build_pipeline(UISettings.default())
         cfg = pipeline._typesetter.augmenter._config
-        assert cfg.baseline_drift == pytest.approx(base.baseline_drift)
-        assert cfg.slant_variation == pytest.approx(base.slant_variation)
+        assert cfg.baseline_drift == pytest.approx(base.baseline_drift * 0.4)
+        assert cfg.slant_variation == pytest.approx(base.slant_variation * 0.4)
 
     def test_build_pipeline_passes_through_kwargs(self, tmp_path):
         """build_pipeline は user_strokes_dir などを既存シグネチャ通り受け渡す。"""

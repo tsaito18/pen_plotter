@@ -302,6 +302,91 @@ class TestApplyTremor:
         r2 = HandwritingAugmenter(seed=99).apply_tremor(stroke)
         np.testing.assert_array_equal(r1, r2)
 
+    def test_two_point_stroke_safe(self):
+        """2点ストローク（幾何バー）でも例外なく点数2を維持。"""
+        aug = HandwritingAugmenter(seed=42)
+        bar = np.array([[0.0, 0.0], [2.0, 0.0]], dtype=np.float64)
+        result = aug.apply_tremor(bar)
+        assert result.shape == bar.shape
+
+    def test_zero_length_stroke_unchanged(self):
+        """総弧長0（全点同一座標）なら素通り。"""
+        aug = HandwritingAugmenter(seed=42)
+        degenerate = np.array([[1.0, 1.0]] * 5, dtype=np.float64)
+        result = aug.apply_tremor(degenerate)
+        np.testing.assert_array_equal(result, degenerate)
+
+    def test_amplitude_bounds_spatial(self):
+        """変位の絶対値は amplitude 以下（弧長基準でも保証）。"""
+        amp = 0.05
+        aug = HandwritingAugmenter(seed=7)
+        line = np.column_stack(
+            [np.linspace(0.0, 10.0, 100), np.zeros(100)]
+        ).astype(np.float64)
+        result = aug.apply_tremor(line, amplitude=amp)
+        max_disp = np.abs(result - line).max()
+        assert max_disp <= amp + 1e-10
+
+    def test_wavelength_constant_across_lengths(self):
+        """波長が画の長さによらず弧長(mm)で一定。
+
+        全長正規化(旧仕様)だと波長は長さに反比例して短い画ほど高周波の
+        さざ波になる。弧長基準では同一 spatial_freq でゼロ交差間隔(=半波長,
+        mm)が長い画と短い画でほぼ一致することを確認する（横棒のガタガタ抑制）。
+        """
+        spatial_freq = (0.4, 0.4)  # cycles/mm 固定（決定的に比較）
+        long_line = np.column_stack(
+            [np.linspace(0.0, 10.0, 100), np.zeros(100)]
+        ).astype(np.float64)
+        short_line = np.column_stack(
+            [np.linspace(0.0, 2.0, 20), np.zeros(20)]
+        ).astype(np.float64)
+
+        long_disp = (
+            HandwritingAugmenter(seed=3).apply_tremor(
+                long_line, spatial_freq_range=spatial_freq
+            )
+            - long_line
+        )[:, 0]
+        short_disp = (
+            HandwritingAugmenter(seed=3).apply_tremor(
+                short_line, spatial_freq_range=spatial_freq
+            )
+            - short_line
+        )[:, 0]
+
+        long_x = long_line[:, 0]
+        short_x = short_line[:, 0]
+        long_hw = _mean_zero_crossing_spacing(long_x, long_disp)
+        short_hw = _mean_zero_crossing_spacing(short_x, short_disp)
+
+        # 半波長 = 1/(2*spatial_freq) = 1.25mm を両者とも近似するはず
+        expected = 1.0 / (2.0 * spatial_freq[0])
+        assert abs(long_hw - expected) < 0.25
+        assert abs(short_hw - expected) < 0.25
+        assert abs(long_hw - short_hw) < 0.25
+
+
+def _mean_zero_crossing_spacing(x: np.ndarray, disp: np.ndarray) -> float:
+    """変位系列のゼロ交差間隔の平均（x軸=mm単位）を返す。
+
+    隣接ゼロ交差間の x 距離 ≒ 半波長。波長が弧長(mm)で一定かを検証するため、
+    点インデックスではなく物理座標 x の差分で間隔を測る。
+    """
+    x = np.asarray(x, dtype=np.float64)
+    d = np.asarray(disp, dtype=np.float64)
+    signs = np.sign(d)
+    crossings: list[float] = []
+    for i in range(len(d) - 1):
+        if signs[i] == 0 or signs[i + 1] == 0 or signs[i] == signs[i + 1]:
+            continue
+        # 線形補間で d=0 となる x を求める
+        frac = abs(d[i]) / (abs(d[i]) + abs(d[i + 1]))
+        crossings.append(x[i] + frac * (x[i + 1] - x[i]))
+    if len(crossings) < 2:
+        return float("nan")
+    return float(np.mean(np.diff(crossings)))
+
 
 def _lag1_autocorr(series: np.ndarray) -> float:
     """系列の lag-1 自己相関を返す。"""

@@ -4,7 +4,13 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from src.model.char_encoder import CharEncoder  # noqa: E402
-from src.model.inference import StrokeInference, _detect_device, _limit_style_sample  # noqa: E402
+from src.model.inference import (  # noqa: E402
+    TEMP_NOISE_AMP,
+    StrokeInference,
+    _detect_device,
+    _limit_style_sample,
+    _temperature_noise,
+)
 from src.model.stroke_model import StrokeGenerator  # noqa: E402
 from src.model.style_encoder import StyleEncoder  # noqa: E402
 
@@ -682,3 +688,186 @@ class TestStrokeInferenceV3Transformer:
         )
         for s in strokes:
             assert np.all(np.isfinite(s))
+
+
+class TestTemperatureNoise:
+    """低周波温度ノイズ生成関数の単体テスト（モデル不要）。"""
+
+    def test_amp_constant_within_clamp_third(self):
+        """振幅定数は offset clamp の約1/3 以内（字形を破綻させない上限ガード）。"""
+        from src.model.finetune import OFFSET_CLAMP
+
+        assert 0.0 < TEMP_NOISE_AMP <= OFFSET_CLAMP / 2.0
+
+    def test_shape_and_dtype(self):
+        out = _temperature_noise(num_strokes=3, num_points=32, amp=0.1)
+        assert out.shape == (3, 32, 2)
+        assert out.dtype == np.float32
+
+    def test_zero_amp_is_identity_zero(self):
+        out = _temperature_noise(num_strokes=2, num_points=32, amp=0.0)
+        assert np.all(out == 0.0)
+
+    def test_reproducible_under_same_seed(self):
+        np.random.seed(7)
+        a = _temperature_noise(num_strokes=2, num_points=32, amp=0.1)
+        np.random.seed(7)
+        b = _temperature_noise(num_strokes=2, num_points=32, amp=0.1)
+        assert np.array_equal(a, b)
+
+    def test_differs_under_different_seed(self):
+        np.random.seed(1)
+        a = _temperature_noise(num_strokes=2, num_points=32, amp=0.1)
+        np.random.seed(2)
+        b = _temperature_noise(num_strokes=2, num_points=32, amp=0.1)
+        assert not np.allclose(a, b)
+
+    def test_low_frequency_smoother_than_white_noise(self):
+        """低周波性: 制御点補間ノイズの隣接点差分RMSが、同振幅の白色ガウスより明確に小さい。"""
+        amp = 0.1
+        num_strokes, num_points = 8, 32
+        np.random.seed(0)
+        lf = _temperature_noise(num_strokes, num_points, amp=amp)
+
+        np.random.seed(0)
+        white = np.random.normal(0.0, amp, size=(num_strokes, num_points, 2)).astype(np.float32)
+
+        lf_step_rms = np.sqrt(np.mean(np.diff(lf, axis=1) ** 2))
+        white_step_rms = np.sqrt(np.mean(np.diff(white, axis=1) ** 2))
+        # 補間で滑らかにしたぶん隣接差分は白色ノイズの半分未満になるはず
+        assert lf_step_rms < white_step_rms * 0.5
+
+
+class TestStrokeInferenceV3Temperature:
+    """温度連動の低周波字形ゆらぎ（V3 per-point offset 経路）。"""
+
+    @pytest.fixture
+    def v3_offset_engine(self, tmp_path):
+        from src.model.stroke_deformer import StrokeDeformer
+
+        style_dim = 64
+        deformer = StrokeDeformer(style_dim=style_dim, hidden_dim=128)
+        style_enc = StyleEncoder(input_dim=3, hidden_dim=32, style_dim=style_dim)
+        checkpoint = {
+            "deformer_state_dict": deformer.state_dict(),
+            "style_encoder_state_dict": style_enc.state_dict(),
+            "config": {
+                "style_dim": style_dim,
+                "hidden_dim": 128,
+                "num_points": 32,
+                "deformer_type": "offset",
+            },
+            "norm_stats": {"mean_x": 0.0, "mean_y": 0.0, "std_x": 1.0, "std_y": 1.0},
+        }
+        ckpt_path = tmp_path / "v3_temp_model.pt"
+        torch.save(checkpoint, ckpt_path)
+        return StrokeInference(
+            checkpoint_path=ckpt_path,
+            style_encoder_kwargs={"input_dim": 3, "hidden_dim": 32, "style_dim": 64},
+            device="cpu",
+        )
+
+    @pytest.fixture
+    def style_and_ref(self):
+        style_sample = torch.randn(1, 20, 3)
+        reference = [
+            np.array([[0.0, 0.0], [2.0, 3.0], [5.0, 5.0]], dtype=np.float64),
+            np.array([[5.0, 0.0], [3.0, 2.0], [0.0, 5.0]], dtype=np.float64),
+        ]
+        return style_sample, reference
+
+    def test_temperature_zero_matches_no_noise(self, v3_offset_engine, style_and_ref):
+        """後方互換: temperature=0 はノイズ非加算パスと完全一致（noise_scale=0 で幾何揺らぎも排除）。"""
+        style_sample, reference = style_and_ref
+        np.random.seed(99)
+        a = v3_offset_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+            noise_scale=0.0,
+            temperature=0.0,
+        )
+        np.random.seed(123)  # 異なる seed でも温度0なら不変
+        b = v3_offset_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+            noise_scale=0.0,
+            temperature=0.0,
+        )
+        assert len(a) == len(b)
+        for sa, sb in zip(a, b):
+            assert np.array_equal(sa, sb)
+
+    def test_temperature_produces_diversity(self, v3_offset_engine, style_and_ref):
+        """多様性: 同一(style, ref)でも seed が違えば temperature>0 で出力が有意に変わる。"""
+        style_sample, reference = style_and_ref
+        np.random.seed(1)
+        a = v3_offset_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+            noise_scale=0.0,
+            temperature=1.0,
+        )
+        np.random.seed(2)
+        b = v3_offset_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+            noise_scale=0.0,
+            temperature=1.0,
+        )
+        # _smooth_stroke は弧長比例で点数を割り当てるため、形が変わると点数も変わりうる。
+        # 点数非依存に重心と端点で「有意に異なる」を判定する。
+        def _signature(stroke):
+            return np.concatenate([stroke.mean(axis=0), stroke[0], stroke[-1]])
+
+        sig_diffs = [np.abs(_signature(sa) - _signature(sb)).max() for sa, sb in zip(a, b)]
+        assert max(sig_diffs) > 1e-3
+
+    def test_temperature_reproducible(self, v3_offset_engine, style_and_ref):
+        """再現性: 同一 seed・同一 temperature なら2回生成は完全一致。"""
+        style_sample, reference = style_and_ref
+        np.random.seed(55)
+        a = v3_offset_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+            noise_scale=0.0,
+            temperature=1.0,
+        )
+        np.random.seed(55)
+        b = v3_offset_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+            noise_scale=0.0,
+            temperature=1.0,
+        )
+        for sa, sb in zip(a, b):
+            assert np.array_equal(sa, sb)
+
+    def test_temperature_offsets_stay_clamped(self, v3_offset_engine, style_and_ref):
+        """clamp維持: 大きな temperature でも変形は参照±OFFSET_CLAMP の範囲に収まる。
+
+        ノイズは clamp の前に加算されるため、振幅を上げても最終 offset は
+        ±OFFSET_CLAMP で頭打ちになり字形は破綻しない。
+        """
+        from src.model.data_utils import resample_stroke
+        from src.model.finetune import OFFSET_CLAMP
+
+        style_sample, _ = style_and_ref
+        # smooth_offsets を効かせるため num_points(=32) より長い直線参照を使う
+        reference = [np.array([[0.0, 0.0], [5.0, 5.0]], dtype=np.float64)]
+
+        np.random.seed(3)
+        strokes = v3_offset_engine.generate(
+            style_sample=style_sample,
+            reference_strokes=reference,
+            noise_scale=0.0,
+            temperature=5.0,
+        )
+
+        ref_rs = resample_stroke(reference[0].astype(np.float32), v3_offset_engine.num_points)
+        ref_min = ref_rs.min(axis=0)
+        ref_max = ref_rs.max(axis=0)
+        out = strokes[0]
+        # _smooth_stroke の補間で生じる僅かなオーバーシュートを許容するマージン
+        margin = 0.2
+        assert np.all(out >= ref_min - OFFSET_CLAMP - margin)
+        assert np.all(out <= ref_max + OFFSET_CLAMP + margin)

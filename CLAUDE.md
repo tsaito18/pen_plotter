@@ -41,8 +41,8 @@ KanjiVG参照ストローク → リサンプリング（32点）
 StyleEncoder(user_samples) → style_vector（どんな書き癖か）
   + ProjectionHead → SupCon対照学習（訓練時のみ、推論時は不使用）
 StrokeDeformer or TransformerDeformer → オフセット (N, 2)
-  MLP版: smooth_offsets(kernel=11) → clamp(±0.6)
-  Transformer版: Self-Attention(2層) + Cross-Attention(style) → clamp(±0.6)（smooth不要）
+  MLP版: smooth_offsets(kernel=15) → clamp(±0.4)
+  Transformer版: Self-Attention(2層) + Cross-Attention(style) → smooth_offsets(kernel=15) → clamp(±0.4)
 StrokeAligner(Hungarian + MHD) → ストローク順序/方向のアライメント（マージ/スプリット検出付き）
 + ストローク単位の幾何バリエーション（回転・スケール・シフト）
 + 文字配置の揺らぎ（ベースライン・字間・サイズ・傾き）+ ストローク太さ変化
@@ -150,14 +150,20 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - V2 (LSTM+MDN) は300k samples, A100でも読めない品質で断念
 - V3: KanjiVG参照ストロークにper-point offsetを適用するスタイル転写方式
 - ユーザーデータのみで訓練（CASIA不使用 — 中国語/日本語ストロークの不一致でノイズ）
-- オフセットクランプ±1.2 + スムージングkernel=11（訓練/推論で統一）
+- オフセットクランプ±0.4 + スムージングkernel=15（訓練/推論で統一、finetune.py の OFFSET_CLAMP/SMOOTHING_KERNEL_SIZE が単一ソース）
+- **きれいさ/バランス優先デフォルト（2026-06）**: per-stroke独立ランダム変形（instance_variation/温度/messiness）が過剰だと各画がバラつき「汚い・ストローク間バランス崩れ」になる（実測で判明：横棒うねりやtremorは主因でなく、揺らぎの積み重ねが主因）。デフォルトを揺らぎ最小化（instance_variation=0.1, temperature=0.2, messiness=0.4）。揺らぎはGUIスライダーで増やせる設計
+- **温度の機能化**: V3 per-point offsetは決定論的でtemperatureがデッドコードだった。推論時に低周波の相関ノイズ（`inference._temperature_noise`、TEMP_NOISE_AMP=0.12×temperature、clamp前に注入、点間補間で滑らか）を加えtemperatureを有効化。同字でも毎回わずかに変わる。temperature=0で従来と完全一致（後方互換）。上げ過ぎると酔っ払い字になるため控えめが適正
+- **横棒の右上がり矯正**: 日本語手書きの習性再現。全変形（slant含む）後の最終段で水平画のみ緩い右上がりを下限保証（`stroke_renderer._enforce_horizontal_rise`、_RISE_MIN_ANGLE=2°）。既に右上がりの画・数字は対象外。字がslantで傾いても横棒は右下がりにならない
+- **英字x-height統一**: `_ascii_letter_strokes`の小文字グリフ上端をx-height(0.70)/ascender(0.95)/descender(下端<0)で統一し「RePort」→「report」（混在の最大要因を解消）
+- **tremor絶対長化**: `apply_tremor`の周波数をストローク全長正規化から実弧長(mm)基準（spatial_freq 0.3-0.5 cycles/mm、波長2-3.3mm）へ。短い横棒のさざ波が長短によらず一定波長の緩いうねりに
+- **waver経路統一**: 描画経路ごとの質感差を縮小（幾何英字3.0→1.5, 数式画像6.0→2.5, 記号0→0.4で定規直線感解消, 画数逓減floor 0.3→0.5）
 - ストローク単位の幾何バリエーション（回転・スケール・シフト）で自然さ追加
 - 局所曲率特徴追加でストロークの曲がり角に大きなオフセット許容
 - augmentation設定（baseline_drift=0.3, spacing=0.2, size=0.05）＋文字単位の傾き(slant_variation=0.02)有効 — 手書きの揺らぎ。slantはCharPlacement.slant経由で_position_strokesが文字中心回転
-- **汚さスライダー（GUI）**: `UISettings.messiness`（0=整った字, 1=標準=上記の素値, 2=大きく乱れる）で baseline_drift/字間/サイズ/傾きを一括スケール。`web_app._scaled_augment_config()` が単一ソース。GUIの「温度」（=ML per-point offsetの字形揺らぎ）とは別軸
+- **汚さスライダー（GUI）**: `UISettings.messiness`（0=整った字, **デフォルト0.4=バランス重視のきれい寄り**, 1.0=素値, 2=大きく乱れる）で baseline_drift/字間/サイズ/傾きを一括スケール。`web_app._scaled_augment_config()` が単一ソース。GUIの「温度」（=ML per-point offsetの字形揺らぎ）とは別軸
 - **人らしさ3スライダー（GUI）**: 定幅ペン感を消し「人が書いた」感を出す調整軸。すべて実機キャリブ前提でデフォルトは控えめ。
   - `pressure_variation`(筆圧変化, 既定0.35): 画内の濃淡を `stroke_finishing.pressure_modulation()` で変調（下ろし濃く・上げ薄く＋低周波揺らぎ）。contact に乗算するので preview線幅と実機Zが連動。0=均一(定幅ペン感)
-  - `instance_variation`(字のばらつき, 既定0.5): 同一字の繰り返しで形を変える per-stroke ランダムaffine（`StrokeRenderer._apply_instance_variation`）。`augmenter.enabled` と多画字の `_waver_scale` に従う
+  - `instance_variation`(字のばらつき, 既定0.1): 同一字の繰り返しで形を変える per-stroke ランダムaffine（`StrokeRenderer._apply_instance_variation`）。`augmenter.enabled` と多画字の `_waver_scale` に従う。**既定を0.5→0.1に下げた**（過剰だと画がバラつきバランスが崩れるため）
   - `entry_taper`(入筆, 実機既定0): 始筆を軽く入れて立ち上げる `stroke_finishing.entry_modulation()`。収筆(はらい/はね)と対。**実機注意**: 始筆でZを動かすためかすれ得る→実機は0
   - `connection_strength`(連綿, 既定0): 同字の近い画を確率的に薄いつなぎ画(`CONNECT`)で結ぶ `stroke_finishing.insert_connections()`。**近いほど高確率＋乱数**(`prob=strength*(1-gap/max_gap)`, `max_gap=strength*0.6*scale`)。generatorは`continue_from_prev`でペンを上げず継続=真の連綿。つなぎ画はZ一定(`CONNECT_CONTACT`)なので点線化しない。はらい/はねの後ろには付けない
   - **実機の制約**: 単線シャーペンは描画中にZを上下に振るとペンがバウンドして点線化する。よって筆圧変化・入筆(描画中Z変動)は実機デフォルト0。連綿はZ一定なのでOK。終端リフト(はらい/はね)は単調変化なのでOK

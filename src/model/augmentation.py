@@ -210,17 +210,36 @@ class HandwritingAugmenter:
     def apply_tremor(
         self,
         stroke: Stroke,
-        freq_range: tuple[float, float] = (3.0, 5.0),
+        spatial_freq_range: tuple[float, float] = (0.3, 0.5),
         amplitude: float = 0.01,
     ) -> Stroke:
-        """3-5Hz低周波振動を重畳。amplitudeはmm単位。"""
+        """手ブレ振動を弧長(mm)基準で重畳。amplitudeはmm単位。
+
+        位相を全長正規化(0..1)で進めると波長が画の長さに反比例し、短い画
+        （4.5mm字の横棒=実長~2mm等）ほど高周波のさざ波になって横棒が
+        ガタガタに見える。そこで位相を累積弧長 s(mm)で進め、波長を画の
+        長短によらず物理的に一定（自然な手ブレ波長~2-3mm）にする。
+
+        Args:
+            stroke: 入力ストローク(mm座標)。
+            spatial_freq_range: 空間周波数の範囲(cycles/mm)。既定(0.3,0.5)は
+                波長2.0-3.3mmに相当する緩いうねり。
+            amplitude: 振動振幅(mm)。x/yに同振幅・位相差π/3で楕円的揺れを作る。
+
+        Returns:
+            手ブレを重畳したストローク(点数・順序は不変)。
+        """
         if len(stroke) < 2 or not self._config.enabled:
             return stroke
-        t = np.linspace(0, 1, len(stroke))
-        freq = self._rng.uniform(*freq_range)
+        seg_len = np.linalg.norm(np.diff(stroke, axis=0), axis=1)
+        s = np.concatenate([[0.0], np.cumsum(seg_len)])
+        if s[-1] < 1e-9:
+            return stroke
+        spatial_freq = self._rng.uniform(*spatial_freq_range)
         phase = self._rng.uniform(0, 2 * np.pi)
-        tremor_x = amplitude * np.sin(2 * np.pi * freq * t + phase)
-        tremor_y = amplitude * np.sin(2 * np.pi * freq * t + phase + np.pi / 3)
+        omega = 2 * np.pi * spatial_freq * s
+        tremor_x = amplitude * np.sin(omega + phase)
+        tremor_y = amplitude * np.sin(omega + phase + np.pi / 3)
         return stroke + np.column_stack([tremor_x, tremor_y])
 
     def _apply_jitter(self, stroke: Stroke) -> Stroke:
