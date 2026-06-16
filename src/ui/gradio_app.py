@@ -92,6 +92,7 @@ _HELP_MARKDOWN = """\
 | 表 | `\\| 列1 \\| 列2 \\|`<br>`\\|---\\|---\\|`<br>`\\| a \\| b \\|` | パイプ表（2行目の区切り必須）。中央寄せで描画 |
 | 表キャプション | 表の直後に `: 表1 タイトル` | 表の下に中央寄せで配置 |
 | 段落区切り | 空行 | 空行で段落を分割 |
+| 段落字下げなし | `\\noindent 本文` | 段落先頭の字下げを抑止 |
 
 ### 対応文字
 
@@ -855,6 +856,10 @@ def create_app(
                             value=False,
                             label="日本語文字だけプロット（英数字・数式・記号をスキップ）",
                         )
+                        plot_page_numbers = gr.Checkbox(
+                            value=default_settings.plot_page_numbers,
+                            label="ページ番号をプロット",
+                        )
                         temperature = gr.Slider(
                             0.1,
                             2.0,
@@ -1102,6 +1107,34 @@ def create_app(
             lambda _value: (True, gr.update(value=_STALE_BANNER_HTML, visible=True)),
             inputs=[skip_non_japanese],
             outputs=[preview_stale, stale_banner],
+        )
+
+        def _on_plot_page_numbers_change(value: bool, settings: UISettings):
+            new_settings = replace(settings, plot_page_numbers=bool(value))
+            errors = new_settings.validate()
+            has_err = bool(errors)
+            return (
+                new_settings,
+                True,
+                gr.update(value=_STALE_BANNER_HTML, visible=True),
+                gr.update(value=_validation_status(errors), visible=has_err),
+                gr.update(interactive=not has_err),
+                gr.update(interactive=not has_err),
+                new_settings.to_dict(),
+            )
+
+        plot_page_numbers.change(
+            _on_plot_page_numbers_change,
+            inputs=[plot_page_numbers, settings_state],
+            outputs=[
+                settings_state,
+                preview_stale,
+                stale_banner,
+                validation_md,
+                preview_btn,
+                gcode_btn,
+                persisted_settings,
+            ],
         )
 
         def _on_preview(
@@ -1423,6 +1456,7 @@ def create_app(
                 d.entry_taper,
                 d.connection_strength,
                 False,
+                d.plot_page_numbers,
                 d.to_dict(),  # ブラウザ永続化もデフォルトへ
             )
 
@@ -1437,6 +1471,7 @@ def create_app(
                 gcode_btn,
                 *slider_components,
                 skip_non_japanese,
+                plot_page_numbers,
                 persisted_settings,
             ],
         )
@@ -1470,6 +1505,7 @@ def create_app(
                 settings.instance_variation,
                 settings.entry_taper,
                 settings.connection_strength,
+                settings.plot_page_numbers,
                 gr.update(value=prof) if profile_options else gr.update(),
                 gr.update(value=_validation_status(errors), visible=has_err),
                 gr.update(interactive=not has_err),
@@ -1482,6 +1518,7 @@ def create_app(
             outputs=[
                 settings_state,
                 *slider_components,
+                plot_page_numbers,
                 profile_select,
                 validation_md,
                 preview_btn,

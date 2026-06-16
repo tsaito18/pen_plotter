@@ -181,6 +181,37 @@ class TestStrokeRendererMethods:
         assert period is not None and kuten is not None
         assert np.allclose(period[0], kuten[0])
 
+    @pytest.mark.parametrize("char", ["、", "，", ","])
+    def test_comma_punct_slants_left_down_and_stays_short(self, char):
+        renderer = StrokeRenderer()
+        strokes = renderer._simple_punct_strokes(char)
+        assert strokes is not None
+
+        raw = strokes[0]
+        assert raw.shape == (2, 2)
+        assert raw[1, 0] < raw[0, 0]
+        assert raw[1, 1] < raw[0, 1]
+
+        placement = CharPlacement(char=char, x=10.0, y=20.0, font_size=6.0)
+        positioned = renderer._position_strokes(strokes, placement)[0]
+        length = np.linalg.norm(positioned[1] - positioned[0])
+        assert 2.5 <= length <= 2.9
+        assert length == pytest.approx(2.7, rel=0.06)
+        assert 1.55 <= np.ptp(positioned[:, 0]) <= 1.7
+        assert 2.1 <= np.ptp(positioned[:, 1]) <= 2.35
+        assert positioned[1, 0] < positioned[0, 0]
+        assert positioned[1, 1] < positioned[0, 1]
+
+    @pytest.mark.parametrize("char", ["、", "，", ","])
+    def test_comma_punct_finish_is_harai(self, char):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char=char, x=10.0, y=20.0, font_size=6.0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == 1
+        assert finishes == ["harai"]
+
     def test_simple_paren_strokes(self):
         from src.layout.typesetter import CharPlacement
 
@@ -797,7 +828,7 @@ class TestGenerateCharStrokesWithFinishes:
     def test_geometric_paths_all_none(self):
         renderer = StrokeRenderer()
         # 句読点 / ASCII数式 / 括弧 / 数式記号 / ASCIIレター / 数式ワード
-        for char in ("、", "=", "(", "×", "A", "α"):
+        for char in ("。", "=", "(", "×", "A", "α"):
             placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
             strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
             assert len(strokes) == len(finishes), f"{char}: len mismatch"

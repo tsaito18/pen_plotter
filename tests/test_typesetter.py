@@ -385,6 +385,32 @@ class TestParagraphIndent:
         assert len(para2_chars) == 1
         assert para2_chars[0].x == pytest.approx(area.x + 6.0)
 
+    def test_noindent_second_paragraph_not_indented(self):
+        """\\noindent の本文段落は段落先頭でもインデントしない。"""
+        cfg = PageConfig()
+        ts = Typesetter(cfg, font_size=6.0)
+        layout = PageLayout(cfg)
+        area = layout.content_area()
+
+        pages = ts.typeset("あいう\n\\noindent かきく")
+        placements = pages[0]
+
+        para2_chars = [p for p in placements if p.char == "か"]
+        assert len(para2_chars) == 1
+        assert para2_chars[0].x == pytest.approx(area.x)
+        assert "\\" not in [p.char for p in placements]
+
+    def test_noindent_heading_following_body_starts_at_body_x(self):
+        """見出し直後の \\noindent 本文は本文階層の開始位置に揃う。"""
+        ts = Typesetter(PageConfig(), font_size=6.0)
+        pages = ts.typeset("# 見出し\n\\noindent 本文")
+        placements = pages[0]
+
+        body_chars = [p for p in placements if p.char == "本"]
+        assert len(body_chars) == 1
+        assert body_chars[0].x == pytest.approx(25.0)
+        assert "\\" not in [p.char for p in placements]
+
     def test_no_indent_on_wrapped_lines(self):
         """行折り返しで生まれた行にはインデントしない。"""
         cfg = PageConfig()
@@ -619,8 +645,8 @@ class TestCharSizeScale:
     def test_halfwidth_scale(self):
         from src.layout.char_metrics import char_type_scale
 
-        assert char_type_scale("a") == 0.7
-        assert char_type_scale("1") == 0.7
+        assert char_type_scale("a") == 0.8
+        assert char_type_scale("1") == 0.8
 
     def test_effective_scale_includes_density(self):
         """effective は種別×密度。複雑な漢字ほど大きく、簡単な漢字ほど小さい。"""

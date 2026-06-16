@@ -136,6 +136,7 @@ class ParsedDocument:
     heading_lines: dict[int, int]  # global_line_idx → heading_level
     line_body_level: dict[int, int]  # global_line_idx → body indent level
     para_start_indices: set[int]
+    no_indent_indices: set[int]
     block_math_lines: dict[int, str]  # global_line_idx → math source
     # global_line_idx → 表の行データ（先頭ヘッダ）。パイプ表ブロックの起点行に登録。
     table_blocks: dict[int, list[list[str]]] = field(default_factory=dict)
@@ -333,6 +334,7 @@ class Typesetter:
             h_level = doc.heading_lines.get(global_line_idx, 0)
             body_level = doc.line_body_level.get(global_line_idx, 0)
             is_para_start = global_line_idx in doc.para_start_indices
+            is_no_indent = global_line_idx in doc.no_indent_indices
             is_page_first = line_idx == 0
 
             placements = self._place_line(
@@ -344,6 +346,7 @@ class Typesetter:
                 heading_level=h_level,
                 body_level=body_level,
                 is_para_start=is_para_start,
+                is_no_indent=is_no_indent,
                 is_page_first=is_page_first,
                 heading_x=_HEADING_X,
                 body_x=_BODY_X,
@@ -448,6 +451,7 @@ class Typesetter:
 
         lines: list[str] = []
         para_start_indices: set[int] = set()
+        no_indent_indices: set[int] = set()
         block_math_lines: dict[int, str] = {}
         table_blocks: dict[int, list[list[str]]] = {}
         table_captions: dict[int, str] = {}
@@ -500,6 +504,11 @@ class Typesetter:
                 heading_level = 1
                 display_para = para[1:].strip()
 
+            no_indent = False
+            if heading_level == 0 and re.match(r"^\\noindent[ \t]", display_para):
+                no_indent = True
+                display_para = display_para[len(r"\noindent") + 1 :]
+
             if heading_level > 0:
                 if len(lines) > 0 and lines != [""]:
                     lines.append("")
@@ -546,6 +555,8 @@ class Typesetter:
                     if heading_level > 0:
                         for i in range(len(result_lines)):
                             heading_lines[len(lines) + i] = heading_level
+                    elif no_indent and result_lines:
+                        no_indent_indices.add(len(lines))
                     for i in range(len(result_lines)):
                         line_body_level[len(lines) + i] = current_body_level
                     lines.extend(result_lines)
@@ -555,6 +566,7 @@ class Typesetter:
             heading_lines=heading_lines,
             line_body_level=line_body_level,
             para_start_indices=para_start_indices,
+            no_indent_indices=no_indent_indices,
             block_math_lines=block_math_lines,
             table_blocks=table_blocks,
             table_captions=table_captions,
@@ -572,6 +584,7 @@ class Typesetter:
         heading_level: int,
         body_level: int,
         is_para_start: bool,
+        is_no_indent: bool,
         is_page_first: bool,
         heading_x: dict[int, float],
         body_x: dict[int, float],
@@ -590,7 +603,7 @@ class Typesetter:
             else:
                 x = area.x
 
-        if is_para_start and not is_page_first and not is_heading:
+        if is_para_start and not is_page_first and not is_heading and not is_no_indent:
             x += self.font_size
 
         if self._augmenter is not None:

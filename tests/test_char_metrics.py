@@ -1,6 +1,6 @@
 """統一サイズAPI（種別スケール×密度補正）のテスト。
 
-種別スケールは typesetter.py の値（漢字1.0/ひらがな0.85/カタカナ0.85/半角0.7/
+種別スケールは typesetter.py の値（漢字1.0/ひらがな0.85/カタカナ0.85/半角0.8/
 小書き0.55/句読点0.35）を「正」とする。密度補正は data/char_complexity.json に
 依存するため、簡単字 < 複雑字 の相対関係のみを検証し絶対値には依存しない。
 """
@@ -30,9 +30,9 @@ class TestCharTypeScale:
     def test_katakana_is_085(self) -> None:
         assert char_type_scale("ヌ") == 0.85
 
-    def test_halfwidth_is_07(self) -> None:
-        assert char_type_scale("A") == 0.7
-        assert char_type_scale("z") == 0.7
+    def test_halfwidth_is_08(self) -> None:
+        assert char_type_scale("A") == 0.8
+        assert char_type_scale("z") == 0.8
 
     def test_small_kana_is_055(self) -> None:
         assert char_type_scale("っ") == 0.55

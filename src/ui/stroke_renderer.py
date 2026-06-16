@@ -337,6 +337,8 @@ class StrokeRenderer:
         if punct_strokes is not None:
             cov.geometric.append(original_char)
             positioned = self._position_strokes(punct_strokes, placement)
+            if lookup_char in ("、", ",", "，"):
+                return positioned, ["harai"] * len(positioned)
             return positioned, ["none"] * len(positioned)
 
         ascii_math = self._ascii_math_strokes(lookup_char)
@@ -792,7 +794,7 @@ class StrokeRenderer:
     def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
         if char in ("\u3001", ",", "\uff0c"):
             # \u6b63\u898f\u5316\u5f8c\u306e\u672c\u6587\u8aad\u70b9\u306f\u3059\u3079\u3066\u300c\uff0c\u300d(U+FF0C)\u306b\u5bc4\u305b\u308b\u305f\u3081\u540c\u4e00\u5f62\u306b\u3059\u308b
-            return [np.array([[0.6, 0.2], [0.3, 0.8]])]
+            return [np.array([[0.58, 0.48], [0.42, 0.26]], dtype=np.float64)]
         elif char in ("\u3002", ".", "\uff0e"):
             # \u53e5\u70b9\u306f\u30ec\u30dd\u30fc\u30c8\u4f53\u88c1\u306b\u5408\u308f\u305b\u3001\u4e38(\u5186)\u3067\u306f\u306a\u304f\u30d4\u30ea\u30aa\u30c9\u98a8\u306e\u77ed\u3044\u70b9(\u63cf\u3051\u308b\u30c9\u30c3\u30c8)
             # \u6b63\u898f\u5316\u5f8c\u306e\u672c\u6587\u53e5\u70b9\u306f\u3059\u3079\u3066\u300c\uff0e\u300d(U+FF0E)\u306b\u5bc4\u305b\u308b\u305f\u3081\u540c\u4e00\u5f62\u306b\u3059\u308b
@@ -1393,6 +1395,12 @@ class StrokeRenderer:
     # 対応させ全英字を同一スケールで配置することで大小の高さ差・ベースラインを保つ。
     _ASCII_CAP_TOP = 0.95
 
+    # 半角セル幅 = font_size × この係数。typesetter は字送りを font*0.55 で予約し、
+    # 字種係数(半角=0.8)を font_size に焼くため fs=font*0.8。箱を予約と一致させるには
+    # fs*(0.55/0.8)=fs*0.6875≈0.7 が必要。これより小さいと数字・英字が横ボックス律速で
+    # 縦に潰れ(二重縮小)、漢字比0.6域へ縮む。
+    _HALFWIDTH_CELL_FACTOR = 0.7
+
     def _position_ascii_logical(
         self, strokes: list[Stroke], placement: CharPlacement
     ) -> list[Stroke]:
@@ -1417,7 +1425,7 @@ class StrokeRenderer:
 
         fs = placement.font_size
         target_h = fs
-        cell_width = fs * 0.55  # ASCII 英字は半角セル幅
+        cell_width = fs * self._HALFWIDTH_CELL_FACTOR  # ASCII 英字は半角セル幅
 
         # cap top を font_size 高に対応させる縦スケール。横はみ出し時のみ縮める
         # （アスペクト維持のため両軸同一スケール、ただし基準は cap height）。
@@ -1472,6 +1480,8 @@ class StrokeRenderer:
         """
         if not strokes:
             return []
+        if placement.char in ("\u3001", ",", "\uff0c"):
+            return [self._position_comma_mark(strokes, placement)]
         if placement.char in (".", "\u3002", "\uff0e"):
             return [self._position_period_dot(placement)]
         if placement.char == "\u30fb":
@@ -1492,7 +1502,8 @@ class StrokeRenderer:
 
         if is_halfwidth(placement.char):
             # 半角の縦長アスペクトはセル幅で表現する(係数の再適用ではない)。
-            cell_width = fs * 0.55
+            # 箱は字送り予約(font*0.55)と整合する fs*0.7。狭いと横律速で縦潰れ(二重縮小)。
+            cell_width = fs * self._HALFWIDTH_CELL_FACTOR
         else:
             # 全角セルの横はみ出し抑制。effective ではなく固定係数で保つ。
             cell_width = fs * 0.95
@@ -1505,10 +1516,8 @@ class StrokeRenderer:
         rendered_w = ranges[0] * scale
         rendered_h = ranges[1] * scale
 
-        if is_halfwidth(placement.char):
-            x_offset = placement.x + (fs * 0.55 - rendered_w) / 2
-        else:
-            x_offset = placement.x + (cell_width - rendered_w) / 2
+        # 半角・全角とも cell_width 基準で中央寄せ(箱拡大と整合させ左ズレを防ぐ)。
+        x_offset = placement.x + (cell_width - rendered_w) / 2
 
         line_spacing = self._page_config.line_spacing
         # 小書き仮名・句読点は字種スケールが小さく、行box中央だと浮くため下寄せにする。
@@ -1533,6 +1542,35 @@ class StrokeRenderer:
             positioned = [(s - center) @ rot.T + center for s in positioned]
 
         return positioned
+
+    def _position_comma_mark(self, strokes: list[Stroke], placement: CharPlacement) -> Stroke:
+        all_pts = np.concatenate(strokes, axis=0)
+        mins = all_pts.min(axis=0)
+        ranges = all_pts.max(axis=0) - mins
+
+        fs = placement.font_size
+        line_spacing = self._page_config.line_spacing
+        cell_width = fs * 0.55 if is_halfwidth(placement.char) else fs * 0.95
+        target_h = fs * 0.3675
+        target_w = target_h * 0.72
+        scale_w = target_w / ranges[0] if ranges[0] > 1e-6 else float("inf")
+        scale_h = target_h / ranges[1] if ranges[1] > 1e-6 else float("inf")
+        scale = min(scale_w, scale_h)
+
+        rendered_w = ranges[0] * scale
+        rendered_h = ranges[1] * scale
+        x_offset = placement.x + (cell_width - rendered_w) / 2
+        y_offset = placement.y + line_spacing * 0.1
+        stroke = (strokes[0] - mins) * scale + np.array([x_offset, y_offset])
+
+        slant = getattr(placement, "slant", 0.0)
+        if slant:
+            center = np.array([x_offset + rendered_w / 2, y_offset + rendered_h / 2])
+            cos_a, sin_a = np.cos(slant), np.sin(slant)
+            rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+            stroke = (stroke - center) @ rot.T + center
+
+        return stroke
 
     def _position_middle_dot(self, strokes: list[Stroke], placement: CharPlacement) -> list[Stroke]:
         fs = placement.font_size

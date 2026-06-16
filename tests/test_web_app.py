@@ -326,12 +326,12 @@ class TestFallbackStrokes:
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
         rendered_h = all_pts[:, 1].max() - all_pts[:, 1].min()
         assert rendered_h > rendered_w
-        # 二重適用解消後、高さは font_size そのもの（typesetter で 0.7 を1回だけ焼く）。
-        # 半角の縦長アスペクトは cell_width=0.55*fs で表現され、高さ側が target_h=fs を支配する。
+        # 二重適用解消後、高さは font_size そのもの（typesetter で字種係数を1回だけ焼く）。
+        # 半角の縦長アスペクトは cell_width=0.7*fs で表現され、高さ側が target_h=fs を支配する。
         assert np.isclose(rendered_h, 6.0, atol=0.01)
 
     def test_halfwidth_wide_char_constrained(self):
-        """幅広の半角文字がセル幅(0.6*fs)を超えないこと。"""
+        """幅広の半角文字がセル幅(0.7*fs)を超えないこと。"""
         pipeline = PlotterPipeline()
         # 正方形ストローク（幅=高さ）→ セル幅に制約される
         normalized = [
@@ -342,8 +342,42 @@ class TestFallbackStrokes:
 
         all_pts = np.concatenate(result, axis=0)
         rendered_w = all_pts[:, 0].max() - all_pts[:, 0].min()
-        cell_width = 6.0 * 0.6
+        cell_width = 6.0 * 0.7
         assert rendered_w <= cell_width + 0.01
+
+    def test_digit_height_matches_halfwidth_scale(self):
+        """数字の描画高が漢字の約0.8倍に収まる（二重縮小バグの回帰防止）。
+
+        typesetter は字種係数を placement.font_size に焼くため、呼び出し側で
+        数字=font_size*0.8 / 漢字=font_size*1.0 を渡してその焼込みを再現する。
+        renderer の半角セル幅が予約字送り(font*0.55)と整合する値(fs*0.7)になって
+        いれば、縦長アスペクトの数字でも高さが target_h(=fs) を支配し、漢字に対し
+        字種係数どおり 0.8 倍域へ収まる。旧バグでは半角箱が fs*0.55 と狭く、字幅が
+        その箱より広い数字で横ボックス律速になり高さが 0.6 倍域へ潰れていた（aspect
+        0.7 は旧箱 0.55 を超え新箱 0.7 に収まるため、この回帰を弁別できる）。
+        """
+        pipeline = PlotterPipeline()
+        base_fs = 6.0
+        # 漢字相当: ほぼ正方形（aspect~0.95）。数字相当: 縦長だが旧箱より広い（aspect~0.7）。
+        kanji_unit = [
+            np.array([[0.0, 0.0], [0.95, 0.0], [0.95, 1.0], [0.0, 1.0]]),
+        ]
+        digit_unit = [
+            np.array([[0.0, 0.0], [0.7, 0.0], [0.7, 1.0], [0.0, 1.0]]),
+        ]
+
+        def _height(strokes, char, fs):
+            placed = pipeline._position_strokes(
+                strokes, CharPlacement(char=char, x=10.0, y=20.0, font_size=fs)
+            )
+            pts = np.concatenate(placed, axis=0)
+            return float(pts[:, 1].max() - pts[:, 1].min())
+
+        kanji_h = _height(kanji_unit, "漢", base_fs * 1.0)
+        digit_h = _height(digit_unit, "2", base_fs * 0.8)
+
+        ratio = digit_h / kanji_h
+        assert np.isclose(ratio, 0.8, atol=0.08)
 
     def test_inference_v2_with_reference(self, tmp_path):
         """V2推論時にreference_strokesがKanjiVGから渡される。"""
@@ -1002,6 +1036,52 @@ class TestSimplePunctStrokes:
         assert len(comma) == len(touten) == 1
         assert np.allclose(comma[0], touten[0])
 
+    @pytest.mark.parametrize("char", ["、", "，", ","])
+    def test_comma_raw_stroke_slants_left_down(self, pipeline, char):
+        """読点/コンマは終点が左下へ下りる短い線。"""
+        result = pipeline._simple_punct_strokes(char)
+
+        assert result is not None
+        assert len(result) == 1
+        stroke = result[0]
+        assert stroke.shape == (2, 2)
+        assert stroke.dtype == np.float64
+        assert 0.14 <= np.ptp(stroke[:, 0]) <= 0.18
+        assert 0.18 <= np.ptp(stroke[:, 1]) <= 0.24
+        assert stroke[1, 0] < stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
+
+    @pytest.mark.parametrize("char", ["、", "，", ","])
+    def test_comma_positioned_as_short_left_down_stroke(self, pipeline, char):
+        """配置後もセル高いっぱいへ拡大せず、見える長さの読点として残る。"""
+        strokes = pipeline._simple_punct_strokes(char)
+        placement = CharPlacement(char=char, x=10.0, y=20.0, font_size=6.0)
+
+        positioned = pipeline._position_strokes(strokes, placement)
+
+        assert len(positioned) == 1
+        stroke = positioned[0]
+        assert stroke.shape == (2, 2)
+        length = np.linalg.norm(stroke[1] - stroke[0])
+        assert 2.5 <= length <= 2.9
+        assert length == pytest.approx(2.7, rel=0.06)
+        assert 1.55 <= np.ptp(stroke[:, 0]) <= 1.7
+        assert 2.1 <= np.ptp(stroke[:, 1]) <= 2.35
+        assert stroke[1, 0] < stroke[0, 0]
+        assert stroke[1, 1] < stroke[0, 1]
+
+    @pytest.mark.parametrize("char", ["、", "，", ","])
+    def test_comma_finish_is_harai(self, pipeline, char):
+        """読点/コンマは終端で払いのZリフトを適用する。"""
+        placement = CharPlacement(char=char, x=10.0, y=20.0, font_size=6.0)
+
+        strokes, finishes = pipeline._stroke_renderer.generate_char_strokes_with_finishes(
+            placement
+        )
+
+        assert len(strokes) == 1
+        assert finishes == ["harai"]
+
     def test_fullwidth_period_matches_kuten(self, pipeline):
         """全角「．」は句点「。」と同一形（本文句点はすべて「．」へ正規化される）。"""
         period = pipeline._simple_punct_strokes("．")
@@ -1381,6 +1461,112 @@ class TestPageNumber:
         assert all_pts[:, 0].min() > 10  # 左端より右
         assert all_pts[:, 0].max() < 60  # 中央より左
         assert all_pts[:, 1].max() < 20  # 下部
+
+    def test_generate_preview_omits_page_number_strokes_when_disabled(self, tmp_path, monkeypatch):
+        """plot_page_numbers=False ではプレビューへページ番号ストロークを渡さない。"""
+        pipeline = PlotterPipeline(plot_page_numbers=False)
+        page_number_strokes = [np.array([[30.0, 7.0], [31.0, 8.0]])]
+        seen: dict[str, object] = {}
+
+        monkeypatch.setattr(
+            pipeline,
+            "_generate_page_number_strokes",
+            lambda _page_number: page_number_strokes,
+        )
+        monkeypatch.setattr(
+            pipeline,
+            "_preview_with_ruled_lines",
+            lambda _strokes, _ruled, _path, **kwargs: seen.update(kwargs),
+        )
+
+        pipeline.generate_preview("あ", tmp_path / "preview.png")
+
+        assert seen["page_number_strokes"] == []
+
+    def test_generate_preview_adds_page_number_strokes_by_default(self, tmp_path, monkeypatch):
+        """デフォルトではプレビューへページ番号ストロークを渡す。"""
+        pipeline = PlotterPipeline()
+        page_number_strokes = [np.array([[30.0, 7.0], [31.0, 8.0]])]
+        seen: dict[str, object] = {}
+
+        monkeypatch.setattr(
+            pipeline,
+            "_generate_page_number_strokes",
+            lambda _page_number: page_number_strokes,
+        )
+        monkeypatch.setattr(
+            pipeline,
+            "_preview_with_ruled_lines",
+            lambda _strokes, _ruled, _path, **kwargs: seen.update(kwargs),
+        )
+
+        pipeline.generate_preview("あ", tmp_path / "preview.png")
+
+        assert seen["page_number_strokes"] == page_number_strokes
+
+    def test_generate_gcode_file_omits_page_number_strokes_when_disabled(
+        self, tmp_path, monkeypatch
+    ):
+        """plot_page_numbers=False では G-code 用ストロークにページ番号を混ぜない。"""
+        pipeline = PlotterPipeline(plot_page_numbers=False)
+        body_stroke = np.array([[0.0, 0.0], [1.0, 1.0]])
+        page_stroke = np.array([[30.0, 7.0], [31.0, 8.0]])
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr(
+            pipeline,
+            "placements_to_strokes_with_finishes",
+            lambda _placements, progress_callback=None: ([body_stroke], ["none"]),
+        )
+        monkeypatch.setattr(
+            pipeline,
+            "_generate_page_number_strokes",
+            lambda _page_number: [page_stroke],
+        )
+
+        def _capture(strokes, finishes=None, vary_speed=False):
+            captured["strokes"] = strokes
+            captured["finishes"] = finishes
+            return ["G0 X0 Y0"]
+
+        monkeypatch.setattr(pipeline._generator, "generate", _capture)
+
+        pipeline.generate_gcode_file("あ", tmp_path / "out.gcode")
+
+        assert captured["strokes"] == [body_stroke]
+        assert captured["finishes"] == ["none"]
+
+    def test_generate_gcode_file_adds_page_number_strokes_by_default(
+        self, tmp_path, monkeypatch
+    ):
+        """デフォルトでは G-code 用ストロークへページ番号を混ぜる。"""
+        pipeline = PlotterPipeline()
+        body_stroke = np.array([[0.0, 0.0], [1.0, 1.0]])
+        page_stroke = np.array([[30.0, 7.0], [31.0, 8.0]])
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr(
+            pipeline,
+            "placements_to_strokes_with_finishes",
+            lambda _placements, progress_callback=None: ([body_stroke], ["none"]),
+        )
+        monkeypatch.setattr(
+            pipeline,
+            "_generate_page_number_strokes",
+            lambda _page_number: [page_stroke],
+        )
+
+        def _capture(strokes, finishes=None, vary_speed=False):
+            captured["strokes"] = strokes
+            captured["finishes"] = finishes
+            return ["G0 X0 Y0"]
+
+        monkeypatch.setattr(pipeline._generator, "generate", _capture)
+
+        pipeline.generate_gcode_file("あ", tmp_path / "out.gcode")
+
+        assert captured["strokes"] == [body_stroke, page_stroke]
+        assert captured["finishes"] == ["none", "none"]
 
     # Stroke synthesis tests removed — synthesis was abandoned due to
     # persistent artifacts (double strokes, missing dakuten) caused by
