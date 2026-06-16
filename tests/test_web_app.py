@@ -882,8 +882,14 @@ class TestStrokeSynthesis:
                 break
         assert any_different, "全結果が同一: 合成またはバリエーションが機能していない"
 
-    def test_synthesis_uses_min_stroke_count(self, tmp_path):
-        """合成はサンプル間の最小ストローク数を使う。"""
+    def test_direct_stroke_uses_best_sample_stroke_count(self, tmp_path):
+        """直接ストロークは「最も丁寧に書かれた（総点数最大）」サンプルを使う。
+
+        旧実装は複数サンプルを min ストローク数で合成していたが、隣接同一字で
+        ベース字形が入れ替わり品質が極端に振れるため、_direct_stroke は字ごとに
+        総点数最大のサンプルを固定採用する方式へ変更した。総点数が多い 3 画
+        サンプルが選ばれるので、結果のストローク数は 3 になる。
+        """
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
             user_dir,
@@ -903,7 +909,8 @@ class TestStrokeSynthesis:
 
         np.random.seed(42)
         strokes = pipeline._generate_char_strokes(placement)
-        assert len(strokes) == 2  # min(2, 3) = 2
+        # 総点数最大の 3 画サンプル(002)が選ばれる
+        assert len(strokes) == 3
 
 
 class TestDirectStrokeGeometricVariation:

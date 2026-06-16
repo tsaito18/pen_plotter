@@ -60,12 +60,13 @@ class PlotterPipeline:
         checkpoint_path: Path | str | None = None,
         kanjivg_dir: Path | str | None = None,
         style_sample: object | None = None,
-        temperature: float = 1.0,
+        temperature: float = 0.2,
         user_strokes_dir: Path | str | None = None,
-        messiness: float = 1.0,
-        instance_variation: float = 0.5,
+        messiness: float = 0.4,
+        instance_variation: float = 0.1,
         connection_strength: float = 0.0,
         skip_non_japanese: bool = False,
+        seed: int | None = None,
         plot_page_numbers: bool = True,
     ) -> None:
         self._connection_strength = connection_strength
@@ -89,7 +90,9 @@ class PlotterPipeline:
         self._typesetter = Typesetter(
             self._page_config,
             font_size=4.5,
-            augmenter=HandwritingAugmenter(_scaled_augment_config(messiness)),
+            # seed 指定時は augmenter の乱数を固定し、同一テキストで再現可能な
+            # レイアウト揺らぎを得る（A/B目視比較の定点観測用）
+            augmenter=HandwritingAugmenter(_scaled_augment_config(messiness), seed=seed),
         )
         self._generator = GCodeGenerator(self._plotter_config)
 

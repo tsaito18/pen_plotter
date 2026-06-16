@@ -66,6 +66,23 @@ class StrokeRenderer:
 
     _NOISE_SCALE = 0.15
 
+    # 描画経路ごとの揺らぎ強度。経路間で質感(きれい↔汚い)が大きくばらつくと
+    # 「同じページに定規直線と乱れた字が混在」する違和感が出るため、経路差を
+    # 縮めた共通の基準値を一箇所に集約する。
+    # 幾何字形(直線/円)は本文ML/直接ストローク(1.0)よりやや強め。
+    _WAVER_GEOMETRIC = 1.5
+    # matplotlib 数式画像は元から平滑で粗いので幾何字形より上に残すが、
+    # 旧値(6.0)は本文から浮きすぎたため本文寄りに引き下げる。
+    _WAVER_MATH_IMAGE = 2.5
+    # 記号・句読点・括弧・ギリシャ文字など従来 distortion 無し(=定規直線)の経路に
+    # 乗せる微量の揺らぎ。ツルツル感だけ消し、字形は崩さない控えめ値。
+    _WAVER_SYMBOL = 0.4
+    # 記号経路の微量揺らぎを当てる最小ストローク長。句点「。」・ピリオドの点など
+    # 極短ストロークは揺らぎで破綻するため素のままにする。字形 bbox 最大辺に対する
+    # 相対比と、点(約0.5mm)を確実に除外する絶対長(mm)の両方で判定する。
+    _SYMBOL_WAVER_MIN_SPAN = 0.08
+    _SYMBOL_WAVER_MIN_LEN_MM = 1.2
+
     def __init__(
         self,
         *,
@@ -120,6 +137,11 @@ class StrokeRenderer:
             self._style_sample = self._load_style_from_user_strokes(user_strokes_dir)
 
         self._user_stroke_db = self._load_user_stroke_db(user_strokes_dir)
+        # 文字ごとに「最初に選んだサンプル」のインデックスを記憶し、同じ字には常に
+        # 同じベース字形を使う。等確率ランダムだと隣接する同一字でベース字形が
+        # 丸ごと入れ替わり「片方きれい・片方汚い」と極端に振れるため固定する。
+        # 字ごとの多様性は instance_variation / 温度ノイズが別途与える。
+        self._direct_choice_cache: dict[str, int] = {}
         self._last_coverage = CharCoverageReport()
 
         self._kanjivg_dir: Path | None = None
@@ -329,8 +351,9 @@ class StrokeRenderer:
             if strokes:
                 cov.geometric.append(original_char)
                 # matplotlib フォントのままだと整いすぎるので手書き揺らぎを乗せる。
-                # 数式ベースは完全な直線/整形なので本文より強め(6.0)にして手書き感を出す。
-                strokes = self._apply_distortion(strokes, waver_scale=6.0)
+                # 数式画像は元から平滑なので本文より強めに残すが、経路間の質感を
+                # 揃えるため旧値(6.0)から引き下げる。
+                strokes = self._apply_distortion(strokes, waver_scale=self._WAVER_MATH_IMAGE)
                 return strokes, ["none"] * len(strokes)
             return [], []
 
@@ -338,6 +361,7 @@ class StrokeRenderer:
         if punct_strokes is not None:
             cov.geometric.append(original_char)
             positioned = self._position_strokes(punct_strokes, placement)
+            positioned = self._apply_symbol_distortion(positioned)
             if lookup_char in ("、", ",", "，"):
                 return positioned, ["harai"] * len(positioned)
             return positioned, ["none"] * len(positioned)
@@ -346,29 +370,34 @@ class StrokeRenderer:
         if ascii_math is not None:
             cov.geometric.append(original_char)
             positioned = self._position_strokes(ascii_math, placement)
+            positioned = self._apply_symbol_distortion(positioned)
             return positioned, ["none"] * len(positioned)
 
         paren_strokes = self._simple_paren_strokes(original_char, placement)
         if paren_strokes is not None:
             cov.geometric.append(original_char)
             positioned = self._position_strokes(paren_strokes, placement)
+            positioned = self._apply_symbol_distortion(positioned)
             return positioned, ["none"] * len(positioned)
 
         math_strokes = self._math_symbol_strokes(lookup_char)
         if math_strokes is not None:
             cov.geometric.append(original_char)
             positioned = self._position_strokes(math_strokes, placement)
+            positioned = self._apply_symbol_distortion(positioned)
             return positioned, ["none"] * len(positioned)
 
         composite = self._composite_symbol_strokes(lookup_char)
         if composite is not None:
             cov.geometric.append(original_char)
             positioned = self._position_strokes(composite, placement)
+            positioned = self._apply_symbol_distortion(positioned)
             return positioned, ["none"] * len(positioned)
 
         word_strokes = self._math_word_strokes(lookup_char, placement)
         if word_strokes is not None:
             cov.geometric.append(original_char)
+            word_strokes = self._apply_symbol_distortion(word_strokes)
             return word_strokes, ["none"] * len(word_strokes)
 
         # 英字はユーザーの実筆跡サンプルがあれば幾何フォントより最優先（自然・本人の字）。
@@ -390,8 +419,8 @@ class StrokeRenderer:
             # フィットはこれを潰すため論理フィットで大小差・ベースラインを保つ。
             positioned = self._position_strokes(letter_strokes, placement, logical_ascii=True)
             # 幾何字形は完全な直線/円で「きれいすぎる」ため手書き揺らぎを乗せる。
-            # ML/直接ストローク(素値1.0)より強く、数式画像(6.0)より弱い中間値。
-            positioned = self._apply_distortion(positioned, waver_scale=3.0)
+            # ML/直接ストローク(素値1.0)より強く、数式画像より弱い中間値。
+            positioned = self._apply_distortion(positioned, waver_scale=self._WAVER_GEOMETRIC)
             return positioned, ["none"] * len(positioned)
 
         direct = self._direct_stroke(placement.char)
@@ -429,6 +458,8 @@ class StrokeRenderer:
                 )
                 positioned = self._apply_instance_variation(positioned, waver)
                 positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
+                # ML経路は deformable な CJK のみ通る(L407 ガード)。横棒を右上がりに。
+                positioned = self._enforce_horizontal_rise(positioned, placement.font_size)
                 return positioned, finishes
             except Exception:
                 logger.warning("ML inference failed for '%s'", placement.char, exc_info=True)
@@ -451,6 +482,9 @@ class StrokeRenderer:
                 waver = self._waver_scale(len(char_strokes))
                 positioned = self._apply_instance_variation(positioned, waver)
                 positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
+                # 数字等(非deformable)は下線・等号が崩れるため右上がり矯正を除外する
+                if self._is_ml_deformable(placement.char):
+                    positioned = self._enforce_horizontal_rise(positioned, placement.font_size)
                 return positioned, finishes
 
         cov.missing_glyphs.append(original_char)
@@ -460,7 +494,19 @@ class StrokeRenderer:
     # 狭く、揺らぎで画が隣のレーンへはみ出して「固まる」ため画数で逓減する。
     _WAVER_FULL_STROKES = 10
     _WAVER_MIN_STROKES = 20
-    _WAVER_FLOOR = 0.3
+    # 多画字と少画字の質感差を「最大3倍(0.3)→2倍(0.5)」に縮め、経路間の質感を揃える。
+    _WAVER_FLOOR = 0.5
+
+    # 横棒の右上がり下限保証パラメータ。日本語の手書きは横棒を右上がりに書く
+    # 習性があるが、字全体slant・per-stroke回転・per-point offset が全てゼロ平均
+    # 対称に乗るため約半数の横棒が右下がりに転ぶ。最終mm座標で横棒だけを下限角
+    # まで起こす（既に十分右上がりの画は触らない）。字全体を傾けると斜体化して
+    # 不自然なため、ここでは横棒個別を重心まわりに回す。
+    _RISE_MIN_ANGLE = np.deg2rad(2.0)
+    # 横棒判定: x方向に font_size*係数 以上広がり、かつ y広がりが x広がりの一定
+    # 割合未満（概ね水平・直線的）な画のみ対象。縦画・斜め画・曲がった画は除外。
+    _RISE_MIN_X_RANGE_RATIO = 0.25
+    _RISE_MAX_Y_X_RATIO = 0.35
 
     @classmethod
     def _waver_scale(cls, n_strokes: int) -> float:
@@ -517,11 +563,107 @@ class StrokeRenderer:
         strokes = [aug.apply_tremor(s, amplitude=0.01 * waver_scale) for s in strokes]
         return strokes
 
+    def _apply_symbol_distortion(self, strokes: list[Stroke]) -> list[Stroke]:
+        """記号・句読点・括弧など幾何経路に微量の手書き揺らぎを乗せる。
+
+        従来この経路は distortion 無し＝定規直線でツルツルだったため、本文の字と
+        並ぶと「整いすぎ」で浮く。``_WAVER_SYMBOL`` の控えめな揺らぎで質感だけ
+        本文へ寄せる。ただし句点「。」・ピリオドの点・極短ストロークは揺らぎで
+        破綻するため ``_SYMBOL_WAVER_MIN_SPAN`` 未満の字形は素のまま返す。
+
+        Args:
+            strokes: 配置済みストローク列（mm 座標）。
+
+        Returns:
+            微量揺らぎを乗せた（または極短のため素のままの）ストローク列。
+        """
+        if self._augmenter is None or not strokes:
+            return strokes
+        all_pts = np.concatenate(strokes, axis=0)
+        span = float((all_pts.max(axis=0) - all_pts.min(axis=0)).max())
+        if span < 1e-9:
+            return strokes
+        # 揺らぎは bbox 比なので極端に小さい字形(点)は相対的に大きく崩れる。
+        # 相対比・絶対長のどちらかで「短い」と判定したら素のまま返す。
+        threshold = max(span * self._SYMBOL_WAVER_MIN_SPAN, self._SYMBOL_WAVER_MIN_LEN_MM)
+        out: list[Stroke] = []
+        for s in strokes:
+            s_span = float((s.max(axis=0) - s.min(axis=0)).max())
+            if s_span < threshold:
+                out.append(s)
+            else:
+                out.extend(self._apply_distortion([s], waver_scale=self._WAVER_SYMBOL))
+        return out
+
+    def _enforce_horizontal_rise(self, strokes: list[Stroke], font_size: float) -> list[Stroke]:
+        """横棒だけを緩い右上がりの下限角まで起こす（日本語手書きの右上がり再現）。
+
+        全変形が乗った最終 mm 座標(Y-UP=上が大)を受け取り、概ね水平・直線的で
+        十分に長い画（横棒）のみを対象に、x 昇順の始点→終点角が
+        ``_RISE_MIN_ANGLE`` 未満なら重心まわりに反時計回り回転して右端を持ち上げる。
+        既に十分右上がりの画・縦画・斜め画・曲がった画・短い画は素通り。
+
+        Args:
+            strokes: 配置済みストローク列（mm 座標, Y-UP）。
+            font_size: 字の論理高（mm）。横棒の長さ判定の基準に使う。
+
+        Returns:
+            横棒のみ下限角まで起こしたストローク列（本数・点数は不変）。
+        """
+        min_x_range = font_size * self._RISE_MIN_X_RANGE_RATIO
+        out: list[Stroke] = []
+        for s in strokes:
+            if s.shape[0] < 2:
+                out.append(s)
+                continue
+            x = s[:, 0]
+            y = s[:, 1]
+            x_range = float(x.max() - x.min())
+            y_range = float(y.max() - y.min())
+            is_horizontal = x_range > min_x_range and y_range < x_range * self._RISE_MAX_Y_X_RATIO
+            if not is_horizontal:
+                out.append(s)
+                continue
+            order = np.argsort(x)
+            start = s[order[0]]
+            end = s[order[-1]]
+            theta = float(np.arctan2(end[1] - start[1], end[0] - start[0]))
+            if theta >= self._RISE_MIN_ANGLE:
+                out.append(s)
+                continue
+            delta = self._RISE_MIN_ANGLE - theta
+            center = s.mean(axis=0)
+            ca, sa = np.cos(delta), np.sin(delta)
+            rot = np.array([[ca, -sa], [sa, ca]])
+            out.append((s - center) @ rot.T + center)
+        return out
+
     def _direct_stroke(self, char: str) -> list[Stroke] | None:
+        """ユーザーの実筆跡サンプルから字形を返す（文字ごとにサンプル固定）。
+
+        同じ字には常に同じベースサンプルを使う（``_direct_choice_cache``）。初回は
+        最も「丁寧に書かれた」＝総点数が多いサンプルを品質スコアとして選ぶ。等確率
+        ランダムだと隣接する同一字でベース字形が入れ替わり品質が極端に振れるため。
+        毎回の微小な多様性は ``_apply_stroke_variation`` / 温度ノイズが別途与える。
+
+        Args:
+            char: 描画対象文字。
+
+        Returns:
+            正規化＋微小バリエーション済みのストローク列。サンプルが無ければ None。
+        """
         samples = self._user_stroke_db.get(char)
         if not samples:
             return None
-        chosen = samples[np.random.randint(len(samples))]
+        idx = self._direct_choice_cache.get(char)
+        if idx is None:
+            # 総点数が多い＝丁寧に書かれたサンプルを品質スコアとして best を選ぶ。
+            idx = max(
+                range(len(samples)),
+                key=lambda i: sum(len(s) for s in samples[i]),
+            )
+            self._direct_choice_cache[char] = idx
+        chosen = samples[idx]
         normalized = self._normalize_strokes_to_unit(chosen)
         return self._apply_stroke_variation(normalized)
 
@@ -807,9 +949,7 @@ class StrokeRenderer:
     def _middle_dot_spiral() -> Stroke:
         t = np.linspace(0.0, 12.0 * np.pi, 145)
         r = np.linspace(0.15, 0.0, t.size)
-        return np.stack([0.5 + r * np.cos(t), 0.5 + r * np.sin(t)], axis=1).astype(
-            np.float64
-        )
+        return np.stack([0.5 + r * np.cos(t), 0.5 + r * np.sin(t)], axis=1).astype(np.float64)
 
     @staticmethod
     def _small_dot(cx: float, cy: float, r: float = 0.06) -> Stroke:
@@ -998,42 +1138,48 @@ class StrokeRenderer:
 
     def _ascii_letter_strokes(self, char: str) -> list[Stroke] | None:
         if char == "c":
+            # x-height 統一: 上端を 0.70 に揃え「大文字混じり」に見えるのを防ぐ。
             t = np.linspace(0.25 * np.pi, 1.75 * np.pi, 24)
             return [
                 np.stack(
-                    [0.55 + 0.32 * np.cos(t), 0.5 + 0.32 * np.sin(t)],
+                    [0.55 + 0.27 * np.cos(t), 0.42 + 0.27 * np.sin(t)],
                     axis=1,
                 ).astype(np.float64)
             ]
         if char == "o":
+            # x-height 統一: 上端 0.70（旧 0.80）に揃える。
             t = np.linspace(0, 2 * np.pi, 28)
             return [
                 np.stack(
-                    [0.5 + 0.3 * np.cos(t), 0.5 + 0.3 * np.sin(t)],
+                    [0.5 + 0.27 * np.cos(t), 0.43 + 0.27 * np.sin(t)],
                     axis=1,
                 ).astype(np.float64)
             ]
         if char == "s":
             t = np.linspace(0, 1, 30)
             # 上が左・下が右に膨らむ正しい S 字（+sin だと左右反転 Ƨ になる）
+            # x-height 統一: 上端 0.70（旧 0.85）に揃える。
             x = 0.5 - 0.28 * np.sin(2 * np.pi * t)
-            y = 0.85 - 0.7 * t
+            y = 0.70 - 0.55 * t
             return [np.stack([x, y], axis=1).astype(np.float64)]
         if char == "i":
             stem = np.array([[0.5, 0.25], [0.5, 0.7]], dtype=np.float64)
             return [stem, self._small_dot(0.5, 0.88)]
         if char == "n":
             # 左の縦棒＋上に膨らむアーチ(∩)＋右脚。中央が下がる ν との混同を解消
-            stem = np.array([[0.22, 0.2], [0.22, 0.72]], dtype=np.float64)
+            # x-height 統一: アーチ上端 0.70 に揃える。
+            stem = np.array([[0.22, 0.2], [0.22, 0.7]], dtype=np.float64)
             t = np.linspace(np.pi, 0, 16)
-            arch = np.stack([0.5 + 0.28 * np.cos(t), 0.5 + 0.22 * np.sin(t)], axis=1).astype(
+            arch = np.stack([0.5 + 0.28 * np.cos(t), 0.48 + 0.22 * np.sin(t)], axis=1).astype(
                 np.float64
             )
-            right = np.array([[0.78, 0.5], [0.78, 0.2]], dtype=np.float64)
+            right = np.array([[0.78, 0.48], [0.78, 0.2]], dtype=np.float64)
             return [stem, arch, right]
         if char == "t":
             # 縦棒の下端を右へ軽くはらい、クロスバーは上寄り → "+" と区別
-            stem = np.array([[0.48, 0.85], [0.48, 0.12], [0.62, 0.07]], dtype=np.float64)
+            # アセンダ統一: ステム上端は cap より少し低い 0.80（t の伝統的高さ）。
+            # クロスバーは x-height 帯（≈0.62）に据えて他小文字と高さを揃える。
+            stem = np.array([[0.48, 0.80], [0.48, 0.12], [0.62, 0.07]], dtype=np.float64)
             cross = np.array([[0.28, 0.62], [0.72, 0.62]], dtype=np.float64)
             return [stem, cross]
         if char == "a":
@@ -1047,40 +1193,47 @@ class StrokeRenderer:
         if char == "l":
             return [np.array([[0.45, 0.15], [0.45, 0.85]], dtype=np.float64)]
         if char == "g":
+            # x-height 統一: ボウル上端 0.70 に揃える（旧 0.74）。
             t = np.linspace(0, 2 * np.pi, 24)
             body = np.stack(
-                [0.48 + 0.24 * np.cos(t), 0.52 + 0.22 * np.sin(t)],
+                [0.48 + 0.24 * np.cos(t), 0.48 + 0.22 * np.sin(t)],
                 axis=1,
             ).astype(np.float64)
             # 右から下降しベースライン下(y<0)で左へカールする descender → "9" と区別
             tail = np.array(
-                [[0.72, 0.52], [0.72, -0.05], [0.5, -0.2], [0.28, -0.1]], dtype=np.float64
+                [[0.72, 0.48], [0.72, -0.05], [0.5, -0.2], [0.28, -0.1]], dtype=np.float64
             )
             return [body, tail]
         if char == "e":
+            # x-height 統一: 上端 0.70 に揃える（旧 0.78）。バーは円の縦中央に追従。
             t = np.linspace(0.2 * np.pi, 1.8 * np.pi, 24)
             body = np.stack(
-                [0.52 + 0.28 * np.cos(t), 0.5 + 0.28 * np.sin(t)],
+                [0.52 + 0.28 * np.cos(t), 0.42 + 0.28 * np.sin(t)],
                 axis=1,
             ).astype(np.float64)
-            bar = np.array([[0.25, 0.5], [0.75, 0.5]], dtype=np.float64)
+            bar = np.array([[0.25, 0.42], [0.75, 0.42]], dtype=np.float64)
             return [body, bar]
         if char == "x":
-            a = np.array([[0.25, 0.2], [0.75, 0.8]], dtype=np.float64)
-            b = np.array([[0.75, 0.2], [0.25, 0.8]], dtype=np.float64)
+            # x-height 統一: 上端 0.70 に揃える（旧 0.80）。
+            a = np.array([[0.25, 0.18], [0.75, 0.7]], dtype=np.float64)
+            b = np.array([[0.75, 0.18], [0.25, 0.7]], dtype=np.float64)
             return [a, b]
         if char == "p":
-            stem = np.array([[0.25, 0.0], [0.25, 0.85]], dtype=np.float64)
+            # x-height 統一: ボウル/ステム上端を 0.70 に揃え、ステム下端を
+            # ベースライン下(-0.2)へ伸ばす真のディセンダ体にする。旧字形は
+            # ステム上端 0.85・下端 0.0 で「縦に巨大な大文字混じり」に見えた。
+            stem = np.array([[0.25, -0.2], [0.25, 0.7]], dtype=np.float64)
             t = np.linspace(-np.pi / 2, np.pi / 2, 18)
             loop = np.stack(
-                [0.25 + 0.45 * np.cos(t), 0.6 + 0.25 * np.sin(t)],
+                [0.25 + 0.42 * np.cos(t), 0.47 + 0.23 * np.sin(t)],
                 axis=1,
             ).astype(np.float64)
             return [stem, loop]
         if char == "m":
+            # x-height 統一: 山の上端 0.70 に揃える（旧 0.75）。
             return [
                 np.array(
-                    [[0.15, 0.2], [0.15, 0.75], [0.38, 0.35], [0.6, 0.75], [0.85, 0.2]],
+                    [[0.15, 0.2], [0.15, 0.7], [0.38, 0.32], [0.6, 0.7], [0.85, 0.2]],
                     dtype=np.float64,
                 )
             ]
@@ -1093,9 +1246,11 @@ class StrokeRenderer:
             ).astype(np.float64)
             return [stem, body]
         if char == "y":
+            # x-height 統一: V の上端 0.70 に揃え、右枝の尾をベースライン下(-0.2)へ
+            # 伸ばす真のディセンダ体にする（旧字形は上端 0.75・尾が y=0 止まり）。
             return [
-                np.array([[0.2, 0.75], [0.48, 0.4], [0.75, 0.75]], dtype=np.float64),
-                np.array([[0.48, 0.4], [0.35, 0.0]], dtype=np.float64),
+                np.array([[0.2, 0.7], [0.48, 0.35], [0.75, 0.7]], dtype=np.float64),
+                np.array([[0.48, 0.35], [0.3, -0.2]], dtype=np.float64),
             ]
         if char == "b":
             stem = np.array([[0.25, 0.0], [0.25, 0.95]], dtype=np.float64)

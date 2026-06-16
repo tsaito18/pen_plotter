@@ -157,6 +157,62 @@ class TestStrokeRendererMethods:
         assert self._rendered_height(default_pos) == pytest.approx(fs, rel=0.02)
         assert np.allclose(np.concatenate(default_pos), np.concatenate(flagged_pos))
 
+    # 単位系字形の x-height 上端基準。_position_ascii_logical は字形 y をそのまま
+    # 論理高に写すため、x-height 小文字の上端が高いと「大文字混じり」に見える。
+    _XHEIGHT_TOP = 0.70
+    # 描画位置のディセンダ体（g/p/q/y）本体上端は x-height に揃えるが、circle 近似
+    # の数値誤差を許容する上限。
+    _XHEIGHT_TOP_MAX = 0.72
+
+    @staticmethod
+    def _glyph_top(strokes):
+        return float(np.concatenate(strokes, axis=0)[:, 1].max())
+
+    @staticmethod
+    def _glyph_bottom(strokes):
+        return float(np.concatenate(strokes, axis=0)[:, 1].min())
+
+    @pytest.mark.parametrize("char", ["a", "c", "e", "o", "n", "u", "r", "v", "w", "z", "x", "m"])
+    def test_xheight_lowercase_top_capped(self, char):
+        """x-height 小文字の上端 y が x-height 基準（≈0.72 以下）に収まる。"""
+        renderer = StrokeRenderer()
+        top = self._glyph_top(renderer._ascii_letter_strokes(char))
+        assert top <= self._XHEIGHT_TOP_MAX, f"{char!r} top={top}"
+
+    @pytest.mark.parametrize("char", ["g", "p", "q", "y"])
+    def test_descender_body_top_capped(self, char):
+        """ディセンダ体（g/p/q/y）の本体上端も x-height 基準に揃う。"""
+        renderer = StrokeRenderer()
+        top = self._glyph_top(renderer._ascii_letter_strokes(char))
+        assert top <= self._XHEIGHT_TOP_MAX, f"{char!r} top={top}"
+
+    @pytest.mark.parametrize("char", ["g", "p", "q", "y", "j"])
+    def test_descender_extends_below_baseline_in_unit(self, char):
+        """ディセンダ体の下端は単位系でベースライン(y=0)より下に出る。"""
+        renderer = StrokeRenderer()
+        bottom = self._glyph_bottom(renderer._ascii_letter_strokes(char))
+        assert bottom < 0.0, f"{char!r} bottom={bottom}"
+
+    @pytest.mark.parametrize("char", ["b", "d", "h", "k", "l"])
+    def test_ascender_lowercase_top_high(self, char):
+        """アセンダ小文字（b/d/h/k/l）の上端は cap height 付近（≥0.85）。"""
+        renderer = StrokeRenderer()
+        top = self._glyph_top(renderer._ascii_letter_strokes(char))
+        assert top >= 0.85, f"{char!r} top={top}"
+
+    def test_t_top_in_ascender_band(self):
+        """t は伝統的に cap より少し低いアセンダ帯（0.78〜0.95）の上端を持つ。"""
+        renderer = StrokeRenderer()
+        top = self._glyph_top(renderer._ascii_letter_strokes("t"))
+        assert 0.78 <= top <= 0.95, f"t top={top}"
+
+    def test_xheight_lowercase_tops_uniform(self):
+        """代表的な x-height 小文字群の上端 y が互いに揃う（最大-最小が小さい）。"""
+        renderer = StrokeRenderer()
+        chars = ["a", "c", "e", "o", "n", "u"]
+        tops = [self._glyph_top(renderer._ascii_letter_strokes(ch)) for ch in chars]
+        assert max(tops) - min(tops) < 0.12, dict(zip(chars, tops))
+
     def test_math_symbol_strokes(self):
         renderer = StrokeRenderer()
         result = renderer._math_symbol_strokes("π")
@@ -514,12 +570,12 @@ class TestWaverScaleByStrokeCount:
         f = StrokeRenderer._waver_scale
         assert f(1) == pytest.approx(1.0)
         assert f(10) == pytest.approx(1.0)  # 閾値以下は満額
-        assert f(30) == pytest.approx(0.3)  # 高画数は下限
+        assert f(30) == pytest.approx(0.5)  # 高画数は下限(経路間の質感を揃え 0.3→0.5)
         # 単調非増加
         vals = [f(n) for n in range(1, 31)]
         assert all(b <= a + 1e-9 for a, b in zip(vals, vals[1:]))
-        # 中間(15画)は 1.0 と 0.3 の間
-        assert 0.3 < f(15) < 1.0
+        # 中間(15画)は 1.0 と 0.5 の間
+        assert 0.5 < f(15) < 1.0
 
     def test_apply_distortion_zero_scale_is_identity(self):
         from src.model.augmentation import AugmentConfig, HandwritingAugmenter
@@ -984,3 +1040,224 @@ class TestAsciiLetterPrefersUserStroke:
         # "Z" はサンプル無し → 幾何フォントへフォールバック
         r.generate_char_strokes(CharPlacement(char="Z", x=0, y=0, font_size=7.0))
         assert "Z" in r._last_coverage.geometric
+
+
+def _slope_left_to_right(stroke):
+    """ストロークの x 昇順での始点→終点の傾き(rad, 左→右方向)を返す。"""
+    s = stroke[np.argsort(stroke[:, 0])]
+    dx = s[-1, 0] - s[0, 0]
+    dy = s[-1, 1] - s[0, 1]
+    return float(np.arctan2(dy, dx))
+
+
+class TestEnforceHorizontalRise:
+    """横棒の右上がり下限保証（日本語手書きの右上がり習性の再現）。"""
+
+    def test_downward_horizontal_is_lifted_to_min_rise(self):
+        # 右下がりの水平画（mm, Y-UP=上が大）。矯正で +RISE_MIN 以上に起こす。
+        renderer = StrokeRenderer()
+        fs = 5.0
+        strokes = [np.array([[0.0, 5.0], [5.0, 4.5]], dtype=np.float64)]
+        out = renderer._enforce_horizontal_rise(strokes, fs)
+        assert _slope_left_to_right(out[0]) >= StrokeRenderer._RISE_MIN_ANGLE - 1e-6
+
+    def test_flat_horizontal_is_lifted_to_min_rise(self):
+        renderer = StrokeRenderer()
+        fs = 5.0
+        strokes = [np.array([[0.0, 5.0], [5.0, 5.0]], dtype=np.float64)]
+        out = renderer._enforce_horizontal_rise(strokes, fs)
+        assert _slope_left_to_right(out[0]) >= StrokeRenderer._RISE_MIN_ANGLE - 1e-6
+
+    def test_already_steep_rise_is_unchanged(self):
+        # 既に十分右上がり(+5°)の横棒は起こし過ぎない＝ほぼ不変。
+        renderer = StrokeRenderer()
+        fs = 5.0
+        ang = np.deg2rad(5.0)
+        end_y = 5.0 + 5.0 * np.tan(ang)
+        strokes = [np.array([[0.0, 5.0], [5.0, end_y]], dtype=np.float64)]
+        before = _slope_left_to_right(strokes[0])
+        out = renderer._enforce_horizontal_rise([strokes[0].copy()], fs)
+        assert np.allclose(out[0], strokes[0])
+        assert _slope_left_to_right(out[0]) == pytest.approx(before)
+
+    def test_vertical_stroke_passes_through(self):
+        # 縦画(x_range 小)は横棒判定されず素通り。
+        renderer = StrokeRenderer()
+        fs = 5.0
+        strokes = [np.array([[2.5, 0.0], [2.4, 5.0]], dtype=np.float64)]
+        out = renderer._enforce_horizontal_rise([strokes[0].copy()], fs)
+        assert np.allclose(out[0], strokes[0])
+
+    def test_diagonal_stroke_passes_through(self):
+        # 斜め画(/, y_range 大)は横棒判定されず素通り。
+        renderer = StrokeRenderer()
+        fs = 5.0
+        strokes = [np.array([[0.0, 0.0], [5.0, 5.0]], dtype=np.float64)]
+        out = renderer._enforce_horizontal_rise([strokes[0].copy()], fs)
+        assert np.allclose(out[0], strokes[0])
+
+    def test_short_stroke_passes_through(self):
+        # x_range < font_size*0.25 の短い画は素通り。
+        renderer = StrokeRenderer()
+        fs = 5.0
+        strokes = [np.array([[0.0, 5.0], [0.5, 4.6]], dtype=np.float64)]
+        out = renderer._enforce_horizontal_rise([strokes[0].copy()], fs)
+        assert np.allclose(out[0], strokes[0])
+
+    def test_empty_and_single_point_pass_through(self):
+        renderer = StrokeRenderer()
+        fs = 5.0
+        empty = np.zeros((0, 2), dtype=np.float64)
+        single = np.array([[1.0, 1.0]], dtype=np.float64)
+        out = renderer._enforce_horizontal_rise([empty, single], fs)
+        assert out[0].shape == (0, 2)
+        assert np.allclose(out[1], single)
+
+    def test_rotation_preserves_point_count(self):
+        renderer = StrokeRenderer()
+        fs = 5.0
+        strokes = [np.array([[0.0, 5.0], [2.5, 4.9], [5.0, 4.5]], dtype=np.float64)]
+        out = renderer._enforce_horizontal_rise(strokes, fs)
+        assert out[0].shape == strokes[0].shape
+
+
+class TestWaverPathUnification:
+    """描画経路ごとの揺らぎ強度差を縮め「きれい/汚い混在」を緩和する。"""
+
+    def test_geometric_letter_waver_value(self):
+        # 幾何 ASCII 英字経路は中間値 1.5（旧 3.0 から引き下げ）
+        assert StrokeRenderer._WAVER_GEOMETRIC == pytest.approx(1.5)
+
+    def test_math_image_waver_value(self):
+        # 数式ブロック画像経路は 2.5（旧 6.0 から引き下げ、本文寄りに）
+        assert StrokeRenderer._WAVER_MATH_IMAGE == pytest.approx(2.5)
+
+    def test_symbol_waver_value(self):
+        # 記号・句読点・括弧など旧 distortion 無し経路へ乗せる微量値 0.4
+        assert StrokeRenderer._WAVER_SYMBOL == pytest.approx(0.4)
+
+    def test_waver_floor_raised(self):
+        # 画数逓減の下限を 0.3→0.5 へ（多画字と少画字の質感差 最大3倍→2倍）
+        assert StrokeRenderer._WAVER_FLOOR == pytest.approx(0.5)
+
+    def test_waver_scale_floor_matches_constant(self):
+        f = StrokeRenderer._waver_scale
+        assert f(30) == pytest.approx(0.5)  # 高画数は新下限
+        assert f(10) == pytest.approx(1.0)  # 閾値以下は満額
+        assert 0.5 < f(15) < 1.0  # 中間は下限と満額の間
+
+
+class TestSymbolMicroWaver:
+    """記号・句読点・括弧の幾何経路に微量揺らぎを乗せ定規直線感を消す。"""
+
+    def test_symbol_path_gets_distortion(self):
+        from src.layout.typesetter import CharPlacement
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        clean = StrokeRenderer()
+        hand = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
+        cp = CharPlacement(char="=", x=0.0, y=0.0, font_size=10.0)
+        s_clean = clean.generate_char_strokes(cp)
+        s_hand = hand.generate_char_strokes(cp)
+        assert len(s_clean) == len(s_hand)
+        # augmenter 有りで素の幾何字形から変位する（ツルツルでない）
+        assert any(not np.allclose(c, h) for c, h in zip(s_clean, s_hand))
+
+    def test_paren_path_gets_distortion(self):
+        from src.layout.typesetter import CharPlacement
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        clean = StrokeRenderer()
+        hand = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
+        cp = CharPlacement(char="(", x=0.0, y=0.0, font_size=10.0)
+        s_clean = clean.generate_char_strokes(cp)
+        s_hand = hand.generate_char_strokes(cp)
+        assert any(not np.allclose(c, h) for c, h in zip(s_clean, s_hand))
+
+    def test_symbol_path_no_augmenter_is_clean(self):
+        from src.layout.typesetter import CharPlacement
+
+        r = StrokeRenderer()  # augmenter なし → 微量揺らぎも no-op
+        cp = CharPlacement(char="=", x=0.0, y=0.0, font_size=10.0)
+        a = r.generate_char_strokes(cp)
+        b = r.generate_char_strokes(cp)
+        assert all(np.allclose(x, y) for x, y in zip(a, b))
+
+    def test_period_dot_not_broken_by_waver(self):
+        # 句点の点(極短ストローク)は閾値未満で素のまま＝破綻しない
+        from src.layout.typesetter import CharPlacement
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        clean = StrokeRenderer()
+        hand = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
+        cp = CharPlacement(char="。", x=0.0, y=0.0, font_size=10.0)
+        s_clean = clean.generate_char_strokes(cp)
+        s_hand = hand.generate_char_strokes(cp)
+        assert len(s_clean) == len(s_hand)
+        # 極短の点は揺らぎを当てず素のまま（破綻防止）
+        assert all(np.allclose(c, h) for c, h in zip(s_clean, s_hand))
+
+    def test_apply_symbol_distortion_keeps_short_stroke(self):
+        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
+
+        r = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
+        # 長い横棒＋極短の点。点は素のまま、横棒は変位する。
+        long_bar = np.array([[0.0, 0.0], [10.0, 0.0]], dtype=np.float64)
+        dot = np.array([[5.0, 5.0], [5.05, 5.0]], dtype=np.float64)
+        out = r._apply_symbol_distortion([long_bar.copy(), dot.copy()])
+        assert np.allclose(out[1], dot)  # 極短は破綻させない
+        assert not np.allclose(out[0], long_bar)  # 長い画は揺らぐ
+
+    def test_apply_symbol_distortion_no_augmenter_identity(self):
+        r = StrokeRenderer()  # augmenter なし
+        s = [np.array([[0.0, 0.0], [10.0, 0.0]], dtype=np.float64)]
+        out = r._apply_symbol_distortion([s[0].copy()])
+        assert np.allclose(out[0], s[0])
+
+
+class TestDirectStrokeSampleFixed:
+    """同じ文字には常に同じベースサンプルを使い品質の極端な振れを防ぐ。"""
+
+    def test_same_char_uses_same_base_sample(self, tmp_path):
+        user_dir = tmp_path / "user_strokes"
+        # 同じ "山" に形の異なる2サンプル（点数も差をつける）
+        _create_user_stroke_json(user_dir, "山", [[[0, 0], [0, 100]]], suffix="001")
+        _create_user_stroke_json(
+            user_dir,
+            "山",
+            [[[0, 0], [0, 50], [0, 100]], [[50, 0], [50, 100]]],
+            suffix="002",
+        )
+        r = StrokeRenderer(user_strokes_dir=user_dir)
+        # _apply_stroke_variation の乱数を揃え、ベース選択が固定かを純粋に検証する
+        np.random.seed(0)
+        a = r._direct_stroke("山")
+        np.random.seed(0)
+        b = r._direct_stroke("山")
+        assert a is not None and b is not None
+        assert len(a) == len(b)
+        assert all(np.allclose(x, y) for x, y in zip(a, b))
+
+    def test_best_sample_is_most_points(self, tmp_path):
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(user_dir, "川", [[[0, 0], [0, 100]]], suffix="001")
+        # 総点数の多い 002 が「丁寧」として選ばれる
+        _create_user_stroke_json(
+            user_dir,
+            "川",
+            [[[0, 0], [0, 50], [0, 100]], [[50, 0], [50, 50], [50, 100]]],
+            suffix="002",
+        )
+        r = StrokeRenderer(user_strokes_dir=user_dir)
+        r._direct_stroke("川")
+        assert r._direct_choice_cache["川"] == 1
+
+    def test_different_chars_have_separate_cache(self, tmp_path):
+        user_dir = tmp_path / "user_strokes"
+        _create_user_stroke_json(user_dir, "一", [[[0, 50], [100, 50]]])
+        _create_user_stroke_json(user_dir, "二", [[[0, 30], [100, 30]], [[0, 70], [100, 70]]])
+        r = StrokeRenderer(user_strokes_dir=user_dir)
+        r._direct_stroke("一")
+        r._direct_stroke("二")
+        assert "一" in r._direct_choice_cache
+        assert "二" in r._direct_choice_cache

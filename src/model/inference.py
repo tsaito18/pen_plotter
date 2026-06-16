@@ -18,6 +18,45 @@ logger = logging.getLogger(__name__)
 
 MAX_STYLE_POINTS = 4096
 
+# temperature=1 での per-point offset ゆらぎ振幅（offset座標系, clamp=0.4）。
+# clamp の約1/3 に収め、同字を生成ごとに変えつつ字形を破綻させない実機キャリブ値。
+TEMP_NOISE_AMP = 0.12
+
+
+def _temperature_noise(
+    num_strokes: int,
+    num_points: int,
+    amp: float,
+    num_ctrl: int = 6,
+) -> NDArray[np.float32]:
+    """ストロークごと・x/y独立の低周波ゆらぎノイズを生成する。
+
+    少数の制御点（``num_ctrl``）にガウスノイズを置き、ストローク点数へ線形補間して
+    展開する。点間で相関した滑らかなノイズになるため、ガタつく高周波ノイズと違い
+    自然な字形のばらつきを生む。グローバルな ``np.random`` を使うため、呼び出し側の
+    ``np.random.seed`` による再現性スキームにそのまま乗る。
+
+    Args:
+        num_strokes: ストローク数（バッチ次元）。
+        num_points: ストロークあたりの点数。
+        amp: 制御点ノイズの標準偏差（振幅）。``0`` でゼロ配列を返す。
+        num_ctrl: 制御点数。少ないほど低周波（滑らか）になる。
+
+    Returns:
+        ``(num_strokes, num_points, 2)`` 形状の float32 ノイズ。
+    """
+    if amp <= 0.0:
+        return np.zeros((num_strokes, num_points, 2), dtype=np.float32)
+
+    ctrl = np.random.normal(0.0, amp, size=(num_strokes, num_ctrl, 2))
+    t_ctrl = np.linspace(0.0, 1.0, num_ctrl)
+    t_pts = np.linspace(0.0, 1.0, num_points)
+    out = np.empty((num_strokes, num_points, 2), dtype=np.float32)
+    for b in range(num_strokes):
+        for d in range(2):
+            out[b, :, d] = np.interp(t_pts, t_ctrl, ctrl[b, :, d])
+    return out
+
 
 @lru_cache(maxsize=1)
 def _cuda_is_usable() -> bool:
@@ -235,7 +274,11 @@ class StrokeInference:
         """
         if self.version == 3:
             return self._generate_v3(
-                style_sample, reference_strokes, noise_scale, deform_scale=deform_scale
+                style_sample,
+                reference_strokes,
+                noise_scale,
+                deform_scale=deform_scale,
+                temperature=temperature,
             )
 
         if self.norm_stats is not None:
@@ -417,10 +460,13 @@ class StrokeInference:
         reference_strokes: list[NDArray[np.float64]] | None,
         noise_scale: float = 0.3,
         deform_scale: float = 1.0,
+        temperature: float = 0.0,
     ) -> list[np.ndarray]:
         """V3: Deform reference strokes using predicted offsets (batched).
 
         deform_scale<1 で変形量を縮め、参照字形へ近づける（多画字の固まり対策）。
+        temperature>0 で per-point offset に低周波ゆらぎを加え、同じ字でも生成ごとに
+        字形を変える（``temperature=0`` は従来と完全一致＝後方互換）。
         """
         from src.model.data_utils import normalize_deltas, resample_stroke
         from src.model.finetune import OFFSET_CLAMP, smooth_offsets
@@ -464,6 +510,13 @@ class StrokeInference:
             # to remove high-frequency offset noise that creates visible jaggedness
             if self.deformer_type != "affine":
                 offsets = smooth_offsets(offsets)
+            if temperature and temperature > 0:
+                # 制御点補間による低周波ゆらぎ＝点間で相関し滑らか（高周波ガタつきにしない）。
+                # clamp の前に足すことで合算後も ±OFFSET_CLAMP に収まり字形が破綻しない。
+                noise = _temperature_noise(
+                    offsets.shape[0], offsets.shape[1], temperature * TEMP_NOISE_AMP
+                )
+                offsets = offsets + torch.from_numpy(noise).to(offsets.device)
             offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP) * deform_scale
             deformed_batch = (ref_batch + offsets).detach().cpu().numpy()
 

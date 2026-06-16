@@ -27,8 +27,8 @@ class UISettings:
         margin_right: 右余白 (mm)。
         temperature: ML モデル温度（字形そのものの揺らぎの強度）。
         messiness: レイアウトの汚さ倍率。baseline_drift/字間/サイズ/傾きを
-            一括スケール。1.0=標準、0=整った字、2=大きく乱れる。temperature
-            （字形の揺らぎ）とは別軸。
+            一括スケール。0=整った字、1.0=AugmentConfig 素値、2=大きく乱れる。
+            既定 0.4（揺らぎ最小寄り）。temperature（字形の揺らぎ）とは別軸。
         pressure_variation: 画内の筆圧（濃淡）変調の深さ ∈[0,1]。0=均一な定幅
             ペン感、大=人の筆圧リズム（下ろし濃く・上げ薄く）。【実機注意】描画中に
             Z を振るため単線シャーペンでは点線化する。実機では 0、プレビュー演出用。
@@ -51,9 +51,11 @@ class UISettings:
     margin_left: float
     margin_right: float
     temperature: float
-    messiness: float = 1.0
+    # 既定は揺らぎ最小寄り: per-stroke 独立のランダム変形を強くすると各画が
+    # バラバラに動き「ストローク間のバランスが崩れる」ため、整った字を既定とする。
+    messiness: float = 0.4
     pressure_variation: float = 0.0
-    instance_variation: float = 0.5
+    instance_variation: float = 0.1
     entry_taper: float = 0.0
     connection_strength: float = 0.0
     plot_page_numbers: bool = True
@@ -75,10 +77,10 @@ class UISettings:
             margin_bottom=34.0,
             margin_left=5.0,
             margin_right=5.0,
-            temperature=1.0,
-            messiness=1.0,
+            temperature=0.2,
+            messiness=0.4,
             pressure_variation=0.0,
-            instance_variation=0.5,
+            instance_variation=0.1,
             entry_taper=0.0,
             connection_strength=0.0,
         )
