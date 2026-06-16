@@ -237,6 +237,37 @@ class TestStrokeRendererMethods:
         assert period is not None and kuten is not None
         assert np.allclose(period[0], kuten[0])
 
+    @pytest.mark.parametrize("char", ["、", "，", ","])
+    def test_comma_punct_slants_left_down_and_stays_short(self, char):
+        renderer = StrokeRenderer()
+        strokes = renderer._simple_punct_strokes(char)
+        assert strokes is not None
+
+        raw = strokes[0]
+        assert raw.shape == (2, 2)
+        assert raw[1, 0] < raw[0, 0]
+        assert raw[1, 1] < raw[0, 1]
+
+        placement = CharPlacement(char=char, x=10.0, y=20.0, font_size=6.0)
+        positioned = renderer._position_strokes(strokes, placement)[0]
+        length = np.linalg.norm(positioned[1] - positioned[0])
+        assert 2.5 <= length <= 2.9
+        assert length == pytest.approx(2.7, rel=0.06)
+        assert 1.55 <= np.ptp(positioned[:, 0]) <= 1.7
+        assert 2.1 <= np.ptp(positioned[:, 1]) <= 2.35
+        assert positioned[1, 0] < positioned[0, 0]
+        assert positioned[1, 1] < positioned[0, 1]
+
+    @pytest.mark.parametrize("char", ["、", "，", ","])
+    def test_comma_punct_finish_is_harai(self, char):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char=char, x=10.0, y=20.0, font_size=6.0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == 1
+        assert finishes == ["harai"]
+
     def test_simple_paren_strokes(self):
         from src.layout.typesetter import CharPlacement
 
@@ -299,12 +330,25 @@ class TestStrokeRendererMethods:
 
         strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
 
-        assert len(strokes) > 0
-        assert len(strokes) == len(finishes)
+        assert strokes == []
+        assert finishes == []
         assert char not in renderer._last_coverage.skipped
+        assert char in renderer._last_coverage.missing_glyphs
 
-    @pytest.mark.parametrize("char", ["0", "1", "９", "、", "。", "，", "．", ",", "."])
-    def test_skip_non_japanese_keeps_digits_and_punctuation(self, char):
+    @pytest.mark.parametrize("char", ["0", "1", "９"])
+    def test_skip_non_japanese_keeps_missing_digits_as_blank(self, char):
+        renderer = StrokeRenderer(skip_non_japanese=True)
+        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert strokes == []
+        assert finishes == []
+        assert char not in renderer._last_coverage.skipped
+        assert char in renderer._last_coverage.missing_glyphs
+
+    @pytest.mark.parametrize("char", ["、", "。", "，", "．", ",", "."])
+    def test_skip_non_japanese_keeps_punctuation(self, char):
         renderer = StrokeRenderer(skip_non_japanese=True)
         placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
 
@@ -616,7 +660,7 @@ class TestGeometricFallbackOrder:
         assert fake.calls == 0
         assert renderer._last_coverage.geometric == [char]
 
-    def test_inference_without_reference_is_skipped_and_falls_back_to_rect(self):
+    def test_inference_without_reference_is_blank_and_recorded_as_missing(self):
         renderer = StrokeRenderer()
         fake = _FailingInference(ValueError("missing reference"))
         renderer._inference = fake
@@ -625,9 +669,9 @@ class TestGeometricFallbackOrder:
         strokes = renderer.generate_char_strokes(placement)
 
         assert fake.calls == 0
-        assert len(strokes) == 1
-        assert strokes[0].shape == (5, 2)
-        assert renderer._last_coverage.rect_fallback == ["漢"]
+        assert strokes == []
+        assert renderer._last_coverage.missing_glyphs == ["漢"]
+        assert renderer._last_coverage.rect_fallback == []
 
     def test_lambda_without_reference_uses_geometric_before_ml(self):
         renderer = StrokeRenderer()
@@ -853,7 +897,7 @@ class TestGenerateCharStrokesWithFinishes:
     def test_geometric_paths_all_none(self):
         renderer = StrokeRenderer()
         # 句読点 / ASCII数式 / 括弧 / 数式記号 / ASCIIレター / 数式ワード
-        for char in ("、", "=", "(", "×", "A", "α"):
+        for char in ("。", "=", "(", "×", "A", "α"):
             placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
             strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
             assert len(strokes) == len(finishes), f"{char}: len mismatch"
@@ -888,15 +932,16 @@ class TestGenerateCharStrokesWithFinishes:
         assert strokes == []
         assert finishes == []
 
-    def test_rect_fallback_returns_none_finish(self):
-        # 参照なし・推論なし → 矩形フォールバック
+    def test_missing_glyph_returns_empty_pair(self):
+        # 参照なし・推論なし → 未収録として空白化
         renderer = StrokeRenderer()
         placement = CharPlacement(char="漢", x=0.0, y=0.0, font_size=8.0, page=0)
 
         strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
 
-        assert len(strokes) == len(finishes)
-        assert finishes == ["none"] * len(strokes)
+        assert strokes == []
+        assert finishes == []
+        assert renderer._last_coverage.missing_glyphs == ["漢"]
 
     def test_direct_stroke_all_none(self, tmp_path):
         user_dir = tmp_path / "user_strokes"

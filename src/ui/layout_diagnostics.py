@@ -1,7 +1,7 @@
-"""レイアウト自動診断: □（字形なし）と文字かぶり（重なり）を検出する。
+"""レイアウト自動診断: 欠損/空白化文字と文字かぶり（重なり）を検出する。
 
 レポート生成前の品質チェック用。組版結果（CharPlacement）を走査し、
-- 字形が無く矩形フォールバック（□）になる文字
+- 字形が無く欠損/空白化または矩形フォールバックになる文字
 - 隣接文字・数式の水平方向の重なり（はみ出し）
 - 数式が上下の行に食い込む垂直方向の干渉
 を洗い出す。実機に流す前にこれで潰す。
@@ -43,9 +43,9 @@ class LayoutReport:
         lines = []
         if self.missing_glyphs:
             items = "、".join(f"{m.char!r}×{m.count}" for m in self.missing_glyphs)
-            lines.append(f"□(字形なし) {len(self.missing_glyphs)}種: {items}")
+            lines.append(f"欠損/空白化 {len(self.missing_glyphs)}種: {items}")
         else:
-            lines.append("□(字形なし): なし")
+            lines.append("欠損/空白化: なし")
         if self.overlaps:
             lines.append(f"かぶり {len(self.overlaps)}件:")
             for o in self.overlaps[:40]:
@@ -150,7 +150,7 @@ def diagnose_placements(
 
 
 def diagnose_layout(pipeline, text: str) -> LayoutReport:
-    """テキストを組版し、□（字形なし）とかぶりを検出して :class:`LayoutReport` を返す。
+    """テキストを組版し、欠損/空白化文字とかぶりを検出して :class:`LayoutReport` を返す。
 
     Args:
         pipeline: ``text_to_placements`` を持つ :class:`PlotterPipeline`。
@@ -172,11 +172,16 @@ def diagnose_layout(pipeline, text: str) -> LayoutReport:
 
     missing: list[MissingGlyph] = []
     for ch, cnt in seen.items():
-        renderer._last_coverage.rect_fallback.clear()
+        if hasattr(renderer._last_coverage, "missing_glyphs"):
+            renderer._last_coverage.missing_glyphs.clear()
+        if hasattr(renderer._last_coverage, "rect_fallback"):
+            renderer._last_coverage.rect_fallback.clear()
         renderer.generate_char_strokes(
             CharPlacement(char=ch, x=0.0, y=0.0, font_size=pipeline._typesetter.font_size)
         )
-        if ch in renderer._last_coverage.rect_fallback:
+        missing_glyphs = getattr(renderer._last_coverage, "missing_glyphs", [])
+        rect_fallback = getattr(renderer._last_coverage, "rect_fallback", [])
+        if ch in missing_glyphs or ch in rect_fallback:
             missing.append(MissingGlyph(ch, cnt))
     missing.sort(key=lambda m: -m.count)
 

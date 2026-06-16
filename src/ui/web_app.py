@@ -67,8 +67,10 @@ class PlotterPipeline:
         connection_strength: float = 0.0,
         skip_non_japanese: bool = False,
         seed: int | None = None,
+        plot_page_numbers: bool = True,
     ) -> None:
         self._connection_strength = connection_strength
+        self._plot_page_numbers = bool(plot_page_numbers)
         self._page_config = page_config or PageConfig(
             paper_size=(210.0, 297.0),
             margin_top=48.0,
@@ -431,6 +433,11 @@ class PlotterPipeline:
             x += font_size * 0.5
         return all_strokes
 
+    def _page_number_strokes_for(self, page_number: int) -> list[Stroke]:
+        if not self._plot_page_numbers:
+            return []
+        return self._generate_page_number_strokes(page_number)
+
     def strokes_to_gcode(
         self, strokes: list[Stroke], finishes: list[str] | None = None
     ) -> list[str]:
@@ -461,7 +468,7 @@ class PlotterPipeline:
         all_finishes: list[str] = []
         for i, page_placements in enumerate(pages, start=1):
             strokes, finishes = self.placements_to_strokes_with_finishes(page_placements)
-            page_num_strokes = self._generate_page_number_strokes(i)
+            page_num_strokes = self._page_number_strokes_for(i)
             all_strokes.extend(strokes)
             all_finishes.extend(finishes)
             all_strokes.extend(page_num_strokes)
@@ -526,7 +533,7 @@ class PlotterPipeline:
                     page_base + page_span * 0.9,
                     f"プレビュー描画中 ({i}/{n_pages})...",
                 )
-            page_num_strokes = self._generate_page_number_strokes(i)
+            page_num_strokes = self._page_number_strokes_for(i)
             self._preview_with_ruled_lines(
                 optimized,
                 ruled_lines,
@@ -582,7 +589,7 @@ class PlotterPipeline:
             strokes, finishes = self.placements_to_strokes_with_finishes(
                 page_placements, progress_callback=_stroke_progress
             )
-            page_num_strokes = self._generate_page_number_strokes(i)
+            page_num_strokes = self._page_number_strokes_for(i)
             all_strokes = strokes + page_num_strokes
             all_finishes = finishes + ["none"] * len(page_num_strokes)
 
@@ -683,6 +690,7 @@ def build_pipeline(
         instance_variation=settings.instance_variation,
         connection_strength=settings.connection_strength,
         skip_non_japanese=skip_non_japanese,
+        plot_page_numbers=settings.plot_page_numbers,
     )
     # PlotterPipeline.__init__ は font_size=4.5 ハードコーディングのため、
     # UISettings.font_size を反映するため Typesetter を再構築する

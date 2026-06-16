@@ -39,6 +39,7 @@ class UISettings:
         connection_strength: 連綿（続け字）の強さ ∈[0,1]。0=なし。同じ字の近い画を、
             近いほど高確率＋乱数で薄いつなぎ線で結ぶ（ペンを上げずに継続）。Z 一定の
             つなぎなので点線化しない。
+        plot_page_numbers: ページ番号をプロットするか。
         paper_width: 用紙幅 (mm)。デフォルト A4。
         paper_height: 用紙高 (mm)。デフォルト A4。
     """
@@ -57,6 +58,7 @@ class UISettings:
     instance_variation: float = 0.1
     entry_taper: float = 0.0
     connection_strength: float = 0.0
+    plot_page_numbers: bool = True
     paper_width: float = 210.0
     paper_height: float = 297.0
 
@@ -120,11 +122,11 @@ class UISettings:
 
         return errors
 
-    def to_dict(self) -> dict[str, float]:
+    def to_dict(self) -> dict[str, object]:
         """ブラウザ永続化（gr.BrowserState）用の plain dict へ変換する。
 
         Returns:
-            全フィールドを float 値で持つ dict。JSON シリアライズ可能。
+            全フィールドを持つ dict。JSON シリアライズ可能。
         """
         return asdict(self)
 
@@ -145,12 +147,33 @@ class UISettings:
         if not data:
             return base
         valid = {f.name for f in fields(cls)}
-        updates: dict[str, float] = {}
+        updates: dict[str, object] = {}
         for key, value in data.items():
             if key not in valid or value is None:
+                continue
+            current = getattr(base, key)
+            if isinstance(current, bool):
+                parsed_bool = cls._parse_bool(value)
+                if parsed_bool is not None:
+                    updates[key] = parsed_bool
                 continue
             try:
                 updates[key] = float(value)
             except (TypeError, ValueError):
                 continue
         return replace(base, **updates)
+
+    @staticmethod
+    def _parse_bool(value: object) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off"}:
+                return False
+            return None
+        if isinstance(value, int | float):
+            return bool(value)
+        return None

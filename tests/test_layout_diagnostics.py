@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from src.layout.typesetter import CharPlacement
 from src.ui import layout_diagnostics as diagnostics
 from src.ui.layout_diagnostics import LayoutReport, _y_extent, diagnose_placements
@@ -73,3 +75,34 @@ class TestReport:
         r = LayoutReport()
         assert r.ok
         assert "なし" in r.summary()
+
+    def test_summary_mentions_blank_missing_glyphs(self):
+        r = LayoutReport(missing_glyphs=[diagnostics.MissingGlyph("漢", 2)])
+
+        summary = r.summary()
+
+        assert "欠損/空白化 1種: '漢'×2" in summary
+        assert "□(字形なし)" not in summary
+
+
+class TestDiagnoseLayout:
+    def test_missing_glyphs_from_renderer_coverage_are_reported(self):
+        class FakeRenderer:
+            def __init__(self):
+                self._last_coverage = SimpleNamespace(missing_glyphs=[], rect_fallback=[])
+
+            def generate_char_strokes(self, placement):
+                if placement.char == "漢":
+                    self._last_coverage.missing_glyphs.append(placement.char)
+                return []
+
+        pipeline = SimpleNamespace(
+            _stroke_renderer=FakeRenderer(),
+            _typesetter=SimpleNamespace(font_size=4.5),
+            _page_config=SimpleNamespace(line_spacing=7.0),
+            text_to_placements=lambda _text: [[_cp("漢"), _cp("あ")]],
+        )
+
+        report = diagnostics.diagnose_layout(pipeline, "漢あ")
+
+        assert [(m.char, m.count) for m in report.missing_glyphs] == [("漢", 1)]

@@ -82,6 +82,14 @@ class TestFormatCoverage:
         report = CharCoverageReport(rect_fallback=["X", "Y"])
         result = _format_coverage(report)
         assert "矩形フォールバック" in result
+        assert "⚠️" in result
+
+    def test_missing_glyphs_are_shown_as_blank_warning(self):
+        report = CharCoverageReport(missing_glyphs=["漢", "𠮷"])
+        result = _format_coverage(report)
+        assert "未収録" in result
+        assert "空白化" in result
+        assert "⚠️" in result
 
     def test_summary_line(self):
         report = CharCoverageReport(user_strokes=["あ"], skipped=[" "])
@@ -89,6 +97,12 @@ class TestFormatCoverage:
         assert "全2文字" in result
         assert "描画: 1" in result
         assert "スキップ: 1" in result
+
+    def test_missing_glyphs_count_as_total_but_not_rendered(self):
+        report = CharCoverageReport(user_strokes=["あ"], missing_glyphs=["漢"])
+        result = _format_coverage(report)
+        assert "全2文字" in result
+        assert "描画: 1" in result
 
 
 class TestExamples:
@@ -171,6 +185,12 @@ class TestAppSmoke:
             getattr(b, "label", None) for b in app.blocks.values() if isinstance(b, gr.Checkbox)
         }
         assert "日本語文字だけプロット（英数字・数式・記号をスキップ）" in labels
+
+    def test_has_plot_page_numbers_checkbox(self, app):
+        labels = {
+            getattr(b, "label", None) for b in app.blocks.values() if isinstance(b, gr.Checkbox)
+        }
+        assert "ページ番号をプロット" in labels
 
     def test_plotter_speed_delay_options_are_hidden(self, app):
         labels = {getattr(b, "label", None) for b in app.blocks.values()}
