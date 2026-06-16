@@ -31,6 +31,7 @@ class CharCoverageReport:
     kanjivg: list[str] = field(default_factory=list)
     geometric: list[str] = field(default_factory=list)
     rect_fallback: list[str] = field(default_factory=list)
+    missing_glyphs: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
 
 
@@ -452,9 +453,8 @@ class StrokeRenderer:
                 positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
                 return positioned, finishes
 
-        cov.rect_fallback.append(original_char)
-        rect = self._rect_fallback(placement)
-        return rect, ["none"] * len(rect)
+        cov.missing_glyphs.append(original_char)
+        return [], []
 
     # 揺らぎを満額にする画数の上限と、下限まで落とす画数。多画字は画間隔が
     # 狭く、揺らぎで画が隣のレーンへはみ出して「固まる」ため画数で逓減する。

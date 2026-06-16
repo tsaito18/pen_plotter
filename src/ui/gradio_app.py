@@ -565,8 +565,8 @@ _TRIGGER_MULTI_DOWNLOAD_JS = r"""
 def _format_coverage(report: object) -> str:
     """CharCoverageReport を Markdown サマリへ変換する。
 
-    各カバレッジ階層（ユーザー筆跡 / ML / KanjiVG / 幾何 / 矩形）を
-    descending priority で表示し、矩形フォールバックには警告アイコンを付ける。
+    各カバレッジ階層（ユーザー筆跡 / ML / KanjiVG / 幾何 / 未収録 / 矩形）を
+    descending priority で表示し、未収録・矩形フォールバックには警告アイコンを付ける。
     """
     total = (
         len(report.user_strokes)  # type: ignore[attr-defined]
@@ -574,6 +574,7 @@ def _format_coverage(report: object) -> str:
         + len(report.kanjivg)  # type: ignore[attr-defined]
         + len(report.geometric)  # type: ignore[attr-defined]
         + len(report.rect_fallback)  # type: ignore[attr-defined]
+        + len(report.missing_glyphs)  # type: ignore[attr-defined]
         + len(report.skipped)  # type: ignore[attr-defined]
     )
     if total == 0:
@@ -595,9 +596,14 @@ def _format_coverage(report: object) -> str:
     _tier("ML推論", report.ml_inference)  # type: ignore[attr-defined]
     _tier("KanjiVG", report.kanjivg)  # type: ignore[attr-defined]
     _tier("幾何生成", report.geometric)  # type: ignore[attr-defined]
+    _tier("未収録（空白化）", report.missing_glyphs, icon="⚠️")  # type: ignore[attr-defined]
     _tier("矩形フォールバック", report.rect_fallback, icon="⚠️")  # type: ignore[attr-defined]
 
-    rendered = total - len(report.skipped)  # type: ignore[attr-defined]
+    rendered = (
+        total
+        - len(report.skipped)  # type: ignore[attr-defined]
+        - len(report.missing_glyphs)  # type: ignore[attr-defined]
+    )
     summary = f"全{total}文字 (描画: {rendered}, スキップ: {len(report.skipped)})"  # type: ignore[attr-defined]
 
     return summary + "\n\n" + " | ".join(tiers) if tiers else summary

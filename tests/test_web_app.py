@@ -45,12 +45,22 @@ class TestPlotterPipeline:
         assert len(placements[0]) == 5  # 5文字
 
     def test_placements_to_strokes(self, pipeline):
-        placements = pipeline.text_to_placements("あい")
+        placements = pipeline.text_to_placements("AB")
         strokes = pipeline.placements_to_strokes(placements[0])
         assert len(strokes) > 0
         for s in strokes:
             assert isinstance(s, np.ndarray)
             assert s.ndim == 2
+
+    def test_missing_glyph_is_blank_through_pipeline(self, pipeline):
+        placements = [CharPlacement(char="漢", x=0.0, y=0.0, font_size=8.0)]
+
+        strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements)
+
+        assert strokes == []
+        assert finishes == []
+        assert pipeline._last_coverage.missing_glyphs == ["漢"]
+        assert pipeline._last_coverage.rect_fallback == []
 
     def test_skip_non_japanese_pipeline_keeps_only_japanese_chars(self):
         pipeline = PlotterPipeline(skip_non_japanese=True)
@@ -65,9 +75,10 @@ class TestPlotterPipeline:
 
         strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements)
 
-        assert len(strokes) == 5
-        assert len(finishes) == 5
+        assert len(strokes) == 1
+        assert len(finishes) == 1
         assert pipeline._last_coverage.skipped == ["A"]
+        assert pipeline._last_coverage.missing_glyphs == ["あ", "1", "ー", "い"]
 
     def test_strokes_to_gcode(self, pipeline):
         placements = pipeline.text_to_placements("あ")
@@ -196,14 +207,13 @@ class TestFallbackStrokes:
     """3段階フォールバックのテスト。"""
 
     def test_default_pipeline_unchanged(self):
-        """checkpoint/kanjivg_dir未指定時は従来の矩形フォールバック。"""
+        """checkpoint/kanjivg_dir未指定時の未収録文字は空白化。"""
         pipeline = PlotterPipeline()
         placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=5.0)
         strokes = pipeline.placements_to_strokes([placement])
-        assert len(strokes) == 1
-        # 矩形は5点（始点に戻る閉じた四角形）
-        assert strokes[0].shape == (5, 2)
-        assert np.allclose(strokes[0][0], strokes[0][-1])
+        assert strokes == []
+        assert pipeline._last_coverage.missing_glyphs == ["あ"]
+        assert pipeline._last_coverage.rect_fallback == []
 
     def test_pipeline_kanjivg_fallback(self, tmp_path):
         """KanjiVG JSONが存在する文字はKanjiVGストロークを使用。"""
@@ -228,16 +238,17 @@ class TestFallbackStrokes:
         assert rendered_w <= placement.font_size + margin
         assert rendered_h <= placement.font_size + margin
 
-    def test_pipeline_kanjivg_missing_char_falls_to_rect(self, tmp_path):
-        """KanjiVGにファイルがない文字は矩形フォールバック。"""
+    def test_pipeline_kanjivg_missing_char_is_blank(self, tmp_path):
+        """KanjiVGにファイルがない文字は空白化。"""
         pipeline = PlotterPipeline(kanjivg_dir=tmp_path)
         placement = CharPlacement(char="あ", x=10.0, y=20.0, font_size=5.0)
         strokes = pipeline.placements_to_strokes([placement])
-        assert len(strokes) == 1
-        assert strokes[0].shape == (5, 2)
+        assert strokes == []
+        assert pipeline._last_coverage.missing_glyphs == ["あ"]
+        assert pipeline._last_coverage.rect_fallback == []
 
-    def test_pipeline_inference_without_reference_falls_to_rect(self, tmp_path):
-        """参照ストロークがない場合はML推論を呼ばず矩形フォールバックする。"""
+    def test_pipeline_inference_without_reference_is_blank(self, tmp_path):
+        """参照ストロークがない場合はML推論を呼ばず空白化する。"""
         mock_strokes = [
             np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]]),
             np.array([[0.2, 0.3], [0.4, 0.5], [0.6, 0.7]]),
@@ -254,8 +265,9 @@ class TestFallbackStrokes:
         strokes = pipeline.placements_to_strokes([placement])
 
         mock_inference.generate.assert_not_called()
-        assert len(strokes) == 1
-        assert strokes[0].shape == (5, 2)
+        assert strokes == []
+        assert pipeline._last_coverage.missing_glyphs == ["あ"]
+        assert pipeline._last_coverage.rect_fallback == []
 
     def test_position_strokes(self):
         """_position_strokesがアスペクト比保持・セル中央配置で正しく動作する。"""
@@ -423,8 +435,9 @@ class TestFallbackStrokes:
         strokes = pipeline.placements_to_strokes([placement])
 
         mock_inference.generate.assert_not_called()
-        assert len(strokes) == 1
-        assert strokes[0].shape == (5, 2)
+        assert strokes == []
+        assert pipeline._last_coverage.missing_glyphs == ["あ"]
+        assert pipeline._last_coverage.rect_fallback == []
 
     def test_load_reference_strokes(self, tmp_path):
         """_load_reference_strokesがKanjiVG JSONからNDArrayリストを返す。"""
@@ -814,7 +827,7 @@ class TestDirectStrokeUsage:
         assert all_pts[:, 1].max() <= 29.0
 
     def test_missing_char_falls_through(self, tmp_path):
-        """_user_stroke_db にない文字は従来通りフォールバック。"""
+        """_user_stroke_db にない文字は未収録として空白化。"""
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
             user_dir,
@@ -826,8 +839,9 @@ class TestDirectStrokeUsage:
         placement = CharPlacement(char="か", x=10.0, y=20.0, font_size=5.0)
         strokes = pipeline._generate_char_strokes(placement)
 
-        assert len(strokes) == 1
-        assert strokes[0].shape == (5, 2)
+        assert strokes == []
+        assert pipeline._last_coverage.missing_glyphs == ["か"]
+        assert pipeline._last_coverage.rect_fallback == []
 
 
 class TestStrokeSynthesis:
@@ -1448,19 +1462,18 @@ class TestPageNumber:
     """ページ番号の手書きストローク生成テスト。"""
 
     def test_page_number_strokes_generated(self):
-        """ページ番号ストロークが生成されること。"""
+        """数字データがないページ番号は矩形ではなく空白化される。"""
         pipeline = PlotterPipeline()
         strokes = pipeline._generate_page_number_strokes(1)
-        assert len(strokes) > 0
+        assert strokes == []
+        assert pipeline._last_coverage.missing_glyphs == ["1"]
 
-    def test_page_number_strokes_at_bottom_left(self):
-        """ページ番号ストロークが左下付近にあること。"""
+    def test_page_number_missing_digit_does_not_emit_rect(self):
+        """ページ番号の欠損数字でも矩形ストロークを出さない。"""
         pipeline = PlotterPipeline()
         strokes = pipeline._generate_page_number_strokes(3)
-        all_pts = np.concatenate(strokes, axis=0)
-        assert all_pts[:, 0].min() > 10  # 左端より右
-        assert all_pts[:, 0].max() < 60  # 中央より左
-        assert all_pts[:, 1].max() < 20  # 下部
+        assert strokes == []
+        assert pipeline._last_coverage.missing_glyphs == ["3"]
 
     def test_generate_preview_omits_page_number_strokes_when_disabled(self, tmp_path, monkeypatch):
         """plot_page_numbers=False ではプレビューへページ番号ストロークを渡さない。"""

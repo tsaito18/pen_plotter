@@ -107,8 +107,8 @@ class TestTypesetter:
             10.0 * (0.45 + 0.55 * effective_char_scale("あ")) + ls
         )
 
-    def test_heading_advance_applies_char_scale_without_letter_spacing(self):
-        """見出しの字送りは effective_char_scale を反映するが本文トラッキングは加えない。"""
+    def test_heading_advance_applies_char_scale_and_letter_spacing(self):
+        """見出しの字送りは effective_char_scale とトラッキングを反映する。"""
         from src.layout.char_metrics import effective_char_scale
 
         ts = Typesetter(PageConfig(), font_size=10.0)
@@ -116,7 +116,9 @@ class TestTypesetter:
 
         adv = ts._char_advance("漢", is_heading=True, line_font_size=line_font_size)
 
-        assert adv == pytest.approx(line_font_size * effective_char_scale("漢"))
+        assert adv == pytest.approx(
+            line_font_size * effective_char_scale("漢") + line_font_size * _LETTER_SPACING_SCALE
+        )
 
     def test_heading_advance_complex_kanji_wider_than_simple(self):
         """見出し字送りは密度補正で複雑字（鬱）が簡単字（一）より広い。"""
@@ -1284,6 +1286,20 @@ class TestHeadings:
         assert len(heading_chars) == 1
         # h1見出しは15mmから開始
         assert heading_chars[0].x == pytest.approx(15.0)
+
+    def test_h1_heading_x_advance_includes_letter_spacing(self):
+        """H1見出しの配置送りは字種スケールとトラッキングを反映する。"""
+        from src.layout.char_metrics import effective_char_scale
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        placements = ts.typeset("# 見出し")[0]
+        heading_chars = [p for p in placements if p.char in {"見", "出"}]
+
+        line_font_size = ts.font_size * 1.15
+        expected_advance = line_font_size * effective_char_scale("見") + line_font_size * 0.05
+
+        assert len(heading_chars) == 2
+        assert heading_chars[1].x - heading_chars[0].x == pytest.approx(expected_advance)
 
     @pytest.mark.parametrize(
         ("marker", "body_x"),

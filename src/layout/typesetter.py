@@ -174,9 +174,7 @@ class Typesetter:
 
     def _char_advance(self, ch: str, is_heading: bool, line_font_size: float) -> float:
         if is_heading:
-            # 見出しも本文と同じ字種×密度スケールで字送りを伸縮させる（英字小文字は
-            # 種別 0.7、複雑漢字は密度補正で広く）。本文トラッキングは見出しに加えない。
-            return line_font_size * effective_char_scale(ch)
+            return line_font_size * effective_char_scale(ch) + line_font_size * _LETTER_SPACING_SCALE
         return self._body_char_advance(ch)
 
     def _line_right_x(self, area: object, is_heading: bool, body_level: int) -> float:
@@ -540,7 +538,7 @@ class Typesetter:
                         def width_fn(ch: str) -> float:
                             if ch in math_placeholders:
                                 return self._inline_math_width(math_placeholders[ch])
-                            return line_font_size
+                            return self._char_advance(ch, True, line_font_size)
                     else:
                         line_x = _BODY_X.get(current_body_level, area.x)
 
