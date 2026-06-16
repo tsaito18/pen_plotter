@@ -173,6 +173,7 @@ class TestUISettingsSerialization:
             "instance_variation",
             "entry_taper",
             "connection_strength",
+            "plot_page_numbers",
             "paper_width",
             "paper_height",
         ):
@@ -237,6 +238,13 @@ class TestUISettingsSerialization:
         s = UISettings.from_dict({"font_size": None})
         assert s.font_size == default_fs
 
+    def test_from_dict_restores_plot_page_numbers_bool(self):
+        """plot_page_numbers は bool として復元される。"""
+        assert UISettings.from_dict({"plot_page_numbers": False}).plot_page_numbers is False
+        assert UISettings.from_dict({"plot_page_numbers": True}).plot_page_numbers is True
+        assert UISettings.from_dict({"plot_page_numbers": "false"}).plot_page_numbers is False
+        assert UISettings.from_dict({"plot_page_numbers": "true"}).plot_page_numbers is True
+
 
 class TestBuildPipeline:
     """build_pipeline() のテスト。"""
@@ -274,6 +282,16 @@ class TestBuildPipeline:
         assert pipeline._plotter_config.travel_speed == 12000.0
         assert pipeline._plotter_config.pen_delay == 0.0
         assert pipeline._temperature == 1.5
+
+    def test_build_pipeline_reflects_plot_page_numbers(self):
+        """build_pipeline() はページ番号プロット設定を反映する。"""
+        from dataclasses import replace
+
+        from src.ui.web_app import build_pipeline
+
+        pipeline = build_pipeline(replace(UISettings.default(), plot_page_numbers=False))
+
+        assert pipeline._plot_page_numbers is False
 
     def test_build_pipeline_default_matches_pipeline_init_default(self):
         """default() からの build_pipeline は PlotterPipeline() と等価な値を持つ。"""

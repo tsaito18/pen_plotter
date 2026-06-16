@@ -172,6 +172,12 @@ class TestAppSmoke:
         }
         assert "日本語文字だけプロット（英数字・数式・記号をスキップ）" in labels
 
+    def test_has_plot_page_numbers_checkbox(self, app):
+        labels = {
+            getattr(b, "label", None) for b in app.blocks.values() if isinstance(b, gr.Checkbox)
+        }
+        assert "ページ番号をプロット" in labels
+
     def test_plotter_speed_delay_options_are_hidden(self, app):
         labels = {getattr(b, "label", None) for b in app.blocks.values()}
         assert "描画速度 (mm/min)" not in labels
