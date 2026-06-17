@@ -154,11 +154,16 @@ class Typesetter:
         page_config: PageConfig,
         font_size: float | None = None,
         augmenter: HandwritingAugmenter | None = None,
+        handwrite_math: bool = False,
     ) -> None:
         self._config = page_config
         self._layout = PageLayout(page_config)
         self.font_size = font_size if font_size is not None else page_config.line_spacing * 0.9
         self._augmenter = augmenter
+        # True のとき構造式（分数/√/添字）も MathLayout 配置を本文と同じ手書き経路で
+        # 描く（matplotlib スケルトンを使わない）。グリフは _direct_stroke/KanjiVG、
+        # 分数線・根号は line_segment ストロークで描画する。
+        self.handwrite_math = handwrite_math
 
     @property
     def augmenter(self) -> HandwritingAugmenter | None:
@@ -174,7 +179,9 @@ class Typesetter:
 
     def _char_advance(self, ch: str, is_heading: bool, line_font_size: float) -> float:
         if is_heading:
-            return line_font_size * effective_char_scale(ch) + line_font_size * _LETTER_SPACING_SCALE
+            return (
+                line_font_size * effective_char_scale(ch) + line_font_size * _LETTER_SPACING_SCALE
+            )
         return self._body_char_advance(ch)
 
     def _line_right_x(self, area: object, is_heading: bool, body_level: int) -> float:
@@ -206,6 +213,9 @@ class Typesetter:
         elements = [e for e in elements if e.type != "tag"]
         if self._is_plain_math(elements):
             return sum(self._body_char_advance(ch) for ch in self._plain_math_text(elements))
+        if self.handwrite_math:
+            # 手書き経路では MathLayout の論理幅が実描画幅（各グリフを配置 x で描く）。
+            return MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size).width
         draw_w, _ = self._inline_math_draw_size(math_src)
         if draw_w > 0:
             return draw_w
@@ -945,6 +955,20 @@ class Typesetter:
             last_baseline_y = baseline_y
             # 中央寄せ・式番号位置は実描画幅(draw_w=g_h*aspect)基準にする。論理幅(g_box.width)
             # では上付き等で実描画が右へずれ、中央からはみ出す。本文幅を超える長い式は縮小して収める。
+            if self.handwrite_math:
+                # 手書き経路: 論理幅=実描画幅。本文幅を超える式は font を縮めて再レイアウト。
+                g_font = self.font_size
+                if g_box.width > area.width and g_box.width > 0:
+                    g_font = self.font_size * area.width / g_box.width
+                    g_box = MathLayoutEngine.layout(g_elems, x=0.0, y=0.0, font_size=g_font)
+                draw_w = g_box.width
+                center_x = area.x + (area.width - draw_w) / 2
+                placed = MathLayoutEngine.layout(
+                    g_elems, x=center_x, y=baseline_y, font_size=g_font
+                )
+                self._convert_math_placements(placed.placements, page_idx, output)
+                last_body_right = center_x + draw_w
+                continue
             g_h = g_box.ascent + g_box.descent
             draw_w = formula_draw_width_mm(body_src, g_h)
             scale = 1.0
@@ -1021,6 +1045,11 @@ class Typesetter:
                 cursor += self._body_char_advance(ch)
             return cursor
         box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
+        if self.handwrite_math:
+            # 構造式も手書き: 各 MathPlacement を本文と同じ手書き経路で描く
+            # （math_source を渡さない＝skeletonize しない）。分数線/根号は line_segment。
+            self._convert_math_placements(box.placements, page_idx, output)
+            return x + box.width
         # インライン: bbox[1] に本文ベースライン y を渡し、math_align="baseline" で
         # 数式のベースラインを本文行に揃える（中心配置のズレを根本解消）。
         # 高さ h_mm = ink_em*font_size（墨の em 比で本文と同縮尺。論理高だと小文字が
