@@ -73,152 +73,6 @@ class TestStrokeRendererMethods:
         # 点数・本数は不変
         assert [s.shape for s in straight] == [s.shape for s in slanted]
 
-    def _rendered_height(self, strokes):
-        pts = np.concatenate(strokes, axis=0)
-        return float(pts[:, 1].max() - pts[:, 1].min())
-
-    def test_ascii_lowercase_shorter_than_uppercase(self):
-        """論理フィットで小文字 a (x-height) は大文字 A (cap height) より低く描かれる。"""
-        renderer = StrokeRenderer()
-        fs = 5.0
-        lower = renderer._ascii_letter_strokes("a")
-        upper = renderer._ascii_letter_strokes("A")
-        lower_pos = renderer._position_strokes(
-            lower, CharPlacement(char="a", x=10.0, y=20.0, font_size=fs), logical_ascii=True
-        )
-        upper_pos = renderer._position_strokes(
-            upper, CharPlacement(char="A", x=10.0, y=20.0, font_size=fs), logical_ascii=True
-        )
-
-        assert self._rendered_height(lower_pos) < self._rendered_height(upper_pos)
-
-    def test_ascii_uppercase_near_cap_height(self):
-        """大文字 A は cap height 基準で論理高が font_size の概ね 0.8〜1.0 倍になる。
-
-        横は半角セル幅で抑えるため厳密 font_size には届かないが、x-height 系の
-        小文字より明確に高い。
-        """
-        renderer = StrokeRenderer()
-        fs = 5.0
-        upper = renderer._ascii_letter_strokes("A")
-        upper_pos = renderer._position_strokes(
-            upper, CharPlacement(char="A", x=10.0, y=20.0, font_size=fs), logical_ascii=True
-        )
-
-        h = self._rendered_height(upper_pos)
-        assert 0.8 * fs <= h <= 1.0 * fs
-
-    def test_ascii_descender_extends_below_baseline(self):
-        """ディセンダ字 g は論理フィットでもベースライン下へ伸びる形を保つ。"""
-        renderer = StrokeRenderer()
-        fs = 5.0
-        glyph = renderer._ascii_letter_strokes("g")
-        no_desc = renderer._ascii_letter_strokes("o")
-        g_pos = renderer._position_strokes(
-            glyph, CharPlacement(char="g", x=10.0, y=20.0, font_size=fs), logical_ascii=True
-        )
-        o_pos = renderer._position_strokes(
-            no_desc, CharPlacement(char="o", x=10.0, y=20.0, font_size=fs), logical_ascii=True
-        )
-        # g のディセンダは o の最下点より下に出る
-        assert np.concatenate(g_pos, axis=0)[:, 1].min() < np.concatenate(o_pos, axis=0)[:, 1].min()
-
-    def test_logical_ascii_default_off_preserves_bbox_fit(self):
-        """logical_ascii 既定 False は実bboxフィットで、論理フィットと結果が異なる。
-
-        小文字 a は実bboxフィットだとセル内で拡大され、論理フィット(x-height 抑制)
-        より高く描かれる。
-        """
-        renderer = StrokeRenderer()
-        fs = 5.0
-        glyph = renderer._ascii_letter_strokes("a")
-        bbox_pos = renderer._position_strokes(
-            glyph, CharPlacement(char="a", x=10.0, y=20.0, font_size=fs)
-        )
-        logical_pos = renderer._position_strokes(
-            glyph, CharPlacement(char="a", x=10.0, y=20.0, font_size=fs), logical_ascii=True
-        )
-        # 実bboxフィットは小文字 a を論理フィット(x-height)より高く拡大する
-        assert self._rendered_height(bbox_pos) > self._rendered_height(logical_pos)
-
-    def test_cjk_unaffected_by_logical_fit(self):
-        """CJK 字形は logical_ascii の有無に関わらず実bboxフィットのまま（非回帰）。"""
-        renderer = StrokeRenderer()
-        fs = 5.0
-        # 縦長字形（横律速を避け実bboxフィットで高さ＝font_size になる形）。
-        strokes = [np.array([[0.3, 0.0], [0.5, 1.0]]), np.array([[0.3, 0.0], [0.6, 0.5]])]
-        default_pos = renderer._position_strokes(
-            strokes, CharPlacement(char="漢", x=10.0, y=20.0, font_size=fs)
-        )
-        flagged_pos = renderer._position_strokes(
-            strokes, CharPlacement(char="漢", x=10.0, y=20.0, font_size=fs), logical_ascii=True
-        )
-        # CJK は logical_ascii を無視し、実bboxフィット（高さ＝font_size）を維持
-        assert self._rendered_height(default_pos) == pytest.approx(fs, rel=0.02)
-        assert np.allclose(np.concatenate(default_pos), np.concatenate(flagged_pos))
-
-    # 単位系字形の x-height 上端基準。_position_ascii_logical は字形 y をそのまま
-    # 論理高に写すため、x-height 小文字の上端が高いと「大文字混じり」に見える。
-    _XHEIGHT_TOP = 0.70
-    # 描画位置のディセンダ体（g/p/q/y）本体上端は x-height に揃えるが、circle 近似
-    # の数値誤差を許容する上限。
-    _XHEIGHT_TOP_MAX = 0.72
-
-    @staticmethod
-    def _glyph_top(strokes):
-        return float(np.concatenate(strokes, axis=0)[:, 1].max())
-
-    @staticmethod
-    def _glyph_bottom(strokes):
-        return float(np.concatenate(strokes, axis=0)[:, 1].min())
-
-    @pytest.mark.parametrize("char", ["a", "c", "e", "o", "n", "u", "r", "v", "w", "z", "x", "m"])
-    def test_xheight_lowercase_top_capped(self, char):
-        """x-height 小文字の上端 y が x-height 基準（≈0.72 以下）に収まる。"""
-        renderer = StrokeRenderer()
-        top = self._glyph_top(renderer._ascii_letter_strokes(char))
-        assert top <= self._XHEIGHT_TOP_MAX, f"{char!r} top={top}"
-
-    @pytest.mark.parametrize("char", ["g", "p", "q", "y"])
-    def test_descender_body_top_capped(self, char):
-        """ディセンダ体（g/p/q/y）の本体上端も x-height 基準に揃う。"""
-        renderer = StrokeRenderer()
-        top = self._glyph_top(renderer._ascii_letter_strokes(char))
-        assert top <= self._XHEIGHT_TOP_MAX, f"{char!r} top={top}"
-
-    @pytest.mark.parametrize("char", ["g", "p", "q", "y", "j"])
-    def test_descender_extends_below_baseline_in_unit(self, char):
-        """ディセンダ体の下端は単位系でベースライン(y=0)より下に出る。"""
-        renderer = StrokeRenderer()
-        bottom = self._glyph_bottom(renderer._ascii_letter_strokes(char))
-        assert bottom < 0.0, f"{char!r} bottom={bottom}"
-
-    @pytest.mark.parametrize("char", ["b", "d", "h", "k", "l"])
-    def test_ascender_lowercase_top_high(self, char):
-        """アセンダ小文字（b/d/h/k/l）の上端は cap height 付近（≥0.85）。"""
-        renderer = StrokeRenderer()
-        top = self._glyph_top(renderer._ascii_letter_strokes(char))
-        assert top >= 0.85, f"{char!r} top={top}"
-
-    def test_t_top_in_ascender_band(self):
-        """t は伝統的に cap より少し低いアセンダ帯（0.78〜0.95）の上端を持つ。"""
-        renderer = StrokeRenderer()
-        top = self._glyph_top(renderer._ascii_letter_strokes("t"))
-        assert 0.78 <= top <= 0.95, f"t top={top}"
-
-    def test_xheight_lowercase_tops_uniform(self):
-        """代表的な x-height 小文字群の上端 y が互いに揃う（最大-最小が小さい）。"""
-        renderer = StrokeRenderer()
-        chars = ["a", "c", "e", "o", "n", "u"]
-        tops = [self._glyph_top(renderer._ascii_letter_strokes(ch)) for ch in chars]
-        assert max(tops) - min(tops) < 0.12, dict(zip(chars, tops))
-
-    def test_math_symbol_strokes(self):
-        renderer = StrokeRenderer()
-        result = renderer._math_symbol_strokes("π")
-        assert result is not None
-        assert len(result) >= 1
-
     def test_simple_punct_strokes(self):
         renderer = StrokeRenderer()
         result = renderer._simple_punct_strokes("。")
@@ -443,105 +297,6 @@ class TestStrokeRendererMethods:
         assert math_bottom == pytest.approx(kanji_bottom, abs=0.6)
 
 
-class TestAsciiMathSymbols:
-    """数式で頻出する ASCII 記号は矩形フォールバックではなく幾何で描画する。"""
-
-    @pytest.mark.parametrize(
-        "char", ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%", "[", "]", "~"]
-    )
-    def test_ascii_math_renders_geometric(self, char):
-        from src.layout.typesetter import CharPlacement
-
-        renderer = StrokeRenderer()
-        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
-        strokes = renderer.generate_char_strokes(placement)
-
-        assert len(strokes) > 0
-        for s in strokes:
-            assert s.dtype == np.float64
-            assert s.ndim == 2 and s.shape[1] == 2
-
-        # 矩形フォールバックは「5 点で閉じた単一ストローク」として返る
-        is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
-        assert not is_rect_fallback, f"'{char}' fell back to rect"
-
-    def test_ascii_math_internal_unit_box(self):
-        """_ascii_math_strokes は単位正方形 (0,0)-(1,1) 内に座標を返す。"""
-        renderer = StrokeRenderer()
-        for char in ["+", "-", "=", "<", ">", "*", "/", ":", ";", "!", "?", "%"]:
-            result = renderer._ascii_math_strokes(char)
-            assert result is not None, f"'{char}' returned None"
-            assert len(result) >= 1
-            for s in result:
-                assert s.dtype == np.float64
-                assert s.shape[1] == 2
-                assert s.min() >= -0.05 and s.max() <= 1.05
-
-    def test_ascii_math_returns_none_for_non_math(self):
-        renderer = StrokeRenderer()
-        # ひらがな・漢字・他の記号は対象外
-        assert renderer._ascii_math_strokes("あ") is None
-        assert renderer._ascii_math_strokes("漢") is None
-        assert renderer._ascii_math_strokes("(") is None
-        assert renderer._ascii_math_strokes(",") is None
-
-    def test_plus_has_two_strokes(self):
-        """`+` は横棒と縦棒の 2 ストローク。"""
-        renderer = StrokeRenderer()
-        result = renderer._ascii_math_strokes("+")
-        assert result is not None
-        assert len(result) == 2
-
-    def test_equals_has_two_horizontal_strokes(self):
-        """`=` は上下 2 本の横棒。"""
-        renderer = StrokeRenderer()
-        result = renderer._ascii_math_strokes("=")
-        assert result is not None
-        assert len(result) == 2
-
-    def test_percent_has_diagonal_and_two_circles(self):
-        """`%` は斜線 1 本＋左上・右下の小円 2 本の計 3 ストローク。"""
-        renderer = StrokeRenderer()
-        result = renderer._ascii_math_strokes("%")
-        assert result is not None
-        assert len(result) == 3
-        # 斜線は右上がり（始点が左下・終点が右上）
-        diag = result[0]
-        assert diag[0][0] < diag[-1][0] and diag[0][1] < diag[-1][1]
-        # 小円 2 本は閉じている（始点≈終点）
-        for circle in result[1:]:
-            assert np.allclose(circle[0], circle[-1], atol=1e-6)
-
-    @pytest.mark.parametrize("char", ["①", "②", "④", "⑩", "℃", "°"])
-    def test_composite_symbols_not_rect_fallback(self, char):
-        """丸数字・℃・° は合成字形で描画され□にならない。"""
-        from pathlib import Path
-
-        renderer = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
-        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
-        strokes = renderer.generate_char_strokes(placement)
-        assert len(strokes) >= 1
-        assert char not in renderer._last_coverage.rect_fallback
-
-    @pytest.mark.parametrize("char", ["S", "s"])
-    def test_s_not_mirrored(self, char):
-        """S/s は上が左・下が右に膨らむ正しい向き（左右反転 Ƨ でない）。"""
-        renderer = StrokeRenderer()
-        stroke = renderer._ascii_letter_strokes(char)[0]
-        # 最も左へ張り出す点は上側(yが大)、最も右は下側(yが小)
-        left_pt = stroke[np.argmin(stroke[:, 0])]
-        right_pt = stroke[np.argmax(stroke[:, 0])]
-        assert left_pt[1] > right_pt[1]
-
-    def test_fullwidth_normalized_to_ascii(self):
-        """全角プラスも幾何ルートで処理される（_CHAR_SUBSTITUTIONS 経由）。"""
-        renderer = StrokeRenderer()
-        placement = CharPlacement(char="＋", x=0.0, y=0.0, font_size=8.0, page=0)
-        strokes = renderer.generate_char_strokes(placement)
-        is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
-        assert not is_rect_fallback
-
-
 class _FailingInference:
     def __init__(self, exc: Exception | None = None) -> None:
         self.exc = exc or AssertionError("ML inference should not be called")
@@ -673,20 +428,6 @@ class TestGeometricFallbackOrder:
         assert renderer._last_coverage.missing_glyphs == ["漢"]
         assert renderer._last_coverage.rect_fallback == []
 
-    def test_lambda_without_reference_uses_geometric_before_ml(self):
-        renderer = StrokeRenderer()
-        fake = _FailingInference()
-        renderer._inference = fake
-        placement = CharPlacement(char="λ", x=0.0, y=0.0, font_size=8.0, page=0)
-
-        strokes = renderer.generate_char_strokes(placement)
-
-        assert fake.calls == 0
-        assert len(strokes) > 0
-        assert renderer._last_coverage.geometric == ["λ"]
-        assert renderer._last_coverage.ml_inference == []
-        assert renderer._last_coverage.rect_fallback == []
-
     def test_is_ml_deformable_excludes_digits(self):
         # モデルはCJK(漢字/かな)のみ訓練。数字はML変形で字形が壊れるため除外。
         for d in "0123456789":
@@ -709,60 +450,29 @@ class TestGeometricFallbackOrder:
         assert "2" in renderer._last_coverage.kanjivg
         assert len(strokes) >= 1
 
-    @pytest.mark.parametrize("word", ["cos", "sin", "log", "dx"])
-    def test_math_words_render_geometric(self, word):
-        renderer = StrokeRenderer()
-        placement = CharPlacement(char=word, x=0.0, y=0.0, font_size=8.0, page=0)
-
-        strokes = renderer.generate_char_strokes(placement)
-
-        assert len(strokes) >= len(word)
-        assert renderer._last_coverage.geometric == [word]
-        assert renderer._last_coverage.rect_fallback == []
-
     @pytest.mark.parametrize(
         "char",
         list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"),
     )
-    def test_single_ascii_letter_renders_geometric(self, char):
-        renderer = StrokeRenderer()
+    def test_single_ascii_letter_renders_via_kanjivg_not_rect(self, char):
+        """英字 a-zA-Z は KanjiVG 参照経路で描画され□(矩形)にならない。
+
+        幾何フォント(_ascii_letter_strokes)を撤去したため、サンプルの無い英字は
+        KanjiVG の字形 JSON（a-zA-Z 全字あり）から描画される。矩形フォールバック
+        に落ちないことを非回帰として確認する。
+        """
+        from pathlib import Path
+
+        renderer = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
         placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
 
         strokes = renderer.generate_char_strokes(placement)
 
         assert len(strokes) > 0
-        assert renderer._last_coverage.geometric == [char]
-        assert renderer._last_coverage.rect_fallback == []
-
-
-class TestExtendedMathSymbols:
-    """LaTeX シンボルマップ追加で頻出する Unicode 記号がストロークになることを確認する。"""
-
-    @pytest.mark.parametrize(
-        "char",
-        ["ω", "π", "θ", "α", "β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"],
-    )
-    def test_math_symbol_renders(self, char):
-        from src.layout.typesetter import CharPlacement
-
-        renderer = StrokeRenderer()
-        placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
-        strokes = renderer.generate_char_strokes(placement)
-        assert len(strokes) > 0, f"'{char}' returned no strokes"
-        # 矩形フォールバックは「5 点で閉じた単一ストローク」として返る
         is_rect_fallback = len(strokes) == 1 and strokes[0].shape == (5, 2)
         assert not is_rect_fallback, f"'{char}' fell back to rect"
-
-    @pytest.mark.parametrize(
-        "char", ["β", "γ", "λ", "μ", "ε", "σ", "Σ", "Π", "Ω", "×", "·", "→", "∫", "∂"]
-    )
-    def test_extended_unicode_in_unit_box(self, char):
-        renderer = StrokeRenderer()
-        result = renderer._math_symbol_strokes(char)
-        assert result is not None, f"'{char}' returned None"
-        for s in result:
-            assert s.shape[1] == 2
-            assert s.min() >= -0.05 and s.max() <= 1.05
+        assert char in renderer._last_coverage.kanjivg
+        assert renderer._last_coverage.rect_fallback == []
 
 
 # 払い(㇒)を含む 2 ストローク漢字の KanjiVG fixture（Y-UP, 0..1 正規化済み）。
@@ -896,21 +606,13 @@ class TestGenerateCharStrokesWithFinishes:
 
     def test_geometric_paths_all_none(self):
         renderer = StrokeRenderer()
-        # 句読点 / ASCII数式 / 括弧 / 数式記号 / ASCIIレター / 数式ワード
+        # 句読点・括弧（幾何 KEEP 経路）と、字形の無い記号・英字（矩形フォールバック）
+        # のいずれも finish は none で並走長が一致する契約を確認する。
         for char in ("。", "=", "(", "×", "A", "α"):
             placement = CharPlacement(char=char, x=0.0, y=0.0, font_size=8.0, page=0)
             strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
             assert len(strokes) == len(finishes), f"{char}: len mismatch"
             assert set(finishes) <= {"none"}, f"{char}: non-none finish leaked"
-
-    def test_math_word_all_none(self):
-        renderer = StrokeRenderer()
-        placement = CharPlacement(char="cos", x=0.0, y=0.0, font_size=8.0, page=0)
-
-        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
-
-        assert len(strokes) == len(finishes)
-        assert finishes == ["none"] * len(strokes)
 
     def test_line_segment_returns_none_finish(self):
         renderer = StrokeRenderer()
@@ -983,33 +685,6 @@ class TestGenerateCharStrokesWithFinishes:
         assert len(result) == len(strokes)
 
 
-class TestAsciiLetterHandwriting:
-    """本文 ASCII 英字の手書き揺らぎ（きれいすぎ解消）。"""
-
-    def test_ascii_letter_gets_distortion_with_augmenter(self):
-        from src.layout.typesetter import CharPlacement
-        from src.model.augmentation import AugmentConfig, HandwritingAugmenter
-
-        clean = StrokeRenderer()
-        hand = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
-        cp = CharPlacement(char="x", x=0.0, y=0.0, font_size=10.0)
-        s_clean = clean.generate_char_strokes(cp)
-        s_hand = hand.generate_char_strokes(cp)
-        assert len(s_clean) == len(s_hand)
-        # augmenter 有りでは素の幾何字形から変位する（きれいすぎない）
-        assert any(not np.allclose(c, h) for c, h in zip(s_clean, s_hand))
-
-    def test_ascii_letter_no_augmenter_is_clean(self):
-        from src.layout.typesetter import CharPlacement
-
-        r = StrokeRenderer()  # augmenter なし
-        cp = CharPlacement(char="x", x=0.0, y=0.0, font_size=10.0)
-        a = r.generate_char_strokes(cp)
-        b = r.generate_char_strokes(cp)
-        # augmenter 無しなら毎回同一（distortion no-op）
-        assert all(np.allclose(x, y) for x, y in zip(a, b))
-
-
 class TestAsciiLetterPrefersUserStroke:
     """英字はユーザー実筆跡サンプルがあれば幾何フォントより優先（英語くそ対策）。"""
 
@@ -1029,17 +704,20 @@ class TestAsciiLetterPrefersUserStroke:
         assert "A" in r._last_coverage.user_strokes
         assert "A" not in r._last_coverage.geometric
 
-    def test_letter_without_sample_falls_back_to_geometric(self, tmp_path):
+    def test_letter_without_sample_falls_back_to_kanjivg(self, tmp_path):
+        from pathlib import Path
+
         from src.layout.typesetter import CharPlacement
 
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(user_dir, "A", [[[0, 100], [50, 0]]])
-        r = StrokeRenderer(user_strokes_dir=user_dir)
-        r._last_coverage.geometric.clear()
+        r = StrokeRenderer(user_strokes_dir=user_dir, kanjivg_dir=Path("data/strokes"))
         r._last_coverage.user_strokes.clear()
-        # "Z" はサンプル無し → 幾何フォントへフォールバック
+        r._last_coverage.kanjivg.clear()
+        # "Z" はサンプル無し → KanjiVG 参照経路へフォールバック（幾何フォントは撤去済み）
         r.generate_char_strokes(CharPlacement(char="Z", x=0, y=0, font_size=7.0))
-        assert "Z" in r._last_coverage.geometric
+        assert "Z" in r._last_coverage.kanjivg
+        assert "Z" not in r._last_coverage.user_strokes
 
 
 def _slope_left_to_right(stroke):
@@ -1124,10 +802,6 @@ class TestEnforceHorizontalRise:
 class TestWaverPathUnification:
     """描画経路ごとの揺らぎ強度差を縮め「きれい/汚い混在」を緩和する。"""
 
-    def test_geometric_letter_waver_value(self):
-        # 幾何 ASCII 英字経路は中間値 1.5（旧 3.0 から引き下げ）
-        assert StrokeRenderer._WAVER_GEOMETRIC == pytest.approx(1.5)
-
     def test_math_image_waver_value(self):
         # 数式ブロック画像経路は 2.5（旧 6.0 から引き下げ、本文寄りに）
         assert StrokeRenderer._WAVER_MATH_IMAGE == pytest.approx(2.5)
@@ -1156,7 +830,7 @@ class TestSymbolMicroWaver:
 
         clean = StrokeRenderer()
         hand = StrokeRenderer(augmenter=HandwritingAugmenter(AugmentConfig(), seed=0))
-        cp = CharPlacement(char="=", x=0.0, y=0.0, font_size=10.0)
+        cp = CharPlacement(char="、", x=0.0, y=0.0, font_size=10.0)
         s_clean = clean.generate_char_strokes(cp)
         s_hand = hand.generate_char_strokes(cp)
         assert len(s_clean) == len(s_hand)
@@ -1178,7 +852,7 @@ class TestSymbolMicroWaver:
         from src.layout.typesetter import CharPlacement
 
         r = StrokeRenderer()  # augmenter なし → 微量揺らぎも no-op
-        cp = CharPlacement(char="=", x=0.0, y=0.0, font_size=10.0)
+        cp = CharPlacement(char="、", x=0.0, y=0.0, font_size=10.0)
         a = r.generate_char_strokes(cp)
         b = r.generate_char_strokes(cp)
         assert all(np.allclose(x, y) for x, y in zip(a, b))

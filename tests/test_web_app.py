@@ -44,7 +44,11 @@ class TestPlotterPipeline:
         assert len(placements) > 0
         assert len(placements[0]) == 5  # 5文字
 
-    def test_placements_to_strokes(self, pipeline):
+    def test_placements_to_strokes(self):
+        # 英字は幾何フォント撤去後 KanjiVG 参照経路で描画されるため kanjivg_dir を渡す。
+        from pathlib import Path
+
+        pipeline = PlotterPipeline(kanjivg_dir=Path("data/strokes"))
         placements = pipeline.text_to_placements("AB")
         strokes = pipeline.placements_to_strokes(placements[0])
         assert len(strokes) > 0
@@ -1096,9 +1100,7 @@ class TestSimplePunctStrokes:
         """読点/コンマは終端で払いのZリフトを適用する。"""
         placement = CharPlacement(char=char, x=10.0, y=20.0, font_size=6.0)
 
-        strokes, finishes = pipeline._stroke_renderer.generate_char_strokes_with_finishes(
-            placement
-        )
+        strokes, finishes = pipeline._stroke_renderer.generate_char_strokes_with_finishes(placement)
 
         assert len(strokes) == 1
         assert finishes == ["harai"]
@@ -1184,59 +1186,6 @@ class TestSimplePunctStrokes:
         assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
         assert stroke[1, 0] > stroke[0, 0]
         assert stroke[1, 1] < stroke[0, 1]
-
-
-class TestMathSymbolStrokes:
-    """_math_symbol_strokes() のテスト。"""
-
-    @pytest.fixture
-    def pipeline(self):
-        return PlotterPipeline()
-
-    @pytest.mark.parametrize("char", ["ω", "φ", "π", "θ", "α", "Δ"])
-    def test_greek_letters_return_strokes(self, pipeline, char):
-        """各ギリシャ文字がストロークを返す。"""
-        result = pipeline._math_symbol_strokes(char)
-        assert result is not None
-        assert len(result) >= 1
-        for s in result:
-            assert isinstance(s, np.ndarray)
-            assert s.ndim == 2
-            assert s.shape[1] == 2
-
-    @pytest.mark.parametrize("char", ["±", "≈", "∞"])
-    def test_math_symbols_return_strokes(self, pipeline, char):
-        """各数学記号がストロークを返す。"""
-        result = pipeline._math_symbol_strokes(char)
-        assert result is not None
-        assert len(result) >= 1
-        for s in result:
-            assert isinstance(s, np.ndarray)
-            assert s.ndim == 2
-            assert s.shape[1] == 2
-
-    def test_unsupported_char_returns_none(self, pipeline):
-        """未対応の文字はNoneを返す。"""
-        assert pipeline._math_symbol_strokes("あ") is None
-        assert pipeline._math_symbol_strokes("A") is None
-
-    @pytest.mark.parametrize("char", ["ω", "φ", "π", "θ", "α", "Δ", "±", "≈", "∞"])
-    def test_strokes_in_unit_range(self, pipeline, char):
-        """全ストロークの座標が0-1範囲内。"""
-        result = pipeline._math_symbol_strokes(char)
-        assert result is not None
-        all_pts = np.concatenate(result, axis=0)
-        assert all_pts.min() >= -0.05
-        assert all_pts.max() <= 1.05
-
-    def test_math_symbol_used_in_fallback_chain(self):
-        """_generate_char_strokes() でKanjiVGの前に数式記号が使われる。"""
-        pipeline = PlotterPipeline()
-        placement = CharPlacement(char="π", x=10.0, y=20.0, font_size=6.0)
-        strokes = pipeline._generate_char_strokes(placement)
-        assert len(strokes) >= 1
-        # 矩形(5点閉)ではない
-        assert not (len(strokes) == 1 and strokes[0].shape == (5, 2))
 
 
 class TestCharPlacementRole:
@@ -1556,9 +1505,7 @@ class TestPageNumber:
         assert captured["strokes"] == [body_stroke]
         assert captured["finishes"] == ["none"]
 
-    def test_generate_gcode_file_adds_page_number_strokes_by_default(
-        self, tmp_path, monkeypatch
-    ):
+    def test_generate_gcode_file_adds_page_number_strokes_by_default(self, tmp_path, monkeypatch):
         """デフォルトでは G-code 用ストロークへページ番号を混ぜる。"""
         pipeline = PlotterPipeline()
         body_stroke = np.array([[0.0, 0.0], [1.0, 1.0]])
