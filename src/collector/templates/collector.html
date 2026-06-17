@@ -15,6 +15,10 @@
     background: #f2f2f7; color: #1c1c1e;
     display: flex; flex-direction: row; padding: 12px; gap: 12px;
   }
+  /* 左きき: パネル(お手本+ボタン)を右、書込みcanvasを左に入れ替える。
+     .profile-bar は position:fixed でフロー外なので影響しない。 */
+  body.left-handed { flex-direction: row-reverse; }
+  body.left-handed .profile-bar { right: auto; left: 10px; }
 
   /* === 左パネル（左手操作エリア） === */
   .left-panel {
@@ -506,6 +510,7 @@
         <button id="clearBtn">消去</button>
       </div>
       <button id="skipBtn">Skip</button>
+      <button id="handednessBtn">🖐 右きき</button>
     </div>
     <div class="progress-area">
       <div id="progressInfo"></div>
@@ -1591,6 +1596,22 @@ document.getElementById('cancelTrainingBtn').addEventListener('click', function(
     .then(function(r) { return r.json(); })
     .then(renderTrainingStatus);
 });
+
+// 利き手切替: 左ききはパネルを右・canvasを左へ。localStorage に永続化。
+function applyHandedness(left) {
+  document.body.classList.toggle('left-handed', left);
+  localStorage.setItem('leftHanded', left ? '1' : '0');
+  var btn = document.getElementById('handednessBtn');
+  if (btn) btn.textContent = left ? '✋ 左きき' : '🖐 右きき';
+}
+(function initHandedness() {
+  var left = localStorage.getItem('leftHanded') === '1';
+  applyHandedness(left);
+  var btn = document.getElementById('handednessBtn');
+  if (btn) btn.addEventListener('click', function() {
+    applyHandedness(!document.body.classList.contains('left-handed'));
+  });
+})();
 
 setInterval(loadTrainingStatus, 2500);
 loadProfiles();
