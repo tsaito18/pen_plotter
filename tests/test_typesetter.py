@@ -1563,6 +1563,67 @@ class TestTablePlacement:
         assert v_rules[0] >= area.x - 1e-6
         assert v_rules[-1] <= area.x + area.width + 1e-6
 
+    # --- セル内インライン数式 ---
+
+    _MATH_TABLE = (
+        "| 測定量 | 最大許容誤差 |\n"
+        "|---|---|\n"
+        "| 針金 $l$ | $\\Delta l \\leq 1.3$ [mm] |\n"
+        "| 片振幅角 | $\\Delta\\alpha \\leq 2.8\\times10^{-2}$ [rad] |\n"
+    )
+
+    def _placements(self, text, font_size=4.5, handwrite_math=False):
+        ts = Typesetter(PageConfig(), font_size=font_size, handwrite_math=handwrite_math)
+        ts.handwrite_math = handwrite_math
+        return ts, ts.typeset(text)[0]
+
+    def test_cell_math_not_raw_latex(self):
+        """セル内の $...$ は LaTeX 生文字（\\, {, } 等）として描かれない。"""
+        _, placements = self._placements(self._MATH_TABLE)
+        cell_chars = {p.char for p in placements if p.char and p.line_segment is None}
+        # バックスラッシュ・波括弧・$ がそのままセル文字として残っていない
+        assert "\\" not in cell_chars
+        assert "{" not in cell_chars and "}" not in cell_chars
+        assert "$" not in cell_chars
+
+    def test_cell_math_rendered(self):
+        """skeletonize 経路でセル数式が math_source 付き placement として描かれる。"""
+        _, placements = self._placements(self._MATH_TABLE, handwrite_math=False)
+        math_ps = [p for p in placements if p.math_source]
+        # 2つの数式入りセル（$\Delta l ...$, $\Delta\alpha ...$）が複合式として描画される
+        assert len(math_ps) >= 2
+
+    def test_cell_math_within_column(self):
+        """数式入りセルの内容が所属列の右縦罫線を越えない。"""
+        ts, placements = self._placements(self._MATH_TABLE)
+        v_rules = sorted(
+            p.line_segment[0]
+            for p in placements
+            if p.line_segment is not None and p.line_segment[0] == p.line_segment[2]
+        )
+        right_edge = v_rules[-1]
+        # 全セル内容（テキスト文字＋数式 bbox 右端）が表右端を越えない
+        for p in placements:
+            if p.char and p.line_segment is None:
+                assert p.x <= right_edge + 1e-6
+            if p.math_bbox is not None:
+                bx, _by, bw, _bh = p.math_bbox
+                assert bx + bw <= right_edge + 1e-6, (
+                    f"数式 bbox 右端 {bx + bw:.2f} が表右端 {right_edge:.2f} を越えた"
+                )
+
+    def test_cell_math_handwrite_flag(self):
+        """handwrite_math=True でセル数式に math_handwrite が伝播する。"""
+        _, placements = self._placements(self._MATH_TABLE, handwrite_math=True)
+        math_ps = [p for p in placements if p.math_source]
+        assert math_ps  # 構造式（\times・上付き）は plain でないので math_source 付き
+        assert all(p.math_handwrite for p in math_ps)
+
+    def test_font_size_restored_after_table(self):
+        """セル数式描画で一時変更した font_size が表後に復元される。"""
+        ts, _ = self._placements(self._MATH_TABLE, font_size=4.5)
+        assert ts.font_size == pytest.approx(4.5)
+
 
 class TestPlainMathBodyRouting:
     """単純数式の本文手書き経路ルーティングと□回避。"""

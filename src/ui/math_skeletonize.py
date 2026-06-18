@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 
 import matplotlib
@@ -459,6 +460,218 @@ def render_math_char_to_unit_strokes(text: str) -> tuple[np.ndarray, ...] | None
     if not binary.any():
         return None
 
+    binary = _crop(binary)
+    skeleton = morphology.skeletonize(binary)
+    pixel_strokes = _trace_skeleton(skeleton)
+
+    h_px, w_px = skeleton.shape
+    result: list[np.ndarray] = []
+    for ps in pixel_strokes:
+        if len(ps) < _MIN_STROKE_PX:
+            continue
+        col = ps[:, 0] / max(w_px - 1, 1)
+        row = 1.0 - ps[:, 1] / max(h_px - 1, 1)  # Y-UP
+        stroke = np.stack([col, row], axis=1).astype(np.float64)
+        diffs = np.diff(stroke, axis=0)
+        length = float(np.hypot(diffs[:, 0], diffs[:, 1]).sum())
+        if length >= _MIN_STROKE_UNIT:
+            result.append(stroke)
+
+    return tuple(result) if result else None
+
+
+# ---- matplotlib mathtext 実配置の抽出（手書き差し替え用） ------------------
+# matplotlib に LaTeX 数式を正しい配置でレイアウトさせ、各グリフ／罫線の位置・
+# サイズを取り出す。通常グリフ（変数・数字・演算子）は手書きストロークへ差し替え、
+# 大型構造記号（√・大括弧・∑・∫）はそのグリフだけ skeletonize し、罫線（分数線・
+# 根号の横棒）は直線ストロークにする。座標系は baseline 原点・上向き正の pt（dpi=72
+# で pt=px）。oy/y はグリフ／矩形の baseline（描画原点）の y 座標。
+
+# 大型記号に使われる別フォント family の判定基準。DejaVu Sans 以外（STIXSize* 等）は
+# √・大括弧・∑・∫ など手書き字形を持たない構造記号なので skeleton で描く。
+_HANDWRITE_FONT_FAMILY = "DejaVu Sans"
+# 単一グリフ skeleton 化のレンダリング pt（_render_to_gray の _FONT_SIZE_PT に依らず、
+# 大型記号の縦横比を保つため十分大きい固定値で描く）。
+_GLYPH_RENDER_PT = 120
+
+
+# 数式の基準グリフ（上付き・添字でない通常文字）の標準サイズ pt。
+# extract_math_layout が _FONT_SIZE_PT 基準でレイアウトするため、それと一致させる。
+_REF_GLYPH_PT = _FONT_SIZE_PT
+
+
+@lru_cache(maxsize=1)
+def ref_cap_height_pt() -> float:
+    """基準サイズ(``_REF_GLYPH_PT`` pt)で描いた大文字のインク高(pt)を返す。
+
+    数式の手書き差し替えでスケールを取るときの基準。式全体の墨高(上付き・分数で
+    背が高い)で割ると基準文字が縮むため、代わりに「通常サイズの大文字インク高」を
+    本文の大文字インク高(≈0.7*font_size)へ揃える縮尺を取る。フォント不変なので
+    キャッシュする。
+
+    Returns:
+        基準大文字のインク高(pt)。測定失敗時は em の概算値(0.7*_REF_GLYPH_PT)。
+    """
+    ink = glyph_ink_bbox("M", float(_REF_GLYPH_PT))
+    if ink is None:
+        return 0.7 * _REF_GLYPH_PT
+    return ink[3]
+
+
+@dataclass(frozen=True)
+class MathGlyph:
+    """matplotlib mathtext がレイアウトした 1 グリフ。座標は pt（baseline 原点・上向き正）。"""
+
+    char: str  # 描画文字（chr(num)）
+    x: float  # 左 x（pt）
+    baseline_y: float  # baseline の y（pt, 上向き正）
+    fontsize: float  # そのグリフの実 pt（下付き・分数で縮小される）
+    is_large: bool  # True=大型構造記号（√・大括弧・∑・∫ 等。手書きにできない）
+
+
+@dataclass(frozen=True)
+class MathRect:
+    """分数線・根号の横棒など。座標は pt（baseline 原点・上向き正、y=下端）。"""
+
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+@dataclass(frozen=True)
+class MathLayout:
+    """matplotlib mathtext のレイアウト結果（pt 単位、baseline 原点・上向き正）。"""
+
+    width: float  # 全体幅（pt）
+    height: float  # baseline から上の高さ（pt）
+    depth: float  # baseline から下の深さ（pt）
+    glyphs: tuple[MathGlyph, ...]
+    rects: tuple[MathRect, ...]
+
+
+def extract_math_layout(math_src: str) -> MathLayout | None:
+    """LaTeX 数式を matplotlib mathtext でレイアウトし、グリフ／罫線の配置を抽出する。
+
+    各グリフは ``(x, baseline_y, fontsize)`` を原点に当該 fontsize で描いた位置に座る
+    （baseline 原点・上向き正の pt）。手書き差し替えではこの配置に合わせて unit 字形を
+    スケール・移動する。
+
+    Args:
+        math_src: LaTeX ソース（``$`` なし。``\\tag{}`` は呼び出し側で除去済みのこと）。
+
+    Returns:
+        ``MathLayout``。レイアウト失敗時は ``None``。
+    """
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.mathtext import MathTextParser
+
+    safe = re.sub(r"(?<!\\)%", r"\\%", math_src)
+    # plain な ( ) を \left( \right) へ昇格し、分数等を囲む括弧が中身の高さに追従して
+    # 縦に伸びるようにする（matplotlib は plain 括弧を自動拡大せず、分数を囲んでも一行高の
+    # ままになる）。既存の \left( \right) は lookbehind で二重変換を避ける。括弧が不均衡な
+    # 式では \left/\right 対応が崩れて parse 失敗し得るので、その場合は昇格前の safe に戻す。
+    sized = re.sub(r"(?<!left)\(", r"\\left(", safe)
+    sized = re.sub(r"(?<!right)\)", r"\\right)", sized)
+    # fontset は既定(dejavusans)のまま使う。cm を rc_context 内で MathTextParser に
+    # 適用すると本物の Computer Modern フォント(cmmi10/cmr10/cmsy10)が選ばれ、通常
+    # グリフの family_name が "DejaVu Sans" でなくなり is_large 判定が壊れる。手書き
+    # 差し替えでは通常グリフの見た目は使わず配置と is_large 判定だけ要るので、判定が
+    # 安定する dejavusans でレイアウトを取る（大型記号は STIXSize* で出る）。
+    mtp = MathTextParser("path")
+    prop = FontProperties(size=_FONT_SIZE_PT)
+    vp = None
+    for candidate in (sized, safe):
+        try:
+            vp = mtp.parse(f"${candidate}$", dpi=72, prop=prop)
+            break
+        except Exception:
+            continue
+    if vp is None:
+        logger.exception("math layout extract failed: %r", math_src)
+        return None
+
+    glyphs: list[MathGlyph] = []
+    for font, fontsize, num, ox, oy in vp.glyphs:
+        glyphs.append(
+            MathGlyph(
+                char=chr(num),
+                x=float(ox),
+                baseline_y=float(oy),
+                fontsize=float(fontsize),
+                is_large=font.family_name != _HANDWRITE_FONT_FAMILY,
+            )
+        )
+    rects = tuple(
+        MathRect(x=float(x), y=float(y), width=float(w), height=float(h)) for x, y, w, h in vp.rects
+    )
+    return MathLayout(
+        width=float(vp.width),
+        height=float(vp.height),
+        depth=float(vp.depth),
+        glyphs=tuple(glyphs),
+        rects=rects,
+    )
+
+
+@lru_cache(maxsize=512)
+def glyph_ink_bbox(char: str, fontsize: float) -> tuple[float, float, float, float] | None:
+    """1 グリフを baseline 原点・``fontsize`` pt で描いた実インク bbox を返す。
+
+    matplotlib の ``vp.glyphs`` の ``(ox, oy)`` は glyph の baseline（描画原点）であり
+    インク範囲ではない。手書き／skeleton の unit 字形を「そのグリフが画面で占める矩形」
+    へ正確に貼り込むため、当該 fontsize で TextPath を描いたときの実インク範囲（baseline
+    原点・上向き正の pt）を返す。空白等で墨が無ければ None。
+
+    Args:
+        char: 1 文字。
+        fontsize: pt。
+
+    Returns:
+        ``(x_min, y_min, width, height)``（baseline 原点・上向き正の pt）。墨なしは None。
+    """
+    from matplotlib.textpath import TextPath
+
+    try:
+        # extract_math_layout と同じく既定 fontset(dejavusans)で取り、baseline・サイズの
+        # 基準を一致させる。$...$ で囲み mathtext 経由で描くことで √・大括弧など別フォントの
+        # 記号も正しいグリフが選ばれる（math 字形に統一）。
+        safe = re.sub(r"(?<!\\)%", r"\\%", char)
+        tp = TextPath((0, 0), f"${safe}$", size=fontsize)
+        v = tp.vertices
+        if len(v) == 0:
+            return None
+        x_min, y_min = float(v[:, 0].min()), float(v[:, 1].min())
+        x_max, y_max = float(v[:, 0].max()), float(v[:, 1].max())
+    except Exception:
+        return None
+    w, h = x_max - x_min, y_max - y_min
+    if w <= 0 or h <= 0:
+        return None
+    return (x_min, y_min, w, h)
+
+
+@lru_cache(maxsize=256)
+def render_glyph_unit_strokes(char: str) -> tuple[np.ndarray, ...] | None:
+    """1 つの記号（大型構造記号も含む）を unit square [0,1]×[0,1] Y-UP に skeleton 化する。
+
+    ``√`` ``∑`` ``∫`` や大括弧など手書き字形を持たない構造記号を、matplotlib（cm
+    fontset）の数式書体で描いてスケルトン化する。``render_math_char_to_unit_strokes``
+    は本文文字向けに ``$...$`` でラップして描くが、こちらは大型記号用に十分大きい pt で
+    描いて縦横比を保つ。返り値は tuple（lru_cache のため）。失敗時は None。
+
+    Args:
+        char: 描画する 1 文字（``√`` ``(`` ``∑`` 等）。
+
+    Returns:
+        unit square Y-UP のストローク列（tuple）。失敗時は None。
+    """
+    gray = _render_to_gray(char)
+    if gray is None:
+        return None
+    binary = _binarize(gray)
+    if not binary.any():
+        return None
     binary = _crop(binary)
     skeleton = morphology.skeletonize(binary)
     pixel_strokes = _trace_skeleton(skeleton)

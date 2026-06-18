@@ -180,9 +180,6 @@ class PlotterPipeline:
     def _apply_stroke_variation(self, strokes: list[Stroke]) -> list[Stroke]:
         return self._stroke_renderer._apply_stroke_variation(strokes)
 
-    def _math_symbol_strokes(self, char: str) -> list[Stroke] | None:
-        return self._stroke_renderer._math_symbol_strokes(char)
-
     def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
         return self._stroke_renderer._simple_punct_strokes(char)
 
