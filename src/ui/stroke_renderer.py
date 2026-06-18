@@ -604,9 +604,81 @@ class StrokeRenderer:
             result.append(poly)
 
         # ---- グリフ（通常＝手書き / 大型＝skeleton）----
-        for g in layout.glyphs:
+        # 大型括弧の縦範囲を「中身（囲まれたグリフ/罫線）の上下端」に合わせる。
+        # matplotlib の \left( グリフ高は控えめで分数全高に届かないため、括弧ペアを
+        # 対応付け、間にある内容の実 top/bottom を測って括弧をその高さで描く。
+        def _gtb(gg):
+            ik = glyph_ink_bbox(gg.char, gg.fontsize)
+            if ik is None:
+                return None
+            b = gg.baseline_y + ik[1]
+            return (b, b + ik[3])
+
+        paren_span: dict[int, tuple[float, float]] = {}
+        stack: list[int] = []
+        for gi, g in enumerate(layout.glyphs):
+            if not (g.is_large and g.char in "()"):
+                continue
+            if g.char == "(":
+                stack.append(gi)
+            elif stack:
+                oi = stack.pop()
+                ox = layout.glyphs[oi].x
+                cx = g.x
+                tops, bots = [], []
+                for mid in layout.glyphs[oi + 1 : gi]:
+                    tb = _gtb(mid)
+                    if tb:
+                        bots.append(tb[0])
+                        tops.append(tb[1])
+                for r in layout.rects:
+                    if ox < r.x < cx:
+                        bots.append(r.y)
+                        tops.append(r.y + r.height)
+                if tops and bots:
+                    pad = (max(tops) - min(bots)) * 0.08
+                    span = (min(bots) - pad, max(tops) + pad)
+                    paren_span[oi] = span
+                    paren_span[gi] = span
+
+        for gi, g in enumerate(layout.glyphs):
             if g.char == "√":
                 continue  # 上で連結ポリラインとして描画済み
+            # 大型括弧 ( ) は skeleton が小さく潰れるので、幾何アーク（左/右に膨らむ
+            # 曲線）で描く。縦範囲は中身の上下端(paren_span)に合わせ分数全高を囲む。
+            if g.is_large and g.char in "()":
+                pink = glyph_ink_bbox(g.char, g.fontsize)
+                if pink is None:
+                    continue
+                pgx, pgy, pgw, pgh = pink
+                pleft = g.x + pgx
+                pright = pleft + pgw
+                span = paren_span.get(gi)
+                if span is not None:
+                    pbot, ptop = span
+                else:
+                    pbot = g.baseline_y + pgy
+                    ptop = pbot + pgh
+                pgh = ptop - pbot
+                pmid = (pbot + ptop) / 2.0
+                if g.char == "(":
+                    pts_pt = [
+                        (pright, ptop),
+                        (pleft + 0.35 * pgw, ptop - 0.18 * pgh),
+                        (pleft, pmid),
+                        (pleft + 0.35 * pgw, pbot + 0.18 * pgh),
+                        (pright, pbot),
+                    ]
+                else:
+                    pts_pt = [
+                        (pleft, ptop),
+                        (pright - 0.35 * pgw, ptop - 0.18 * pgh),
+                        (pright, pmid),
+                        (pright - 0.35 * pgw, pbot + 0.18 * pgh),
+                        (pleft, pbot),
+                    ]
+                result.append(np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64))
+                continue
             unit = self._math_glyph_unit_strokes(g.char, g.is_large)
             if not unit:
                 continue  # 手書きにできない字は □ を出さずスキップ

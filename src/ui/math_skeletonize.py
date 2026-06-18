@@ -567,16 +567,27 @@ def extract_math_layout(math_src: str) -> MathLayout | None:
     from matplotlib.mathtext import MathTextParser
 
     safe = re.sub(r"(?<!\\)%", r"\\%", math_src)
-    try:
-        # fontset は既定(dejavusans)のまま使う。cm を rc_context 内で MathTextParser に
-        # 適用すると本物の Computer Modern フォント(cmmi10/cmr10/cmsy10)が選ばれ、通常
-        # グリフの family_name が "DejaVu Sans" でなくなり is_large 判定が壊れる。手書き
-        # 差し替えでは通常グリフの見た目は使わず配置と is_large 判定だけ要るので、判定が
-        # 安定する dejavusans でレイアウトを取る（大型記号は STIXSize* で出る）。
-        mtp = MathTextParser("path")
-        prop = FontProperties(size=_FONT_SIZE_PT)
-        vp = mtp.parse(f"${safe}$", dpi=72, prop=prop)
-    except Exception:
+    # plain な ( ) を \left( \right) へ昇格し、分数等を囲む括弧が中身の高さに追従して
+    # 縦に伸びるようにする（matplotlib は plain 括弧を自動拡大せず、分数を囲んでも一行高の
+    # ままになる）。既存の \left( \right) は lookbehind で二重変換を避ける。括弧が不均衡な
+    # 式では \left/\right 対応が崩れて parse 失敗し得るので、その場合は昇格前の safe に戻す。
+    sized = re.sub(r"(?<!left)\(", r"\\left(", safe)
+    sized = re.sub(r"(?<!right)\)", r"\\right)", sized)
+    # fontset は既定(dejavusans)のまま使う。cm を rc_context 内で MathTextParser に
+    # 適用すると本物の Computer Modern フォント(cmmi10/cmr10/cmsy10)が選ばれ、通常
+    # グリフの family_name が "DejaVu Sans" でなくなり is_large 判定が壊れる。手書き
+    # 差し替えでは通常グリフの見た目は使わず配置と is_large 判定だけ要るので、判定が
+    # 安定する dejavusans でレイアウトを取る（大型記号は STIXSize* で出る）。
+    mtp = MathTextParser("path")
+    prop = FontProperties(size=_FONT_SIZE_PT)
+    vp = None
+    for candidate in (sized, safe):
+        try:
+            vp = mtp.parse(f"${candidate}$", dpi=72, prop=prop)
+            break
+        except Exception:
+            continue
+    if vp is None:
         logger.exception("math layout extract failed: %r", math_src)
         return None
 
