@@ -394,6 +394,15 @@ class StrokeRenderer:
             positioned = self._apply_symbol_distortion(positioned)
             return positioned, ["none"] * len(positioned)
 
+        # 上付き数字 ² ³ 等（m/s²・m³ の単位）。素の数字は普通サイズ・ベースライン配置で
+        # 描かれ「上付き」にならないため、対応する数字字形を縮小して文字枠の右上へ寄せる。
+        sup_strokes = self._superscript_digit_strokes(lookup_char)
+        if sup_strokes is not None:
+            cov.user_strokes.append(original_char)
+            positioned = self._position_strokes(sup_strokes, placement)
+            positioned = self._raise_superscript(positioned, placement.font_size)
+            return positioned, ["none"] * len(positioned)
+
         # 英字はユーザーの実筆跡サンプルがあれば最優先（自然・本人の字）。書いた英字は
         # 直接ストロークで本人の手書きにする。サンプルが無い英字は後段の KanjiVG 参照
         # 経路で描画される（a-zA-Z は全字 KanjiVG に字形 JSON あり）。
@@ -1026,6 +1035,49 @@ class StrokeRenderer:
                 np.stack([0.5 + r * np.cos(t), 0.5 + r * np.sin(t)], axis=1).astype(np.float64)
             ]
         return None
+
+    _SUPERSCRIPT_BASE: dict[str, str] = {
+        "²": "2",  # ²
+        "³": "3",  # ³
+        "¹": "1",  # ¹
+        "⁰": "0",
+        "⁴": "4",
+        "⁵": "5",
+        "⁶": "6",
+        "⁷": "7",
+        "⁸": "8",
+        "⁹": "9",
+    }
+
+    def _superscript_digit_strokes(self, char: str) -> list[Stroke] | None:
+        """上付き数字 ² ³ 等に対応する数字の unit 字形を返す（縮小・上寄せは配置後）。
+
+        ``_position_strokes`` が入力を文字枠へ再正規化するため、ここで縮小・移動しても
+        打ち消される。素の数字字形を返し、呼び出し側で配置後に ``_raise_superscript`` で
+        縮小＋上寄せする。
+        """
+        base = self._SUPERSCRIPT_BASE.get(char)
+        if base is None:
+            return None
+        g = self._direct_stroke(base, vary=False)
+        if g is None:
+            g, _ = self._load_reference_strokes(base)
+        if g is None:
+            return None
+        return self._normalize_strokes_to_unit(g)
+
+    @staticmethod
+    def _raise_superscript(positioned: list[Stroke], font_size: float) -> list[Stroke]:
+        """配置済み(mm)の数字を上付き化する。上端を軸に 0.55 倍へ縮小して右上に残す。"""
+        if not positioned:
+            return positioned
+        pts = np.concatenate(positioned, axis=0)
+        left = float(pts[:, 0].min())
+        top = float(pts[:, 1].max())
+        pivot = np.array([left, top], dtype=np.float64)
+        # 上端を軸に 0.55 倍（上付きの大きさ）。さらに少し上へ持ち上げる。
+        lift = np.array([0.0, font_size * 0.12], dtype=np.float64)
+        return [((s - pivot) * 0.55 + pivot + lift) for s in positioned]
 
     @staticmethod
     def _slash_strokes(char: str) -> list[Stroke] | None:
