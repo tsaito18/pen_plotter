@@ -653,6 +653,7 @@ class StrokeRenderer:
                 continue  # 上で連結ポリラインとして描画済み
             # 大型括弧 ( ) は skeleton が小さく潰れるので、幾何アーク（左/右に膨らむ
             # 曲線）で描く。縦範囲は中身の上下端(paren_span)に合わせ分数全高を囲む。
+            # 通常サイズは手書き(直接ストローク)を使う。
             if g.is_large and g.char in "()":
                 pink = glyph_ink_bbox(g.char, g.fontsize)
                 if pink is None:
