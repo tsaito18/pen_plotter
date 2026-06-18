@@ -88,6 +88,23 @@ _LATEX_OPERATORS: dict[str, str] = {
     "lim": "lim",
     "max": "max",
     "min": "min",
+    # 逆三角・双曲線・その他の関数名（未対応だと式から名前が丸ごと抜ける）
+    "arcsin": "arcsin",
+    "arccos": "arccos",
+    "arctan": "arctan",
+    "sinh": "sinh",
+    "cosh": "cosh",
+    "tanh": "tanh",
+    "sec": "sec",
+    "csc": "csc",
+    "cot": "cot",
+    "sup": "sup",
+    "inf": "inf",
+    "det": "det",
+    "deg": "deg",
+    "dim": "dim",
+    "gcd": "gcd",
+    "arg": "arg",
 }
 _LATEX_TEXT_COMMANDS: set[str] = {"mathrm", "text", "mathbf", "mathit"}
 _LATEX_ACCENTS: set[str] = {
@@ -410,8 +427,13 @@ class MathLayoutEngine:
 
     @staticmethod
     def _layout_frac(elem: MathElement, x: float, y: float, font_size: float) -> MathBox:
-        frac_font = font_size * 0.7
-        gap = font_size * 0.15
+        # 分数は分子・分母を 0.8 倍で描く（0.7 は小さすぎて読みにくかった）。
+        frac_font = font_size * 0.8
+        # 分数線と分子/分母の隙間。
+        gap = font_size * 0.12
+        # 分数線を「数式軸」(ベースラインのやや上)に置く。ベースライン(y)直上だと
+        # 分数全体が隣の文字より下に沈んで見えるため、軸ぶん持ち上げて視覚的に揃える。
+        axis = font_size * 0.32
         # 分子は y より上、分母は下に配置するため、各々の box は仮ベースラインで計算してから平行移動する
         num_children = elem.numerator.children if elem.numerator else []
         den_children = elem.denominator.children if elem.denominator else []
@@ -426,9 +448,10 @@ class MathLayoutEngine:
 
         num_offset_x = x + (frac_width - num_box.width) / 2
         den_offset_x = x + (frac_width - den_box.width) / 2
-        # 分子・分母の中心はベースライン y から ±(font_size*0.5 + gap) 離す
-        num_offset_y = y + font_size * 0.5 + gap
-        den_offset_y = y - font_size * 0.5 - gap
+        # 分数線(bar_y=軸)を基準に、分子は線の上(gap+分子のdescent)、分母は線の下(gap+分母のascent)へ。
+        bar_y = y + axis
+        num_offset_y = bar_y + gap + num_box.descent
+        den_offset_y = bar_y - gap - den_box.ascent
 
         placements: list[MathPlacement] = []
         for i, p in enumerate(num_box.placements):
@@ -454,15 +477,15 @@ class MathLayoutEngine:
                 )
             )
 
-        # 分数の横線はベースライン y を分子・分母の中間として 1 本引く
+        # 分数の横線は数式軸(bar_y)に 1 本引く
         placements.append(
             MathPlacement(
                 text="",
                 x=x,
-                y=y,
+                y=bar_y,
                 font_size=font_size,
                 role="frac_bar",
-                line_segment=(x, y, x + frac_width, y),
+                line_segment=(x, bar_y, x + frac_width, bar_y),
             )
         )
 

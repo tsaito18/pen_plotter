@@ -12,7 +12,12 @@ from src.layout.line_breaking import is_halfwidth
 from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement
 from src.model.augmentation import HandwritingAugmenter
-from src.ui.math_skeletonize import render_latex_to_strokes
+from src.ui.math_skeletonize import (
+    extract_math_layout,
+    glyph_ink_bbox,
+    render_glyph_unit_strokes,
+    render_latex_to_strokes,
+)
 from src.model.stroke_finishing import (
     FinishingConfig,
     apply_finishing,
@@ -345,6 +350,14 @@ class StrokeRenderer:
                 x0, y0, w, h = bbox
                 baseline_y = y0 + (self._page_config.line_spacing - placement.font_size) / 2
                 bbox = (x0, baseline_y, w, h)
+            # handwrite_math: matplotlib 配置で並べ、通常グリフを手書きストロークに差し替える。
+            # skeletonize 経路(False)は従来どおり数式全体を画像→スケルトン化する。
+            # render_math_handwritten が None（√ 等で手書き不可）のときは skeletonize へ落ちる。
+            if getattr(placement, "math_handwrite", False):
+                strokes = self.render_math_handwritten(placement.math_source, bbox, align)
+                if strokes is not None:
+                    cov.geometric.append(original_char)
+                    return strokes, ["none"] * len(strokes)
             strokes = render_latex_to_strokes(placement.math_source, bbox, align)
             if strokes:
                 cov.geometric.append(original_char)
@@ -449,6 +462,215 @@ class StrokeRenderer:
 
         cov.missing_glyphs.append(original_char)
         return [], []
+
+    # 根号は √記号グリフと屋根の横棒(rect)が matplotlib の path 抽出では分離して出る
+    # （√記号は中身を覆うほど縦に伸びず、屋根 rect が宙に浮く）。手書き差し替えでは
+    # 正しい根号を組めないので、√ を含む式は skeletonize 経路へフォールバックする。
+    # 手書き経路で組めず式全体を skeletonize へフォールバックさせる文字。√ は大型記号
+    # として個別 skeleton（記号）＋ rect（屋根線）で組めるため空にした（フォールバック無し）。
+    _MATH_HANDWRITE_FALLBACK_CHARS = ""
+
+    def render_math_handwritten(
+        self,
+        math_src: str,
+        bbox_mm: tuple[float, float, float, float],
+        align: str = "center",
+    ) -> list[Stroke] | None:
+        """数式を matplotlib(LaTeX)配置で並べ、各グリフを手書きストロークに差し替える。
+
+        matplotlib mathtext に正しい配置（分数・添字・上付き）をさせ、その pt 座標を
+        mm bbox へ写す。通常グリフ（変数・数字・ギリシャ・演算子＝DejaVu Sans）は
+        ユーザー筆跡 / KanjiVG / matplotlib skeleton から得た unit 字形を当該位置・サイズに
+        貼る。大型構造記号（大括弧 ( ) ・∑・∫＝別フォント）は当該グリフを skeleton 化して
+        貼る。分数線は ``vp.rects`` を直線ストロークにする。
+
+        根号 √ は matplotlib の path 抽出で記号と屋根が分離するため、含む式は ``None`` を
+        返して呼び出し側で skeletonize 経路へフォールバックさせる。
+
+        座標系: matplotlib は baseline 原点・上向き正の pt（dpi=72）。``glyph_ink_bbox`` で
+        各グリフの実インク bbox を pt で得て、pt→mm の一様スケール ``s`` と原点
+        ``(x_left, baseline_mm)`` で mm(Y-UP) へ写す。縦位置（align）の取り方は
+        ``render_latex_to_strokes`` と揃える。
+
+        Args:
+            math_src: LaTeX ソース（``$`` なし。``\\tag{}`` 除去済み想定）。
+            bbox_mm: ``(x_left_mm, y_bbox_mm, width_mm, height_mm)``（Y-UP）。
+            align: ``"center"``=ブロック中央寄せ / ``"baseline"``=インライン本文ベース揃え。
+
+        Returns:
+            mm 座標 Y-UP のストローク列。描くものが無ければ空リスト。手書きで組めない
+            （√ を含む）式は ``None``（呼び出し側で skeletonize へフォールバック）。
+        """
+        layout = extract_math_layout(math_src)
+        if layout is None:
+            return None
+        if any(g.char in self._MATH_HANDWRITE_FALLBACK_CHARS for g in layout.glyphs):
+            return None
+        ink_h = layout.height + layout.depth
+        if ink_h <= 0 or layout.width <= 0:
+            return None
+
+        x0, y0, w_mm, h_mm = bbox_mm
+        # pt→mm 一様スケール。高さ（墨の上下幅）基準で取り、幅は従属させる
+        # （render_latex_to_strokes が draw_h=h_mm を信頼するのと同じ流儀）。
+        s = h_mm / ink_h
+        draw_w = layout.width * s
+        if align == "baseline":
+            # インライン: 数式 baseline(pt y=0) を本文ベースライン(y0)へ。歪みなし等倍。
+            x_left = x0
+            baseline_mm = y0  # 本文ベースライン
+        else:
+            # ブロック: bbox 中央へ上寄せ（render_latex_to_strokes center と同等の縦位置）。
+            cx = x0 + w_mm / 2
+            cy = y0 + h_mm / 2 + h_mm * 0.2  # _MATH_LIFT_FRACTION 相当
+            x_left = cx - draw_w / 2
+            # baseline(pt0) の mm 位置: 墨上端 = cy + (height/ink_h)*draw_h_centered ...
+            # 墨域 [-depth, +height] を高さ h_mm に写すので baseline は下端 + depth*s。
+            bottom_mm = cy - h_mm / 2
+            baseline_mm = bottom_mm + layout.depth * s
+
+        def to_mm(px: float, py_baseline: float) -> tuple[float, float]:
+            """pt(baseline 原点・上向き正) → mm(Y-UP)。py_baseline は baseline からの上向き pt。"""
+            return (x_left + (px - 0.0) * s, baseline_mm + py_baseline * s)
+
+        result: list[Stroke] = []
+
+        # ---- 根号 √: 「入り→谷→屋根左端→屋根右端」の連結ポリラインで描く ----
+        # matplotlib では √記号グリフと屋根(rect)が別要素で、記号頂点が屋根より上に
+        # 突き出て"繋がってない"ように見える。対応する屋根 rect を x 近接で見つけ、
+        # チェックマークの上がりを屋根左端へ直結し、そのまま屋根右端まで1本で描く。
+        # 使った屋根 rect は下の rect ループで二重描画しないよう除外する。
+        consumed_rects: set[int] = set()
+        for g in layout.glyphs:
+            if g.char != "√":
+                continue
+            ink = glyph_ink_bbox(g.char, g.fontsize)
+            if ink is None:
+                continue
+            gx, gy, gw, gh = ink
+            left = g.x + gx  # √ インク左端
+            right = left + gw
+            bottom = g.baseline_y + gy  # √ インク下端＝谷の最下点
+            # 屋根 rect は「√ の右側にあって最も左の上部横棒」を選ぶ。√記号の advance が
+            # ink より広く・背の高い根号では√グリフ上端が屋根に届かないため、ink 右端での
+            # 厳密 x 一致ではなく『√右側で最左・かつ √下端より上』の rect を採る。
+            # （√(L/g) 等で内側の分数線も候補に入るが、屋根の方が左なので最左選択で分離）
+            best = None
+            for ri, r in enumerate(layout.rects):
+                if ri in consumed_rects:
+                    continue
+                roof_y = r.y + r.height / 2.0
+                in_x = (left - gw * 0.3) <= r.x <= (right + gw * 2.5)
+                above = roof_y >= bottom + gh * 0.3
+                if in_x and above and (best is None or r.x < layout.rects[best].x):
+                    best = ri
+            if best is None:
+                continue
+            r = layout.rects[best]
+            consumed_rects.add(best)
+            roof_x = r.x
+            roof_y = r.y + r.height / 2.0
+            span = max(roof_x - left, gw)  # チェックマーク横幅（√左端→屋根左端）
+            rise = roof_y - bottom  # 谷→屋根の高さ（中身の高さに追従）
+            pts_pt = [
+                (left, bottom + 0.55 * rise),  # 入り（左・中ほど）
+                (left + 0.15 * span, bottom + 0.33 * rise),  # 谷の手前
+                (left + 0.45 * span, bottom),  # 谷（最下点）
+                (roof_x, roof_y),  # 上がって屋根の左端へ直結
+                (roof_x + r.width, roof_y),  # 屋根右端まで
+            ]
+            poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
+            result.append(poly)
+
+        # ---- グリフ（通常＝手書き / 大型＝skeleton）----
+        for g in layout.glyphs:
+            if g.char == "√":
+                continue  # 上で連結ポリラインとして描画済み
+            unit = self._math_glyph_unit_strokes(g.char, g.is_large)
+            if not unit:
+                continue  # 手書きにできない字は □ を出さずスキップ
+            ink = glyph_ink_bbox(g.char, g.fontsize)
+            if ink is None:
+                continue
+            gx, gy, gw, gh = ink  # baseline 原点・上向き正の pt。gy は下端
+            # グリフの実インク矩形（pt 絶対）。x は g.x+gx 起点、y は g.baseline_y+gy 起点。
+            x_lo_pt = g.x + gx
+            y_lo_pt = g.baseline_y + gy
+            placed = self._place_unit_in_pt_box(unit, x_lo_pt, y_lo_pt, gw, gh, to_mm)
+            # 大型記号は構造線なので素のまま、通常グリフは手書き揺らぎを乗せる。
+            if g.is_large:
+                result.extend(placed)
+            else:
+                result.extend(self._apply_distortion(placed, waver_scale=self._WAVER_MATH_IMAGE))
+
+        # ---- 罫線（分数線・根号の横棒）→ 中心線の直線ストローク ----
+        for ri, r in enumerate(layout.rects):
+            if ri in consumed_rects:
+                continue  # √ の屋根は連結ポリラインに含めたので二重描画しない
+            cy_pt = r.y + r.height / 2.0
+            p0 = to_mm(r.x, cy_pt)
+            p1 = to_mm(r.x + r.width, cy_pt)
+            result.append(np.array([p0, p1], dtype=np.float64))
+
+        return result
+
+    def _math_glyph_unit_strokes(self, char: str, is_large: bool) -> list[Stroke] | None:
+        """数式グリフ 1 字の unit 字形（[0,1]×[0,1] Y-UP）を返す。
+
+        通常グリフはユーザー筆跡（``_direct_stroke``）→ KanjiVG 参照 → matplotlib
+        skeleton の順で探す。大型構造記号（√・大括弧・∑・∫）は手書き字形が無いので
+        matplotlib skeleton を使う。
+        """
+        # 根号 √ は render_math_handwritten 側で屋根と連結した1本のポリラインとして
+        # 描くため、ここには来ない（グリフループで skip 済み）。
+        if not is_large:
+            direct = self._direct_stroke(char)
+            if direct is not None:
+                # _direct_stroke は微小バリエーション済みだが unit 正規化されていないため
+                # ここで [0,1] へ正規化し直す（_place_unit_in_pt_box が bbox を仮定する）。
+                return self._normalize_unit_bbox(direct)
+            ref, _ = self._load_reference_strokes(char)
+            if ref is not None:
+                return self._normalize_unit_bbox(ref)
+        skel = render_glyph_unit_strokes(char)
+        if skel is not None:
+            return [s.copy() for s in skel]
+        return None
+
+    @staticmethod
+    def _normalize_unit_bbox(strokes: list[Stroke]) -> list[Stroke]:
+        """ストローク列を [0,1]×[0,1] の bbox（アスペクト保持せず各軸独立）へ正規化する。
+
+        ``_place_unit_in_pt_box`` が unit 字形を当該グリフのインク矩形へ各軸独立にスケール
+        するため、入力字形を軸ごとに [0,1] へ写す。Y は既に Y-UP 想定のためそのまま。
+        """
+        all_pts = np.concatenate(strokes, axis=0)
+        mins = all_pts.min(axis=0)
+        ranges = all_pts.max(axis=0) - mins
+        ranges = np.where(ranges < 1e-9, 1.0, ranges)
+        return [((s - mins) / ranges) for s in strokes]
+
+    def _place_unit_in_pt_box(
+        self,
+        unit_strokes: list[Stroke],
+        x_lo_pt: float,
+        y_lo_pt: float,
+        w_pt: float,
+        h_pt: float,
+        to_mm,
+    ) -> list[Stroke]:
+        """unit 字形([0,1] Y-UP)を pt インク矩形へ各軸独立にスケールし mm へ写す。
+
+        unit の (u, v)（v は Y-UP）を pt 矩形 ``[x_lo, x_lo+w] × [y_lo, y_lo+h]`` へ写し、
+        ``to_mm`` で mm(Y-UP) に変換する。
+        """
+        out: list[Stroke] = []
+        for s in unit_strokes:
+            xs = x_lo_pt + s[:, 0] * w_pt
+            ys = y_lo_pt + s[:, 1] * h_pt
+            pts = np.array([to_mm(px, py) for px, py in zip(xs, ys)], dtype=np.float64)
+            out.append(pts)
+        return out
 
     # 揺らぎを満額にする画数の上限と、下限まで落とす画数。多画字は画間隔が
     # 狭く、揺らぎで画が隣のレーンへはみ出して「固まる」ため画数で逓減する。

@@ -126,6 +126,9 @@ class CharPlacement:
     math_bbox: tuple[float, float, float, float] | None = None  # (x, y, width_mm, height_mm)
     math_skip: bool = False  # True の文字はスキップ（先頭がまとめて描画済み）
     math_align: str = "center"  # "center"=ブロック中央寄せ / "baseline"=インライン本文ベース揃え
+    # True のとき render_math_handwritten（matplotlib 配置＋手書きグリフ差し替え）で描く。
+    # False のとき render_latex_to_strokes（数式画像→skeletonize）。math_source 必須。
+    math_handwrite: bool = False
 
 
 @dataclass
@@ -213,9 +216,9 @@ class Typesetter:
         elements = [e for e in elements if e.type != "tag"]
         if self._is_plain_math(elements):
             return sum(self._body_char_advance(ch) for ch in self._plain_math_text(elements))
-        if self.handwrite_math:
-            # 手書き経路では MathLayout の論理幅が実描画幅（各グリフを配置 x で描く）。
-            return MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size).width
+        # handwrite / skeletonize とも matplotlib 実描画幅（draw_w=h_mm*aspect）で予約する。
+        # 構造式は matplotlib の正しい配置に従って描くため、論理幅(_CHAR_WIDTH_RATIO 等幅)では
+        # 添字・上付き・分数の実幅とずれる。draw_w<=0（墨なし等）は論理幅へフォールバック。
         draw_w, _ = self._inline_math_draw_size(math_src)
         if draw_w > 0:
             return draw_w
@@ -955,20 +958,8 @@ class Typesetter:
             last_baseline_y = baseline_y
             # 中央寄せ・式番号位置は実描画幅(draw_w=g_h*aspect)基準にする。論理幅(g_box.width)
             # では上付き等で実描画が右へずれ、中央からはみ出す。本文幅を超える長い式は縮小して収める。
-            if self.handwrite_math:
-                # 手書き経路: 論理幅=実描画幅。本文幅を超える式は font を縮めて再レイアウト。
-                g_font = self.font_size
-                if g_box.width > area.width and g_box.width > 0:
-                    g_font = self.font_size * area.width / g_box.width
-                    g_box = MathLayoutEngine.layout(g_elems, x=0.0, y=0.0, font_size=g_font)
-                draw_w = g_box.width
-                center_x = area.x + (area.width - draw_w) / 2
-                placed = MathLayoutEngine.layout(
-                    g_elems, x=center_x, y=baseline_y, font_size=g_font
-                )
-                self._convert_math_placements(placed.placements, page_idx, output)
-                last_body_right = center_x + draw_w
-                continue
+            # handwrite / skeletonize とも matplotlib 実幅で g_bbox を作り、math_source 経路で
+            # 先頭 placement に式全体を渡す（描画方式は math_handwrite で切替）。
             g_h = g_box.ascent + g_box.descent
             draw_w = formula_draw_width_mm(body_src, g_h)
             scale = 1.0
@@ -987,7 +978,14 @@ class Typesetter:
                 draw_w,
                 g_h,
             )
-            self._convert_math_placements(placed.placements, page_idx, output, body_src, g_bbox)
+            self._convert_math_placements(
+                placed.placements,
+                page_idx,
+                output,
+                body_src,
+                g_bbox,
+                math_handwrite=self.handwrite_math,
+            )
             last_body_right = center_x + draw_w
 
         if tag_elem is not None:
@@ -1044,21 +1042,24 @@ class Typesetter:
                 )
                 cursor += self._body_char_advance(ch)
             return cursor
-        box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
-        if self.handwrite_math:
-            # 構造式も手書き: 各 MathPlacement を本文と同じ手書き経路で描く
-            # （math_source を渡さない＝skeletonize しない）。分数線/根号は line_segment。
-            self._convert_math_placements(box.placements, page_idx, output)
-            return x + box.width
         # インライン: bbox[1] に本文ベースライン y を渡し、math_align="baseline" で
         # 数式のベースラインを本文行に揃える（中心配置のズレを根本解消）。
         # 高さ h_mm = ink_em*font_size（墨の em 比で本文と同縮尺。論理高だと小文字が
         # でかすぎる）。幅 draw_w = h_mm*aspect。カーソル前進・折り返し予約(_inline_math_width)
         # とも一致し、数式画像が予約枠からはみ出して右隣文字に重なるのを防ぐ。
+        # handwrite_math でも skeletonize でも同じ bbox/math_source 経路に乗せ、レンダラ側で
+        # math_handwrite フラグにより描画方式（手書き差し替え / 画像 skeleton）を切り替える。
         draw_w, h_mm = self._inline_math_draw_size(math_src)
         math_bbox = (x, y, draw_w, h_mm)
+        box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
         self._convert_math_placements(
-            box.placements, page_idx, output, math_src, math_bbox, math_align="baseline"
+            box.placements,
+            page_idx,
+            output,
+            math_src,
+            math_bbox,
+            math_align="baseline",
+            math_handwrite=self.handwrite_math,
         )
         # カーソル前進は実描画幅（_inline_math_width）に揃える。box.width(論理幅)では
         # 上付き等で実描画が右隣へ食い込む。bbox 幅も同じ draw_w にして三者を一致させる。
@@ -1072,11 +1073,14 @@ class Typesetter:
         math_source: str | None = None,
         math_bbox: tuple[float, float, float, float] | None = None,
         math_align: str = "center",
+        math_handwrite: bool = False,
     ) -> None:
         """MathPlacement リストを CharPlacement に変換して output に追加。
 
         math_source/math_bbox が指定されたとき、先頭の文字配置にセットし残りを
-        math_skip=True でマークする（skeletonize レンダラが一括描画するため）。
+        math_skip=True でマークする（レンダラが先頭 placement で式全体を一括描画する）。
+        math_handwrite=True のとき先頭 placement に同フラグを立て、レンダラは matplotlib
+        配置＋手書きグリフ差し替えで描く（False は数式画像→skeletonize）。
         """
         first_placed = False
 
@@ -1088,6 +1092,7 @@ class Typesetter:
                     math_source=math_source,
                     math_bbox=math_bbox,
                     math_align=math_align,
+                    math_handwrite=math_handwrite,
                     **kwargs,  # type: ignore[arg-type]
                 )
             if math_source is not None:
@@ -1107,7 +1112,10 @@ class Typesetter:
                         line_segment=mp.line_segment,
                     )
                 )
-            elif len(mp.text) == 1 or mp.role == "operator":
+            elif len(mp.text) == 1 or (math_source is not None and mp.role == "operator"):
+                # 1文字、または skeletonize 経路の演算子(cos等)は1語placementのまま。
+                # 手書き経路(math_source is None)では複数文字演算子も下の else で
+                # 1文字ずつ分割しないとレンダラが多文字を1グリフ扱いして消える。
                 output.append(
                     make_cp(
                         char=mp.text,
