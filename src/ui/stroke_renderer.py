@@ -1059,12 +1059,15 @@ class StrokeRenderer:
         base = self._SUPERSCRIPT_BASE.get(char)
         if base is None:
             return None
+        # _direct_stroke は _normalize_strokes_to_unit 済み(Y反転含む)なのでそのまま返す。
+        # 再度 _normalize_strokes_to_unit すると Y が二重反転して上下逆になる。
         g = self._direct_stroke(base, vary=False)
-        if g is None:
-            g, _ = self._load_reference_strokes(base)
-        if g is None:
-            return None
-        return self._normalize_strokes_to_unit(g)
+        if g is not None:
+            return g
+        ref, _ = self._load_reference_strokes(base)
+        if ref is not None:
+            return self._normalize_strokes_to_unit(ref)
+        return None
 
     @staticmethod
     def _raise_superscript(positioned: list[Stroke], font_size: float) -> list[Stroke]:
