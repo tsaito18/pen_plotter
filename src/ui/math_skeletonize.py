@@ -495,6 +495,29 @@ _HANDWRITE_FONT_FAMILY = "DejaVu Sans"
 _GLYPH_RENDER_PT = 120
 
 
+# 数式の基準グリフ（上付き・添字でない通常文字）の標準サイズ pt。
+# extract_math_layout が _FONT_SIZE_PT 基準でレイアウトするため、それと一致させる。
+_REF_GLYPH_PT = _FONT_SIZE_PT
+
+
+@lru_cache(maxsize=1)
+def ref_cap_height_pt() -> float:
+    """基準サイズ(``_REF_GLYPH_PT`` pt)で描いた大文字のインク高(pt)を返す。
+
+    数式の手書き差し替えでスケールを取るときの基準。式全体の墨高(上付き・分数で
+    背が高い)で割ると基準文字が縮むため、代わりに「通常サイズの大文字インク高」を
+    本文の大文字インク高(≈0.7*font_size)へ揃える縮尺を取る。フォント不変なので
+    キャッシュする。
+
+    Returns:
+        基準大文字のインク高(pt)。測定失敗時は em の概算値(0.7*_REF_GLYPH_PT)。
+    """
+    ink = glyph_ink_bbox("M", float(_REF_GLYPH_PT))
+    if ink is None:
+        return 0.7 * _REF_GLYPH_PT
+    return ink[3]
+
+
 @dataclass(frozen=True)
 class MathGlyph:
     """matplotlib mathtext がレイアウトした 1 グリフ。座標は pt（baseline 原点・上向き正）。"""

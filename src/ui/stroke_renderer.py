@@ -15,6 +15,7 @@ from src.model.augmentation import HandwritingAugmenter
 from src.ui.math_skeletonize import (
     extract_math_layout,
     glyph_ink_bbox,
+    ref_cap_height_pt,
     render_glyph_unit_strokes,
     render_latex_to_strokes,
 )
@@ -354,7 +355,9 @@ class StrokeRenderer:
             # skeletonize 経路(False)は従来どおり数式全体を画像→スケルトン化する。
             # render_math_handwritten が None（√ 等で手書き不可）のときは skeletonize へ落ちる。
             if getattr(placement, "math_handwrite", False):
-                strokes = self.render_math_handwritten(placement.math_source, bbox, align)
+                strokes = self.render_math_handwritten(
+                    placement.math_source, bbox, align, font_size=placement.font_size
+                )
                 if strokes is not None:
                     cov.geometric.append(original_char)
                     return strokes, ["none"] * len(strokes)
@@ -470,11 +473,18 @@ class StrokeRenderer:
     # として個別 skeleton（記号）＋ rect（屋根線）で組めるため空にした（フォールバック無し）。
     _MATH_HANDWRITE_FALLBACK_CHARS = ""
 
+    # インライン数式の基準グリフ（上付き・添字でない通常文字）高さを本文 cap height へ
+    # 揃えるための比。本文英大文字のインク高 ≈ font_size * この値。DejaVu Sans 系の
+    # cap height(≈0.7em)に合わせる。式全体の墨高(上付き・分数で背が高い)で割ると基準
+    # 文字が本文より小さく縮むため、代わりに通常文字高を本文へ直接揃える。
+    _MATH_INLINE_CAP_RATIO = 0.70
+
     def render_math_handwritten(
         self,
         math_src: str,
         bbox_mm: tuple[float, float, float, float],
         align: str = "center",
+        font_size: float | None = None,
     ) -> list[Stroke] | None:
         """数式を matplotlib(LaTeX)配置で並べ、各グリフを手書きストロークに差し替える。
 
@@ -496,6 +506,9 @@ class StrokeRenderer:
             math_src: LaTeX ソース（``$`` なし。``\\tag{}`` 除去済み想定）。
             bbox_mm: ``(x_left_mm, y_bbox_mm, width_mm, height_mm)``（Y-UP）。
             align: ``"center"``=ブロック中央寄せ / ``"baseline"``=インライン本文ベース揃え。
+            font_size: 本文の論理 em（mm）。インライン時に基準グリフ高を本文 cap height
+                （``font_size * _MATH_INLINE_CAP_RATIO``）へ揃える縮尺に使う。``None`` の
+                ときは従来どおり bbox 高（``h_mm``）基準。
 
         Returns:
             mm 座標 Y-UP のストローク列。描くものが無ければ空リスト。手書きで組めない
@@ -511,9 +524,15 @@ class StrokeRenderer:
             return None
 
         x0, y0, w_mm, h_mm = bbox_mm
-        # pt→mm 一様スケール。高さ（墨の上下幅）基準で取り、幅は従属させる
-        # （render_latex_to_strokes が draw_h=h_mm を信頼するのと同じ流儀）。
-        s = h_mm / ink_h
+        # pt→mm 一様スケール。基準グリフ高（通常文字）を本文 cap height へ揃える縮尺で取る。
+        # 式全体高（layout.height+depth）→ bbox高 で割ると、上付き・分数で背が高い式ほど
+        # 基準文字(I, M, r, g, L)が本文より縮む。基準サイズ大文字インク高(ref_cap_height_pt)を
+        # 本文 cap height へ写す一定縮尺なら、どの式でも基準文字が本文と同大になる
+        # （インライン・ブロック共通。font_size 未指定時のみ従来の bbox 高基準へフォールバック）。
+        if font_size is not None:
+            s = (font_size * self._MATH_INLINE_CAP_RATIO) / ref_cap_height_pt()
+        else:
+            s = h_mm / ink_h
         draw_w = layout.width * s
         if align == "baseline":
             # インライン: 数式 baseline(pt y=0) を本文ベースライン(y0)へ。歪みなし等倍。
@@ -521,12 +540,14 @@ class StrokeRenderer:
             baseline_mm = y0  # 本文ベースライン
         else:
             # ブロック: bbox 中央へ上寄せ（render_latex_to_strokes center と同等の縦位置）。
+            # 縦の中央化は cap 縮尺での実描画高(ink_h*s)で行う（bbox高 h_mm で中央化すると
+            # cap 縮尺で式が縮んだ分だけ中心がずれる）。横は実描画幅で bbox 中央へ。
+            draw_ink_h = ink_h * s
             cx = x0 + w_mm / 2
-            cy = y0 + h_mm / 2 + h_mm * 0.2  # _MATH_LIFT_FRACTION 相当
+            cy = y0 + h_mm / 2 + h_mm * 0.2  # _MATH_LIFT_FRACTION 相当（行内でやや上寄せ）
             x_left = cx - draw_w / 2
-            # baseline(pt0) の mm 位置: 墨上端 = cy + (height/ink_h)*draw_h_centered ...
-            # 墨域 [-depth, +height] を高さ h_mm に写すので baseline は下端 + depth*s。
-            bottom_mm = cy - h_mm / 2
+            # 墨域 [-depth, +height] を実描画高 draw_ink_h で中央化し、baseline は下端 + depth*s。
+            bottom_mm = cy - draw_ink_h / 2
             baseline_mm = bottom_mm + layout.depth * s
 
         def to_mm(px: float, py_baseline: float) -> tuple[float, float]:
