@@ -723,6 +723,10 @@ class StrokeRenderer:
         skeleton の順で探す。大型構造記号（√・大括弧・∑・∫）は手書き字形が無いので
         matplotlib skeleton を使う。
         """
+        # 数式中の文字も本文と同じ字形置換を適用する。matplotlib は指数のマイナスを
+        # U+2212（数学マイナス・未収集）で返すため、収集済みの ASCII "-" 等へ寄せて
+        # skeleton の崩れた記号でなく手書きの字形を使う。
+        char = self._CHAR_SUBSTITUTIONS.get(char, char)
         # 根号 √ は render_math_handwritten 側で屋根と連結した1本のポリラインとして
         # 描くため、ここには来ない（グリフループで skip 済み）。
         if not is_large:
@@ -1012,6 +1016,10 @@ class StrokeRenderer:
             return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
         elif char == "\u30fb":
             return [self._middle_dot_spiral()]
+        elif char == "\u00b7":
+            # \u4e2d\u70b9 \u00b7\uff08kg\u00b7m\u00b2 \u7b49\uff09\u3002\u53ce\u96c6\u30b5\u30f3\u30d7\u30eb\u304c\u5857\u308a\u6f70\u3057\u30b9\u30af\u30ea\u30d6\u30eb\u3067\u25a1\u306b\u898b\u3048\u308b\u305f\u3081\u3001
+            # \u4e2d\u307b\u3069(y\u22480.5)\u306b\u5c0f\u3055\u306a\u70b9(\u77ed\u3044\u659c\u30812\u70b9)\u3092\u5e7e\u4f55\u3067\u63cf\u304f\u3002
+            return [np.array([[0.45, 0.52], [0.55, 0.46]], dtype=np.float64)]
         return None
 
     @staticmethod
