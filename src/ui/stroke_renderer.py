@@ -728,16 +728,18 @@ class StrokeRenderer:
         if not is_large:
             # 数式は回転なし(vary=False)の素の字形を使う。instance_variation の回転で
             # 細い字(I, l)が傾く・字形が乱れるのを防ぐ。
+            # アスペクト比を保持する（_direct_stroke は _normalize_strokes_to_unit 済み＝
+            # 縦横同率で正規化）。軸独立の _normalize_unit_bbox を被せると細い字(1,I,l)が
+            # 横に引き伸ばされ、bbox 配置時に斜め・曲がって見えるため使わない。
             direct = self._direct_stroke(char, vary=False)
             if direct is not None:
-                # unit 正規化し直す（_place_unit_in_pt_box が [0,1] bbox を仮定する）。
-                return self._normalize_unit_bbox(direct)
+                return direct
             ref, _ = self._load_reference_strokes(char)
             if ref is not None:
-                return self._normalize_unit_bbox(ref)
+                return self._normalize_strokes_to_unit(ref)
         skel = render_glyph_unit_strokes(char)
         if skel is not None:
-            return [s.copy() for s in skel]
+            return self._normalize_strokes_to_unit([s.copy() for s in skel])
         return None
 
     @staticmethod
@@ -762,15 +764,26 @@ class StrokeRenderer:
         h_pt: float,
         to_mm,
     ) -> list[Stroke]:
-        """unit 字形([0,1] Y-UP)を pt インク矩形へ各軸独立にスケールし mm へ写す。
+        """字形を pt インク矩形へ**アスペクト比を保ったまま**収めて mm へ写す。
 
-        unit の (u, v)（v は Y-UP）を pt 矩形 ``[x_lo, x_lo+w] × [y_lo, y_lo+h]`` へ写し、
-        ``to_mm`` で mm(Y-UP) に変換する。
+        軸独立スケールだと細い字(1, I, l)が横に引き伸ばされ斜め・曲がって見える。
+        そこで一様スケール ``s = min(w/uw, h/uh)`` で bbox 内に収め、x は中央寄せ・
+        y は下端(ベースライン側)合わせにする。``to_mm`` で mm(Y-UP) に変換する。
         """
+        all_pts = np.concatenate(unit_strokes, axis=0)
+        umin = all_pts.min(axis=0)
+        umax = all_pts.max(axis=0)
+        uw = max(umax[0] - umin[0], 1e-6)
+        uh = max(umax[1] - umin[1], 1e-6)
+        s = min(w_pt / uw, h_pt / uh)
+        gw = uw * s
+        # x: bbox 中央へ。y: bbox 下端(y_lo)から（インク矩形下端＝グリフ下端を合わせる）。
+        x_off = x_lo_pt + (w_pt - gw) / 2.0 - umin[0] * s
+        y_off = y_lo_pt - umin[1] * s
         out: list[Stroke] = []
-        for s in unit_strokes:
-            xs = x_lo_pt + s[:, 0] * w_pt
-            ys = y_lo_pt + s[:, 1] * h_pt
+        for st in unit_strokes:
+            xs = x_off + st[:, 0] * s
+            ys = y_off + st[:, 1] * s
             pts = np.array([to_mm(px, py) for px, py in zip(xs, ys)], dtype=np.float64)
             out.append(pts)
         return out
