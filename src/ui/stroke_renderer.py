@@ -690,8 +690,10 @@ class StrokeRenderer:
             x_lo_pt = g.x + gx
             y_lo_pt = g.baseline_y + gy
             placed = self._place_unit_in_pt_box(unit, x_lo_pt, y_lo_pt, gw, gh, to_mm)
-            # 大型記号は構造線なので素のまま、通常グリフは手書き揺らぎを乗せる。
-            if g.is_large:
+            # 大型記号は構造線なので素のまま。直接ストローク(既にユーザーの手書き=自然な
+            # 揺らぎ持ち)は追加 distortion を乗せると l/i 等の細い字が過剰にうねって歪む
+            # ため素のまま。matplotlib skeleton 由来(収集の無い字)だけ手書き揺らぎを乗せる。
+            if g.is_large or g.char in self._user_stroke_db:
                 result.extend(placed)
             else:
                 result.extend(self._apply_distortion(placed, waver_scale=self._WAVER_MATH_IMAGE))
