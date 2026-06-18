@@ -726,10 +726,11 @@ class StrokeRenderer:
         # 根号 √ は render_math_handwritten 側で屋根と連結した1本のポリラインとして
         # 描くため、ここには来ない（グリフループで skip 済み）。
         if not is_large:
-            direct = self._direct_stroke(char)
+            # 数式は回転なし(vary=False)の素の字形を使う。instance_variation の回転で
+            # 細い字(I, l)が傾く・字形が乱れるのを防ぐ。
+            direct = self._direct_stroke(char, vary=False)
             if direct is not None:
-                # _direct_stroke は微小バリエーション済みだが unit 正規化されていないため
-                # ここで [0,1] へ正規化し直す（_place_unit_in_pt_box が bbox を仮定する）。
+                # unit 正規化し直す（_place_unit_in_pt_box が [0,1] bbox を仮定する）。
                 return self._normalize_unit_bbox(direct)
             ref, _ = self._load_reference_strokes(char)
             if ref is not None:
@@ -922,7 +923,7 @@ class StrokeRenderer:
             out.append((s - center) @ rot.T + center)
         return out
 
-    def _direct_stroke(self, char: str) -> list[Stroke] | None:
+    def _direct_stroke(self, char: str, vary: bool = True) -> list[Stroke] | None:
         """ユーザーの実筆跡サンプルから字形を返す（文字ごとにサンプル固定）。
 
         同じ字には常に同じベースサンプルを使う（``_direct_choice_cache``）。初回は
@@ -949,6 +950,10 @@ class StrokeRenderer:
             self._direct_choice_cache[char] = idx
         chosen = samples[idx]
         normalized = self._normalize_strokes_to_unit(chosen)
+        # vary=False: 数式グリフ用。instance_variation のランダム affine(回転/シアー)を
+        # かけない。細い縦字(I, l)が回転で大きく傾いて「斜め」に見える問題を避ける。
+        if not vary:
+            return normalized
         return self._apply_stroke_variation(normalized)
 
     @staticmethod
