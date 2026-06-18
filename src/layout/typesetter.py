@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -224,6 +225,37 @@ class Typesetter:
             return draw_w
         box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size)
         return box.width
+
+    @contextmanager
+    def _with_font_size(self, font_size: float):
+        """``self.font_size`` を一時的に差し替えて元に戻すコンテキスト。
+
+        ``_place_math`` / ``_inline_math_width`` 等は数式サイズを ``self.font_size`` に
+        紐づけて測る・描くため、表セル(font_size*scale)で同経路を流用する際に使う。
+        例外時も finally で必ず復元する。
+        """
+        saved = self.font_size
+        self.font_size = font_size
+        try:
+            yield
+        finally:
+            self.font_size = saved
+
+    def _cell_content_width(self, cell: str) -> float:
+        """表セルの実描画幅(mm)を ``self.font_size`` 基準で求める。
+
+        テキストは ``_body_char_advance`` の合計、インライン数式 ``$...$`` は
+        ``_inline_math_width`` で見積もり合算する。生 LaTeX 文字数で測ると数式入りセルが
+        縦罫線を越える/詰まるため、本文と同じ実描画幅で測る。列幅は呼び出し側で scale 後に
+        セル描画と同じ ``cell_fs`` へ縮むため、ここでは未スケールの ``self.font_size`` で測る。
+        """
+        total = 0.0
+        for seg_type, seg_content in _split_segments(cell):
+            if seg_type == "math":
+                total += self._inline_math_width(seg_content)
+                continue
+            total += sum(self._body_char_advance(ch) for ch in seg_content)
+        return total
 
     def _line_neutral_width(
         self,
@@ -802,13 +834,14 @@ class Typesetter:
 
         fs = self.font_size
         pad = fs * 0.3
-        # 列幅: 各列セルの実文字送り(_body_char_advance)の最大 + 左右パディング。
-        # 文字数×fs だと半角(0.55倍)を過大・漢字(1.08倍)を過小に見積もり、配置(実送り)と
-        # ずれてセルが縦罫線を越える/過大空白になるため、配置と同じ実幅で算出する。
+        # 列幅: 各列セルの実描画幅（テキストは _body_char_advance の合計、インライン数式
+        # $...$ は _inline_math_width）の最大 + 左右パディング。文字数×fs だと半角(0.55倍)を
+        # 過大・漢字(1.08倍)を過小に見積もり、配置(実送り)とずれてセルが縦罫線を越える/過大
+        # 空白になるため、配置と同じ実幅で算出する。数式は生 LaTeX 文字数でなく実描画幅で測る。
         col_w: list[float] = []
         for c in range(n_cols):
             cell_adv = (
-                max(sum(self._body_char_advance(ch) for ch in rows[r][c]) for r in range(n_rows))
+                max(self._cell_content_width(rows[r][c]) for r in range(n_rows))
                 if n_rows > 0
                 else fs
             )
@@ -855,20 +888,28 @@ class Typesetter:
             )
         # セル文字（左寄せ）。ベースライン=下罫線。_position_strokes が placement.y を
         # 帯下端として line_spacing 帯の中央へ glyph を置くため、セル帯の中央に収まる。
+        # セルは本文と同じ _split_segments でテキスト/インライン数式に分割し、数式は
+        # _place_math（handwrite_math に従い手書き差し替え/skeletonize）で描く。数式の
+        # サイズは self.font_size に紐づくため、セル描画中だけ font_size を cell_fs に
+        # 退避して描き、終了後に必ず復元する（_with_font_size 内で finally）。
         cell_fs = fs * scale
-        for r in range(n_rows):
-            baseline = line_positions[tbl_idx + r]
-            for c in range(n_cols):
-                text = rows[r][c]
-                cx = xs[c] + pad * scale
-                for ch in text:
-                    if ch != " ":
-                        output.append(
-                            CharPlacement(
-                                char=ch, x=cx, y=baseline, font_size=cell_fs, page=page_idx
-                            )
-                        )
-                    cx += self._body_char_advance(ch) * scale
+        with self._with_font_size(cell_fs):
+            for r in range(n_rows):
+                baseline = line_positions[tbl_idx + r]
+                for c in range(n_cols):
+                    cx = xs[c] + pad * scale
+                    for seg_type, seg_content in _split_segments(rows[r][c]):
+                        if seg_type == "math":
+                            cx = self._place_math(seg_content, cx, baseline, page_idx, output)
+                            continue
+                        for ch in seg_content:
+                            if ch != " ":
+                                output.append(
+                                    CharPlacement(
+                                        char=ch, x=cx, y=baseline, font_size=cell_fs, page=page_idx
+                                    )
+                                )
+                            cx += self._body_char_advance(ch)
 
         # キャプション: 上(line_idx)または下(表の次行)に表幅中央で配置
         if caption:
