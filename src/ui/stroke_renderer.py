@@ -1017,9 +1017,13 @@ class StrokeRenderer:
         elif char == "\u30fb":
             return [self._middle_dot_spiral()]
         elif char == "\u00b7":
-            # \u4e2d\u70b9 \u00b7\uff08kg\u00b7m\u00b2 \u7b49\uff09\u3002\u53ce\u96c6\u30b5\u30f3\u30d7\u30eb\u304c\u5857\u308a\u6f70\u3057\u30b9\u30af\u30ea\u30d6\u30eb\u3067\u25a1\u306b\u898b\u3048\u308b\u305f\u3081\u3001
-            # \u4e2d\u307b\u3069(y\u22480.5)\u306b\u5c0f\u3055\u306a\u70b9(\u77ed\u3044\u659c\u30812\u70b9)\u3092\u5e7e\u4f55\u3067\u63cf\u304f\u3002
-            return [np.array([[0.45, 0.52], [0.55, 0.46]], dtype=np.float64)]
+            # \u4e2d\u70b9 \u00b7\uff08kg\u00b7m\u00b2 \u7b49\uff09\u3002\u53ce\u96c6\u30b5\u30f3\u30d7\u30eb\u304c\u5857\u308a\u6f70\u3057\u30b9\u30af\u30ea\u30d6\u30eb\u3067\u25a1\u306b\u898b\u3048\u308b/\u77ed\u3044\u7dda\u3060\u3068
+            # \u7dda\u306b\u898b\u3048\u308b\u305f\u3081\u3001\u4e2d\u307b\u3069(0.5,0.5)\u306b\u5c0f\u3055\u306a\u5857\u308a\u6f70\u3057\u306e\u70b9(\u30b9\u30d1\u30a4\u30e9\u30eb)\u3092\u63cf\u304f\u3002
+            t = np.linspace(0.0, 8.0 * np.pi, 60)
+            r = np.linspace(0.07, 0.0, t.size)
+            return [
+                np.stack([0.5 + r * np.cos(t), 0.5 + r * np.sin(t)], axis=1).astype(np.float64)
+            ]
         return None
 
     @staticmethod
