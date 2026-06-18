@@ -387,6 +387,13 @@ class StrokeRenderer:
             positioned = self._apply_symbol_distortion(positioned)
             return positioned, ["none"] * len(positioned)
 
+        slash_strokes = self._slash_strokes(lookup_char)
+        if slash_strokes is not None:
+            cov.geometric.append(original_char)
+            positioned = self._position_strokes(slash_strokes, placement)
+            positioned = self._apply_symbol_distortion(positioned)
+            return positioned, ["none"] * len(positioned)
+
         # 英字はユーザーの実筆跡サンプルがあれば最優先（自然・本人の字）。書いた英字は
         # 直接ストロークで本人の手書きにする。サンプルが無い英字は後段の KanjiVG 参照
         # 経路で描画される（a-zA-Z は全字 KanjiVG に字形 JSON あり）。
@@ -987,6 +994,19 @@ class StrokeRenderer:
             return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
         elif char == "\u30fb":
             return [self._middle_dot_spiral()]
+        return None
+
+    @staticmethod
+    def _slash_strokes(char: str) -> list[Stroke] | None:
+        """``/`` ``\\`` を幾何の斜め線で返す（unit[0,1] Y-UP）。
+
+        これらはディレクトリ名に使えず直接ストローク収集できない構造記号のため、
+        m/s² 等の単位で隙間にならないよう斜め1画で描く。
+        """
+        if char == "/":
+            return [np.array([[0.2, 0.0], [0.8, 1.0]], dtype=np.float64)]
+        if char == "\\":
+            return [np.array([[0.2, 1.0], [0.8, 0.0]], dtype=np.float64)]
         return None
 
     @staticmethod
