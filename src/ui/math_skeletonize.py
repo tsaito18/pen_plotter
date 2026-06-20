@@ -689,6 +689,234 @@ def detect_top_level_fraction_bar(layout: "MathLayout") -> float | None:
     return wcy
 
 
+# 数式分割で「文の切れ目」として扱う演算子。
+# 関係演算子（=, <, >, \le, \ge, \ne 等）は意味的に最も自然な分割点で、ここで切れば
+# 「左辺」と「右辺」が別行に分かれて手書きの感覚に合う。
+# 加減（+, -）は補助的な2次分割（関係演算子だけでは max_width に収まらないとき用）。
+_RELATION_LATEX_OPS: tuple[str, ...] = (
+    "\\leq",
+    "\\geq",
+    "\\le",
+    "\\ge",
+    "\\neq",
+    "\\ne",
+    "\\approx",
+    "\\sim",
+    "\\simeq",
+    "\\equiv",
+)
+_RELATION_SINGLE_OPS: tuple[str, ...] = ("=", "<", ">")
+_ADDITIVE_OPS: tuple[str, ...] = ("+", "-")
+
+
+def _count_top_level_fracs(src: str) -> int:
+    """``src`` 中の深さ 0 にある ``\\frac`` の個数を数える。
+
+    深さは ``{`` / ``}``・``\\left`` / ``\\right`` で増減。``\\sqrt{...}`` 内・
+    ``\\left( ... \\right)`` 内・添字 ``_{...}`` 上付き ``^{...}`` 内の分数は深さ > 0
+    で除外される。
+    """
+    depth = 0
+    count = 0
+    n = len(src)
+    i = 0
+    while i < n:
+        c = src[i]
+        if c == "{":
+            depth += 1
+            i += 1
+        elif c == "}":
+            depth -= 1
+            i += 1
+        elif c == "\\":
+            j = i + 1
+            while j < n and src[j].isalpha():
+                j += 1
+            cmd = src[i:j]
+            if cmd == "\\left":
+                depth += 1
+            elif cmd == "\\right":
+                depth -= 1
+            elif depth == 0 and cmd == "\\frac":
+                count += 1
+            i = j
+        else:
+            i += 1
+    return count
+
+
+def _split_at_top_level(
+    src: str,
+    latex_ops: tuple[str, ...],
+    single_ops: tuple[str, ...],
+) -> list[str]:
+    """``src`` を depth=0 にある ``latex_ops`` / ``single_ops`` で分割する。
+
+    分割点の演算子は **次** のセグメント先頭に残す（例: ``a + b`` → ``["a ", "+ b"]``）。
+    各セグメントを単独の LaTeX として描画したとき、関係/加減演算子が「行頭の演算子」と
+    して自然に見える。先頭の単項 ``+/-`` は分割点にしない（``preceding`` が空なら skip）。
+
+    深さ追跡: ``{`` / ``}`` で +/-1、``\\left`` / ``\\right`` でも +/-1。これにより
+    ``\\frac{a}{b}`` 内の ``a``/``b`` や ``\\left( x + y \\right)`` 内の ``+`` は分割対象外。
+
+    Args:
+        src: LaTeX ソース（``$`` なし、``\\tag{}`` 除去済み）。
+        latex_ops: 多文字演算子（``\\le`` 等、``\\`` 始まり）。
+        single_ops: 単文字演算子（``=`` ``<`` ``>`` ``+`` ``-``）。
+
+    Returns:
+        非空セグメントのリスト。分割点が無ければ ``[src]``。
+    """
+    segments: list[str] = []
+    depth = 0
+    n = len(src)
+    i = 0
+    start = 0
+    while i < n:
+        c = src[i]
+        if c == "{":
+            depth += 1
+            i += 1
+        elif c == "}":
+            depth -= 1
+            i += 1
+        elif c == "\\":
+            j = i + 1
+            while j < n and src[j].isalpha():
+                j += 1
+            cmd = src[i:j]
+            if cmd == "\\left":
+                depth += 1
+                i = j
+            elif cmd == "\\right":
+                depth -= 1
+                i = j
+            elif depth == 0 and cmd in latex_ops:
+                if src[start:i].strip():
+                    segments.append(src[start:i])
+                    start = i
+                i = j
+            else:
+                i = j
+        elif depth == 0 and c in single_ops:
+            preceding = src[start:i].strip()
+            if not preceding:
+                # 単項記号（行頭の +/-）は分割しない
+                i += 1
+            else:
+                segments.append(src[start:i])
+                start = i
+                i += 1
+        else:
+            i += 1
+    segments.append(src[start:])
+    return [s for s in segments if s.strip()]
+
+
+def split_math_for_width(
+    body_src: str,
+    font_size: float,
+    max_width_mm: float,
+    cap_ratio: float = MATH_BLOCK_CAP_RATIO,
+    force_split_multiple_fractions: bool = False,
+) -> list[str]:
+    """ブロック数式が ``max_width_mm`` を超える、または複数分数を持つなら分割。
+
+    根本解決の方針: 長い数式を縮小フィットさせると本文より小さくなり読めない。
+    matplotlib mathtext は ``\\frac`` 内の文字を subsize で縮小描画するため、
+    多数の分数を横並びにすると各文字が小さく見える（式(4)等）。代わりに意味の
+    切れ目（``=`` ``\\le`` 等の関係演算子、必要なら ``+`` ``-``）で改行し、各
+    セグメントを別の罫線行に展開する。各セグメントの分数が 1 つになれば、
+    上位の罫線揃え処理（``detect_top_level_fraction_bar``）が「分子=上行・
+    分母=下行・分数線=罫線」の縦展開に切り替わり、subsize による縮小を回避する。
+
+    手順:
+      1. 全体幅 ``handwrite_draw_width_mm`` を測る。``max_width_mm`` 以下なら 1 行のまま
+         （``force_split_multiple_fractions`` が True で分数 ≥ 2 個なら分割を試みる）。
+      2. 関係演算子で 1 次分割。すべてのセグメントが ``max_width_mm`` 以下なら採用。
+      3. 残ったオーバーセグメントは加減で 2 次分割し、貪欲に連結して ``max_width_mm``
+         以下になるよう詰め直す。
+      4. 分割できない場合は元の単一セグメントを返す（呼び出し側が従来の縮小経路へ）。
+
+    Args:
+        body_src: ``\\tag{}`` 除去後の LaTeX ソース。
+        font_size: 本文の論理 em (mm)。
+        max_width_mm: 1 行あたりの幅上限 (mm)。通常は本文幅。
+        cap_ratio: ブロック数式の cap 比（既定 ``MATH_BLOCK_CAP_RATIO``）。
+        force_split_multiple_fractions: True かつ式に 2 個以上のトップレベル分数線が
+            あれば、幅が ``max_width_mm`` 以下でも分割する（subsize 累積回避）。
+
+    Returns:
+        分割後のセグメントリスト（各要素は valid な LaTeX ソース）。
+    """
+
+    def measure(seg: str) -> float:
+        w = handwrite_draw_width_mm(seg, font_size, cap_ratio=cap_ratio)
+        return w if w is not None and w > 0 else 0.0
+
+    full_w = measure(body_src)
+    needs_split = full_w > 0 and full_w > max_width_mm
+    if not needs_split and force_split_multiple_fractions:
+        # 複数の **トップレベル** ``\frac`` を持つ式は subsize 累積で読みづらい。
+        # ソース文字列から深さ 0 の ``\frac`` を数える（``\sqrt`` 内・``\left( \right)`` 内・
+        # 添字 ``{}`` 内の入れ子分数は深さ > 0 で除外される）。
+        if _count_top_level_fracs(body_src) >= 2:
+            needs_split = True
+    if not needs_split:
+        return [body_src]
+    if full_w <= 0:
+        return [body_src]
+
+    # 1 次: 関係演算子で分割
+    rel_segs = _split_at_top_level(body_src, _RELATION_LATEX_OPS, _RELATION_SINGLE_OPS)
+    if len(rel_segs) <= 1:
+        rel_segs = [body_src]
+
+    # 各関係セグメントを確認。
+    # - 幅 > max_width_mm → 加減で 2 次分割（収まる単位に貪欲連結）
+    # - force_split_multiple_fractions=True かつ \frac が 2 個以上 → 加減で
+    #   分割し、各セグメントの \frac を 1 個以下に抑える（subsize 累積回避）
+    final_segs: list[str] = []
+    for seg in rel_segs:
+        seg_w = measure(seg)
+        too_wide = seg_w > max_width_mm
+        too_many_fracs = (
+            force_split_multiple_fractions and _count_top_level_fracs(seg) >= 2
+        )
+        if not too_wide and not too_many_fracs:
+            final_segs.append(seg)
+            continue
+        add_segs = _split_at_top_level(seg, (), _ADDITIVE_OPS)
+        if len(add_segs) <= 1:
+            # 分割不能（単一項のまま大きい：\frac{...}{...} が長い等）→ そのまま渡す
+            final_segs.append(seg)
+            continue
+        # 貪欲連結: cur+next が
+        # (a) max_width 超、または
+        # (b) force_split 時に \frac が 2 個以上
+        # になったら確定して次セグメントへ。
+        cur = ""
+        for piece in add_segs:
+            trial = cur + piece
+            over_width = cur and measure(trial) > max_width_mm
+            over_fracs = (
+                force_split_multiple_fractions
+                and cur
+                and _count_top_level_fracs(trial) >= 2
+            )
+            if over_width or over_fracs:
+                final_segs.append(cur)
+                cur = piece
+            else:
+                cur = trial
+        if cur:
+            final_segs.append(cur)
+
+    if len(final_segs) <= 1:
+        return [body_src]
+    return final_segs
+
+
 @lru_cache(maxsize=512)
 def glyph_ink_bbox(char: str, fontsize: float) -> tuple[float, float, float, float] | None:
     """1 グリフを baseline 原点・``fontsize`` pt で描いた実インク bbox を返す。

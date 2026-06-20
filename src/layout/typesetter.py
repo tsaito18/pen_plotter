@@ -995,6 +995,7 @@ class Typesetter:
             formula_draw_width_mm,
             handwrite_draw_width_mm,
             ref_cap_height_pt,
+            split_math_for_width,
         )
 
         elements = MathParser.parse(math_src)
@@ -1006,6 +1007,64 @@ class Typesetter:
 
         # \\ 改行でグループ分割。linebreak が無いときは 1 グループ＝従来挙動。
         groups = self._split_by_linebreak(body_elements)
+
+        # 手書き経路で長い式・複数分数式は subsize 累積で文字が小さく見える。関係演算子・
+        # 加減で分割し、各セグメントを個別のブロック数式として配置する（再帰呼び出し）。
+        # \\ 改行で既に多段の式は対象外（ユーザー意図の改行を尊重）。
+        if (
+            self.handwrite_math
+            and len(groups) == 1
+            and (tag_elem is None or tag_elem.content)
+        ):
+            segments = split_math_for_width(
+                body_src,
+                self.font_size,
+                area.width,
+                cap_ratio=MATH_BLOCK_CAP_RATIO,
+                force_split_multiple_fractions=True,
+            )
+            if len(segments) > 1:
+                # 各セグメントの required_rows を事前見積もりし、全部入らないなら
+                # 最初から次ページに送る（式が p3末尾と p4先頭に分かれるのを防ぐ）。
+                line_spacing_local = self._config.line_spacing
+                s_local = (self.font_size * MATH_BLOCK_CAP_RATIO) / ref_cap_height_pt()
+                total_rows = 0
+                for seg in segments:
+                    seg_layout = extract_math_layout(seg)
+                    if seg_layout is None:
+                        total_rows += 2
+                        continue
+                    bar_cy = detect_top_level_fraction_bar(seg_layout)
+                    if bar_cy is not None:
+                        num_h = (seg_layout.height - bar_cy) * s_local
+                        den_h = (bar_cy + seg_layout.depth) * s_local
+                        rows_above = max(1, math.ceil(num_h / line_spacing_local))
+                        rows_below = max(1, math.ceil(den_h / line_spacing_local))
+                        total_rows += rows_above + rows_below
+                    else:
+                        actual_h = (seg_layout.height + seg_layout.depth) * s_local
+                        total_rows += max(2, math.ceil(actual_h / line_spacing_local))
+                if total_rows > (len(line_positions) - line_idx):
+                    return -1
+
+                tag_suffix = (
+                    f" \\tag{{{tag_elem.content.strip('()')}}}" if tag_elem else ""
+                )
+                consumed_total = 0
+                cur_line = line_idx
+                for i, seg in enumerate(segments):
+                    seg_src = seg + (tag_suffix if i == len(segments) - 1 else "")
+                    remaining = len(line_positions) - cur_line
+                    if remaining <= 0:
+                        return -1
+                    seg_consumed = self._place_block_math(
+                        seg_src, cur_line, line_positions, area, page_idx, output
+                    )
+                    if seg_consumed < 0:
+                        return -1
+                    consumed_total += seg_consumed
+                    cur_line += seg_consumed
+                return consumed_total
 
         # グループごとの body_src: \\ で物理行に分割。matplotlib は \\ を解しないため
         # 各グループの描画には対応する行のソースのみを渡す。
