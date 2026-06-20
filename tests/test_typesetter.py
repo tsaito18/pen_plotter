@@ -890,6 +890,81 @@ class TestBlockMathRowConsumption:
         assert (a_y - b_y) <= line_spacing * 2.5
 
 
+class TestPageBreakBeforeH1:
+    """page_break_before_h1=True で章(level-1 見出し)ごとに改ページする。"""
+
+    def _doc(self):
+        return "概要\n\n# 1. 目的\n\n本文1\n\n# 2. 理論\n\n本文2"
+
+    def test_each_chapter_starts_new_page(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, page_break_before_h1=True)
+        pages = ts.typeset(self._doc())
+        # 概要 / 1.目的 / 2.理論 が別ページ
+        assert len(pages) == 3
+        assert any(p.char == "概" for p in pages[0])  # 概要=ページ1
+        assert any(p.char == "目" for p in pages[1])  # 1.目的=ページ2
+        assert any(p.char == "理" for p in pages[2])  # 2.理論=ページ3
+
+    def test_first_heading_no_blank_leading_page(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, page_break_before_h1=True)
+        pages = ts.typeset(self._doc())
+        # 先頭ページが空でない（概要が先頭ページ top に来る）
+        assert pages[0]
+        line_positions = ts._layout.line_positions()
+        gai_y = next(p.y for p in pages[0] if p.char == "概")
+        assert gai_y == pytest.approx(line_positions[0])
+
+    def test_disabled_keeps_chapters_on_same_page(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, page_break_before_h1=False)
+        pages = ts.typeset(self._doc())
+        # 改ページしないので短い文書は1ページに収まる
+        assert len(pages) == 1
+
+
+class TestBlockMathFractionRulingAlignment:
+    """handwrite_math=True のブロック数式: トップレベル分数の罫線揃え。"""
+
+    def test_top_level_fraction_bar_snaps_to_ruling(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=True)
+        line_positions = ts._layout.line_positions()
+        pages = ts.typeset(r"$$ L = l + r + \frac{2r^{2}}{5(l+r)} $$")
+        head = next(p for p in pages[0] if p.math_source)
+        assert head.math_fraction_bar_y is not None
+        # 分数線が罫線(line_positions)のいずれかに乗る
+        assert any(abs(head.math_fraction_bar_y - y) < 1e-6 for y in line_positions)
+
+    def test_non_fraction_block_has_no_bar(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=True)
+        pages = ts.typeset(r"$$ g = 9.80 \pm 0.01 $$")
+        head = next(p for p in pages[0] if p.math_source)
+        assert head.math_fraction_bar_y is None
+
+    def test_sqrt_formula_not_ruling_aligned(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=True)
+        pages = ts.typeset(r"$$ T_{0} = 2\pi\sqrt{\frac{I}{Mgh}} $$")
+        head = next(p for p in pages[0] if p.math_source)
+        assert head.math_fraction_bar_y is None
+
+    def test_handwrite_false_no_ruling_alignment(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=False)
+        pages = ts.typeset(r"$$ L = l + r + \frac{2r^{2}}{5(l+r)} $$")
+        head = next(p for p in pages[0] if p.math_source)
+        assert head.math_fraction_bar_y is None
+
+    def test_nested_fraction_consumes_multiple_rows(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=True)
+        line_spacing = ts._config.line_spacing
+        src = (
+            r"前" + "\n" + r"$$ L' = \frac{\frac{1}{3}m_{w}l^{2} + \frac{2}{5}Mr^{2} "
+            r"+ M(l+r)^{2}}{\frac{1}{2}m_{w}l + M(l+r)} $$" + "\n" + r"後"
+        )
+        pages = ts.typeset(src)
+        前_y = next(p.y for p in pages[0] if p.char == "前")
+        後_y = next(p.y for p in pages[0] if p.char == "後")
+        # 入れ子分数は分子が高く3行以上消費
+        assert (前_y - 後_y) >= line_spacing * 3.5
+
+
 class TestBlockMathLineBreak:
     """ブロック数式内の \\\\ による強制改行のテスト。"""
 
@@ -1016,9 +1091,9 @@ class TestInlineMath:
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("$V = IR$")
         placements = pages[0]
-        # "V = IR" の5文字分（スペース含む）のCharPlacementが生成される
+        # "V=IR" の4文字分（LaTeX math のスペースは除外）のCharPlacementが生成される
         chars = [p.char for p in placements]
-        assert "".join(chars) == "V = IR"
+        assert "".join(chars) == "V=IR"
 
     def test_mixed_text_and_math(self):
         """通常テキスト$数式$通常テキスト の混在が正しく配置される。"""
@@ -1026,7 +1101,7 @@ class TestInlineMath:
         pages = ts.typeset("電圧$V = IR$です")
         placements = pages[0]
         chars = [p.char for p in placements]
-        assert "".join(chars) == "電圧V = IRです"
+        assert "".join(chars) == "電圧V=IRです"
 
     def test_mixed_text_x_positions_monotonic(self):
         """混在テキストのx座標が単調増加する（重なりなし）。
@@ -1328,13 +1403,13 @@ class TestHeadings:
         assert "。" not in chars
         assert "．" in chars
 
-    def test_period_in_number_also_replaced(self):
-        """数値中のピリオドも全角「．」に置換される（本文一律統一の仕様）。"""
+    def test_period_in_number_not_replaced(self):
+        """数値中の小数点は全角「．」に置換しない（URL・小数点は word chars 間なので保持）。"""
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("0.2")
         chars = [p.char for p in pages[0]]
-        assert "." not in chars
-        assert "．" in chars
+        assert "." in chars
+        assert "．" not in chars
 
     def test_comma_replaced_with_zenkaku(self):
         """読点系（, 、）は本文で全角「，」(U+FF0C)に統一される。"""
@@ -1633,7 +1708,7 @@ class TestPlainMathBodyRouting:
         placements = ts.typeset("$V = IR$")[0]
         # 本文文字として配置（math_source なし）
         assert all(p.math_source is None for p in placements)
-        assert "".join(p.char for p in placements) == "V = IR"
+        assert "".join(p.char for p in placements) == "V=IR"
 
     def test_plain_greek_routed_to_body(self):
         ts = Typesetter(PageConfig(), font_size=7.0)
@@ -1652,3 +1727,34 @@ class TestPlainMathBodyRouting:
         ts = Typesetter(PageConfig(), font_size=7.0)
         placements = ts.typeset(r"$A \simeq B$")[0]
         assert any(p.math_source for p in placements)
+
+    def test_table_cell_digit_uses_char_scale(self):
+        """表セルの半角数字は本文同様 effective_char_scale で縮む（漢字基準に浮かない）。"""
+        from src.layout.char_metrics import effective_char_scale
+
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        table = "| 回数 | 値 |\n|---|---|\n| 10 | 230 |\n"
+        pls = ts.typeset(table)[0]
+        # セル内の数字 '2'（line_segment なしの実文字）
+        digit = next(
+            p for p in pls if p.char == "2" and not getattr(p, "line_segment", None)
+        )
+        # 表 scale は列幅次第だが、最大でも self.font_size。字種スケールが効いていれば
+        # 4.5 フルサイズより必ず小さい。
+        assert digit.font_size <= 4.5 * effective_char_scale("2") + 1e-6
+
+    def test_plain_math_digit_matches_body_digit_size(self):
+        """plain 数式の数字は本文数字と同じ font_size（字種スケール適用）になる。
+
+        本文半角は effective_char_scale で縮小されるが、plain 数式分岐が
+        self.font_size をそのまま使うと数式数字だけ大きく浮いていた。
+        """
+        from src.layout.char_metrics import effective_char_scale
+
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        body = ts.typeset("8")[0]
+        math = ts.typeset("$8$")[0]
+        body_fs = next(p.font_size for p in body if p.char == "8")
+        math_fs = next(p.font_size for p in math if p.char == "8")
+        assert math_fs == pytest.approx(body_fs)
+        assert math_fs == pytest.approx(4.5 * effective_char_scale("8"))

@@ -94,6 +94,18 @@ class PreviewRenderer:
                     pressure_variation=pv,
                     entry_taper=et,
                 )
+            elif len(stroke) == 1:
+                # 単一点ストローク（中黒・/中点·）はペンを下ろすだけの点。小さな
+                # 塗り円で描く（線にせず実機のペンダウン1点に対応）。
+                ax.plot(
+                    stroke[0, 0],
+                    stroke[0, 1],
+                    marker="o",
+                    markersize=1.6,
+                    markerfacecolor="#1a1a1a",
+                    markeredgecolor="#1a1a1a",
+                    linestyle="none",
+                )
 
         # ページ番号（手書きストローク）は補助描画のため finish="none"
         if page_number_strokes:

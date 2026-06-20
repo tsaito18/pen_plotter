@@ -499,6 +499,14 @@ _GLYPH_RENDER_PT = 120
 # extract_math_layout が _FONT_SIZE_PT 基準でレイアウトするため、それと一致させる。
 _REF_GLYPH_PT = _FONT_SIZE_PT
 
+# 手書き数式の基準グリフ（大文字）を本文 cap height の何倍に合わせるか。
+# render_math_handwritten の縮尺 s = font_size*MATH_INLINE_CAP_RATIO/ref_cap_height_pt と
+# 予約幅 handwrite_draw_width_mm の単一ソース。StrokeRenderer もこの定数を参照する。
+MATH_INLINE_CAP_RATIO = 0.70
+# ブロック表示数式（$$...$$）の cap 比。インライン(0.70)より一回り大きく描く。
+# 単純分数の分子/分母が各1行に収まる範囲（report 罫線7.14mmで num≈1行）に調整。
+MATH_BLOCK_CAP_RATIO = 0.85
+
 
 @lru_cache(maxsize=1)
 def ref_cap_height_pt() -> float:
@@ -612,6 +620,73 @@ def extract_math_layout(math_src: str) -> MathLayout | None:
         glyphs=tuple(glyphs),
         rects=rects,
     )
+
+
+def handwrite_draw_width_mm(
+    math_src: str, font_size: float, cap_ratio: float = MATH_INLINE_CAP_RATIO
+) -> float | None:
+    """``render_math_handwritten`` が描く実描画幅(mm)。
+
+    手書き経路は cap 基準縮尺 ``s = font_size*cap_ratio/ref_cap_height_pt`` で
+    ``layout.width``(pt advance) を mm へ写す。typesetter の予約幅をこの実幅に一致させ、
+    上付き・分数を含む式が予約枠（表セル等）からはみ出すのを防ぐ単一ソース。手書き化
+    できない式（レイアウト抽出失敗・墨なし）は ``None`` を返し、呼び出し側で aspect 基準
+    （skeletonize 経路の実幅）へフォールバックさせる。
+
+    Args:
+        math_src: LaTeX ソース（``$`` なし）。
+        font_size: 本文の論理 em（mm）。
+        cap_ratio: 基準グリフを本文 cap height の何倍にするか。インライン=
+            ``MATH_INLINE_CAP_RATIO``、ブロック表示数式=``MATH_BLOCK_CAP_RATIO``。
+    """
+    layout = extract_math_layout(math_src)
+    if layout is None or layout.width <= 0:
+        return None
+    s = (font_size * cap_ratio) / ref_cap_height_pt()
+    return layout.width * s
+
+
+# トップレベル分数線の math axis 帯判定の許容(pt)。matplotlib の分数線中心は
+# フォント由来の math axis（実測 cy≈6〜7pt）に集中する。同じ帯に複数 rect があれば
+# 横並び分数（式が複数の同レベル分数を持つ）とみなし、罫線揃え対象から外す。
+_FRACTION_AXIS_TOL_PT = 4.0
+# 罫線揃えを無効化する構造的大型記号（√・大括弧・∑・∫）。これらに分数が囲まれると
+# 分数線を罫線に乗せると括弧/根号/総和記号が行をまたいで崩れるため。
+_STRUCTURAL_LARGE_CHARS = frozenset("()√∑∫")
+
+
+def detect_top_level_fraction_bar(layout: "MathLayout") -> float | None:
+    """罫線揃え対象となる単一トップレベル分数線の中心 y(pt) を返す。対象外なら ``None``。
+
+    罫線紙の手書きで分数を「分子=上の行／分数線=罫線／分母=下の行」に展開できるのは、
+    式が単一の主分数を持つ場合（例: ``L=l+r+\\frac{..}{..}`` / 入れ子の主分数）。横並び
+    複数分数・括弧内のみの分数・分数なしは展開すると行をまたいで崩れるため対象外。
+
+    判定: (a) 大型構造記号（√・大括弧 ``\\left(`` 等・∑・∫＝``is_large``）を含む式は除外
+    （分数が括弧/根号に囲まれ・指数が掛かるため、分数線を罫線に乗せると行をまたいで崩れる）。
+    (b) 最も幅広い rect の中心 y(=math axis 候補) の ±``_FRACTION_AXIS_TOL_PT`` 帯に rect が
+    ちょうど1本のときだけ、その中心 y を返す。入れ子分数(分子/分母内の小分数)は axis 帯の外
+    （上下にずれる）ため自然に除外され、横並び複数分数は同帯に複数入るため除外される。
+
+    Args:
+        layout: ``extract_math_layout`` の結果。
+
+    Returns:
+        主分数線の中心 y(pt, baseline 原点・上向き正)。対象外は ``None``。
+    """
+    if not layout.rects:
+        return None
+    # √・大括弧・∑・∫ など構造的な大型記号を含む式は罫線揃えしない（√内部分数
+    # T_0=2π√(I/Mgh) や 括弧内分数 (2π/T)^2 等）。is_large はフォント由来の判定で
+    # プライム記号 ' 等も該当するため、構造記号の char に限定する。
+    if any(g.is_large and g.char in _STRUCTURAL_LARGE_CHARS for g in layout.glyphs):
+        return None
+    widest = max(layout.rects, key=lambda r: r.width)
+    wcy = widest.y + widest.height / 2.0
+    near = [r for r in layout.rects if abs((r.y + r.height / 2.0) - wcy) <= _FRACTION_AXIS_TOL_PT]
+    if len(near) != 1:
+        return None
+    return wcy
 
 
 @lru_cache(maxsize=512)

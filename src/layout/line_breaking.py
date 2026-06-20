@@ -19,7 +19,9 @@ def is_line_end_prohibited(ch: str) -> bool:
 
 
 def is_halfwidth(ch: str) -> bool:
-    return ord(ch) < 128
+    cp = ord(ch)
+    # ASCII + ギリシャ文字（α β γ … Δ Σ 等）は半角相当の字幅で扱う
+    return cp < 128 or 0x0370 <= cp <= 0x03FF
 
 
 def _char_width(ch: str) -> float:

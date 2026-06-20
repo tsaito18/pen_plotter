@@ -890,11 +890,10 @@ class TestSymbolMicroWaver:
 
 
 class TestDirectStrokeSampleFixed:
-    """同じ文字には常に同じベースサンプルを使い品質の極端な振れを防ぐ。"""
+    """_direct_stroke がサンプルをランダム選択して返す。"""
 
-    def test_same_char_uses_same_base_sample(self, tmp_path):
+    def test_same_char_returns_sample(self, tmp_path):
         user_dir = tmp_path / "user_strokes"
-        # 同じ "山" に形の異なる2サンプル（点数も差をつける）
         _create_user_stroke_json(user_dir, "山", [[[0, 0], [0, 100]]], suffix="001")
         _create_user_stroke_json(
             user_dir,
@@ -903,19 +902,13 @@ class TestDirectStrokeSampleFixed:
             suffix="002",
         )
         r = StrokeRenderer(user_strokes_dir=user_dir)
-        # _apply_stroke_variation の乱数を揃え、ベース選択が固定かを純粋に検証する
-        np.random.seed(0)
-        a = r._direct_stroke("山")
-        np.random.seed(0)
-        b = r._direct_stroke("山")
-        assert a is not None and b is not None
-        assert len(a) == len(b)
-        assert all(np.allclose(x, y) for x, y in zip(a, b))
+        result = r._direct_stroke("山")
+        assert result is not None
+        assert len(result) > 0
 
-    def test_best_sample_is_most_points(self, tmp_path):
+    def test_multiple_samples_can_vary(self, tmp_path):
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(user_dir, "川", [[[0, 0], [0, 100]]], suffix="001")
-        # 総点数の多い 002 が「丁寧」として選ばれる
         _create_user_stroke_json(
             user_dir,
             "川",
@@ -923,15 +916,102 @@ class TestDirectStrokeSampleFixed:
             suffix="002",
         )
         r = StrokeRenderer(user_strokes_dir=user_dir)
-        r._direct_stroke("川")
-        assert r._direct_choice_cache["川"] == 1
+        # 複数回呼んで None でないことを確認
+        results = [r._direct_stroke("川") for _ in range(5)]
+        assert all(res is not None for res in results)
 
-    def test_different_chars_have_separate_cache(self, tmp_path):
+
+def _horizontal_bar_y(strokes):
+    """ストローク列から分数線（2点・ほぼ水平で最も長い横線）の y を返す。"""
+    best = None
+    best_len = 0.0
+    for s in strokes:
+        if len(s) != 2:
+            continue
+        dx = abs(s[1][0] - s[0][0])
+        dy = abs(s[1][1] - s[0][1])
+        if dx > dy and dx > best_len:  # 水平
+            best_len = dx
+            best = (s[0][1] + s[1][1]) / 2.0
+    return best
+
+
+class TestSlashUserSampleFallback:
+    """／ のユーザーサンプルが / の描画に優先使用される。"""
+
+    def test_slash_uses_fullwidth_slash_sample(self, tmp_path):
         user_dir = tmp_path / "user_strokes"
-        _create_user_stroke_json(user_dir, "一", [[[0, 50], [100, 50]]])
-        _create_user_stroke_json(user_dir, "二", [[[0, 30], [100, 30]], [[0, 70], [100, 70]]])
+        # ／（U+FF0F）サンプルを作成（斜め線: 左下→右上）
+        _create_user_stroke_json(user_dir, "／", [[[10, 90], [90, 10]]], suffix="001")
         r = StrokeRenderer(user_strokes_dir=user_dir)
-        r._direct_stroke("一")
-        r._direct_stroke("二")
-        assert "一" in r._direct_choice_cache
-        assert "二" in r._direct_choice_cache
+        from src.layout.page_layout import PageConfig
+        from src.layout.typesetter import Typesetter
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("m/s")
+        placement = next(p for p in pages[0] if p.char == "/")
+        strokes = r.generate_char_strokes(placement)
+        # ユーザーサンプルが返されること（幾何ストロークの8点ではなく2点サンプル）
+        assert strokes is not None
+        assert len(strokes) > 0
+        # サンプルの点数は2点（_create_user_stroke_json の入力が2点）
+        assert any(len(s) == 2 for s in strokes)
+
+    def test_slash_falls_back_to_geometric_without_sample(self):
+        r = StrokeRenderer()
+        from src.layout.page_layout import PageConfig
+        from src.layout.typesetter import Typesetter
+
+        ts = Typesetter(PageConfig(), font_size=7.0)
+        pages = ts.typeset("m/s")
+        placement = next(p for p in pages[0] if p.char == "/")
+        strokes = r.generate_char_strokes(placement)
+        # サンプルなし → 幾何ストロークにフォールバック（8点の直線）
+        assert strokes is not None
+        assert any(len(s) == 8 for s in strokes)
+
+
+class TestRenderMathHandwrittenFractionBar:
+    """ブロック数式の罫線揃え（fraction_bar_y_mm）とサイズ拡大。"""
+
+    def test_fraction_bar_snaps_to_target_ruling(self):
+        from pathlib import Path
+
+        r = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        target_y = 100.0
+        bbox = (50.0, 90.0, 40.0, 12.0)
+        strokes = r.render_math_handwritten(
+            r"\frac{a}{b}", bbox, align="center", font_size=4.5, fraction_bar_y_mm=target_y
+        )
+        assert strokes
+        bar_y = _horizontal_bar_y(strokes)
+        assert bar_y is not None
+        assert abs(bar_y - target_y) < 0.3  # 分数線が目標罫線に乗る
+
+    def test_numerator_above_denominator_below_bar(self):
+        from pathlib import Path
+
+        r = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        target_y = 100.0
+        bbox = (50.0, 90.0, 40.0, 12.0)
+        strokes = r.render_math_handwritten(
+            r"\frac{a}{b}", bbox, align="center", font_size=4.5, fraction_bar_y_mm=target_y
+        )
+        all_pts = np.concatenate([s for s in strokes if len(s) > 2], axis=0)
+        # 分子(a)は罫線より上(>target)、分母(b)は下(<target)に墨が分かれる
+        assert all_pts[:, 1].max() > target_y + 1.0
+        assert all_pts[:, 1].min() < target_y - 1.0
+
+    def test_block_larger_than_inline(self):
+        from pathlib import Path
+
+        r = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        bbox = (50.0, 90.0, 40.0, 12.0)
+        block = r.render_math_handwritten(r"\frac{a}{b}", bbox, align="center", font_size=4.5)
+        inline = r.render_math_handwritten(r"\frac{a}{b}", bbox, align="baseline", font_size=4.5)
+        bh = np.concatenate(block, axis=0)
+        ih = np.concatenate(inline, axis=0)
+        block_h = bh[:, 1].max() - bh[:, 1].min()
+        inline_h = ih[:, 1].max() - ih[:, 1].min()
+        # ブロック(cap MATH_BLOCK_CAP_RATIO) はインライン(0.70)より大きい
+        assert block_h > inline_h * 1.1

@@ -68,6 +68,7 @@ class PlotterPipeline:
         skip_non_japanese: bool = False,
         seed: int | None = None,
         plot_page_numbers: bool = True,
+        page_break_before_h1: bool = False,
     ) -> None:
         self._connection_strength = connection_strength
         self._plot_page_numbers = bool(plot_page_numbers)
@@ -93,6 +94,7 @@ class PlotterPipeline:
             # seed 指定時は augmenter の乱数を固定し、同一テキストで再現可能な
             # レイアウト揺らぎを得る（A/B目視比較の定点観測用）
             augmenter=HandwritingAugmenter(_scaled_augment_config(messiness), seed=seed),
+            page_break_before_h1=page_break_before_h1,
         )
         self._generator = GCodeGenerator(self._plotter_config)
 

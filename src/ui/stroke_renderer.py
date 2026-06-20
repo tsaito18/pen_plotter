@@ -13,6 +13,9 @@ from src.layout.page_layout import PageConfig
 from src.layout.typesetter import CharPlacement
 from src.model.augmentation import HandwritingAugmenter
 from src.ui.math_skeletonize import (
+    MATH_BLOCK_CAP_RATIO,
+    MATH_INLINE_CAP_RATIO,
+    detect_top_level_fraction_bar,
     extract_math_layout,
     glyph_ink_bbox,
     ref_cap_height_pt,
@@ -145,7 +148,6 @@ class StrokeRenderer:
         # 同じベース字形を使う。等確率ランダムだと隣接する同一字でベース字形が
         # 丸ごと入れ替わり「片方きれい・片方汚い」と極端に振れるため固定する。
         # 字ごとの多様性は instance_variation / 温度ノイズが別途与える。
-        self._direct_choice_cache: dict[str, int] = {}
         self._last_coverage = CharCoverageReport()
 
         self._kanjivg_dir: Path | None = None
@@ -356,7 +358,11 @@ class StrokeRenderer:
             # render_math_handwritten が None（√ 等で手書き不可）のときは skeletonize へ落ちる。
             if getattr(placement, "math_handwrite", False):
                 strokes = self.render_math_handwritten(
-                    placement.math_source, bbox, align, font_size=placement.font_size
+                    placement.math_source,
+                    bbox,
+                    align,
+                    font_size=placement.font_size,
+                    fraction_bar_y_mm=getattr(placement, "math_fraction_bar_y", None),
                 )
                 if strokes is not None:
                     cov.geometric.append(original_char)
@@ -387,6 +393,15 @@ class StrokeRenderer:
             positioned = self._apply_symbol_distortion(positioned)
             return positioned, ["none"] * len(positioned)
 
+        # / はファイル名不可のためユーザーサンプルを ／(U+FF0F) で収集する。
+        # サンプルがあれば幾何ストロークより優先して使う。
+        if lookup_char == "/":
+            slash_direct = self._direct_stroke("／")
+            if slash_direct is not None:
+                cov.user_strokes.append(original_char)
+                positioned = self._position_strokes(slash_direct, placement)
+                return positioned, ["none"] * len(positioned)
+
         slash_strokes = self._slash_strokes(lookup_char)
         if slash_strokes is not None:
             cov.geometric.append(original_char)
@@ -402,18 +417,6 @@ class StrokeRenderer:
             positioned = self._position_strokes(sup_strokes, placement)
             positioned = self._raise_superscript(positioned, placement.font_size)
             return positioned, ["none"] * len(positioned)
-
-        # 英字はユーザーの実筆跡サンプルがあれば最優先（自然・本人の字）。書いた英字は
-        # 直接ストロークで本人の手書きにする。サンプルが無い英字は後段の KanjiVG 参照
-        # 経路で描画される（a-zA-Z は全字 KanjiVG に字形 JSON あり）。
-        if lookup_char.isascii() and lookup_char.isalpha():
-            direct_letter = self._direct_stroke(lookup_char)
-            if direct_letter is not None:
-                cov.user_strokes.append(original_char)
-                positioned = self._position_strokes(direct_letter, placement)
-                waver = self._waver_scale(len(positioned))
-                positioned = positioned if is_smooth else self._apply_distortion(positioned, waver)
-                return positioned, ["none"] * len(positioned)
 
         direct = self._direct_stroke(placement.char)
         if direct is not None:
@@ -493,7 +496,14 @@ class StrokeRenderer:
     # 揃えるための比。本文英大文字のインク高 ≈ font_size * この値。DejaVu Sans 系の
     # cap height(≈0.7em)に合わせる。式全体の墨高(上付き・分数で背が高い)で割ると基準
     # 文字が本文より小さく縮むため、代わりに通常文字高を本文へ直接揃える。
-    _MATH_INLINE_CAP_RATIO = 0.70
+    # 予約幅(handwrite_draw_width_mm)と実描画幅を一致させるため math_skeletonize と共有する。
+    _MATH_INLINE_CAP_RATIO = MATH_INLINE_CAP_RATIO
+    # ブロック表示数式（align="center"）は一回り大きい cap 比で描く。
+    _MATH_BLOCK_CAP_RATIO = MATH_BLOCK_CAP_RATIO
+
+    # 上付きマイナス(指数 10^{-4} 等)の持ち上げ量。グリフ fontsize に対する比で、
+    # matplotlib が math axis に置くマイナス(数字の下寄り)を数字の縦中心付近へ上げる。
+    _SUPERSCRIPT_MINUS_RISE = 0.18
 
     def render_math_handwritten(
         self,
@@ -501,6 +511,7 @@ class StrokeRenderer:
         bbox_mm: tuple[float, float, float, float],
         align: str = "center",
         font_size: float | None = None,
+        fraction_bar_y_mm: float | None = None,
     ) -> list[Stroke] | None:
         """数式を matplotlib(LaTeX)配置で並べ、各グリフを手書きストロークに差し替える。
 
@@ -522,9 +533,13 @@ class StrokeRenderer:
             math_src: LaTeX ソース（``$`` なし。``\\tag{}`` 除去済み想定）。
             bbox_mm: ``(x_left_mm, y_bbox_mm, width_mm, height_mm)``（Y-UP）。
             align: ``"center"``=ブロック中央寄せ / ``"baseline"``=インライン本文ベース揃え。
-            font_size: 本文の論理 em（mm）。インライン時に基準グリフ高を本文 cap height
-                （``font_size * _MATH_INLINE_CAP_RATIO``）へ揃える縮尺に使う。``None`` の
-                ときは従来どおり bbox 高（``h_mm``）基準。
+            font_size: 本文の論理 em（mm）。基準グリフ高を本文 cap height へ揃える縮尺に
+                使う。``align="center"`` は ``_MATH_BLOCK_CAP_RATIO``（表示数式で一回り大）、
+                ``"baseline"`` は ``_MATH_INLINE_CAP_RATIO``。``None`` のときは従来どおり
+                bbox 高（``h_mm``）基準。
+            fraction_bar_y_mm: 罫線揃え（``align="center"`` のみ）。指定時は主分数線の中心を
+                この罫線 y(mm, Y-UP) に一致させ、分子=上の行・分母=下の行へ展開する。
+                ``None`` は従来の bbox 中央配置。
 
         Returns:
             mm 座標 Y-UP のストローク列。描くものが無ければ空リスト。手書きで組めない
@@ -546,7 +561,11 @@ class StrokeRenderer:
         # 本文 cap height へ写す一定縮尺なら、どの式でも基準文字が本文と同大になる
         # （インライン・ブロック共通。font_size 未指定時のみ従来の bbox 高基準へフォールバック）。
         if font_size is not None:
-            s = (font_size * self._MATH_INLINE_CAP_RATIO) / ref_cap_height_pt()
+            # ブロック表示数式(center)は一回り大きい cap 比。インライン(baseline)は本文と同大。
+            cap_ratio = (
+                self._MATH_BLOCK_CAP_RATIO if align == "center" else self._MATH_INLINE_CAP_RATIO
+            )
+            s = (font_size * cap_ratio) / ref_cap_height_pt()
         else:
             s = h_mm / ink_h
         draw_w = layout.width * s
@@ -554,6 +573,14 @@ class StrokeRenderer:
             # インライン: 数式 baseline(pt y=0) を本文ベースライン(y0)へ。歪みなし等倍。
             x_left = x0
             baseline_mm = y0  # 本文ベースライン
+        elif fraction_bar_y_mm is not None:
+            # 罫線揃え: 主分数線の中心 pt を目標罫線 mm に一致させる。分子(bar より上)は
+            # 上の行・分母(下)は下の行へ自然に展開する。横は従来どおり bbox 中央。
+            bar_cy_pt = detect_top_level_fraction_bar(layout)
+            if bar_cy_pt is None:
+                bar_cy_pt = 0.0  # 念のため（typesetter 側で非None確認済み）
+            x_left = x0 + w_mm / 2 - draw_w / 2
+            baseline_mm = fraction_bar_y_mm - bar_cy_pt * s
         else:
             # ブロック: bbox 中央へ上寄せ（render_latex_to_strokes center と同等の縦位置）。
             # 縦の中央化は cap 縮尺での実描画高(ink_h*s)で行う（bbox高 h_mm で中央化すると
@@ -610,11 +637,14 @@ class StrokeRenderer:
             span = max(roof_x - left, gw)  # チェックマーク横幅（√左端→屋根左端）
             rise = roof_y - bottom  # 谷→屋根の高さ（中身の高さに追従）
             pts_pt = [
-                (left, bottom + 0.55 * rise),  # 入り（左・中ほど）
-                (left + 0.15 * span, bottom + 0.33 * rise),  # 谷の手前
-                (left + 0.45 * span, bottom),  # 谷（最下点）
-                (roof_x, roof_y),  # 上がって屋根の左端へ直結
-                (roof_x + r.width, roof_y),  # 屋根右端まで
+                (left, bottom + 0.80 * rise),          # 入り（左・高め）
+                (left + 0.05 * span, bottom + 0.60 * rise),  # 短い下降
+                (left + 0.10 * span, bottom + 0.20 * rise),  # 谷へ向かう
+                (left + 0.20 * span, bottom),           # 谷（左寄り最下点）
+                (left + 0.35 * span, bottom + 0.25 * rise),  # 上昇開始
+                (left + 0.55 * span, bottom + 0.60 * rise),  # 急上昇中
+                (roof_x, roof_y),                       # 屋根左端
+                (roof_x + r.width, roof_y),             # 屋根右端
             ]
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
             result.append(poly)
@@ -657,6 +687,15 @@ class StrokeRenderer:
                     paren_span[oi] = span
                     paren_span[gi] = span
 
+        # 上付き判定用の基準サイズ・基準ベースライン。指数のマイナス("-"/"−")は
+        # matplotlib が上付きの math axis（数字 4 の下寄り）に置くため低く見えるので、
+        # 上付きのマイナスだけ少し上へ持ち上げて数字の縦中心付近へ寄せる。
+        base_fs = max((g.fontsize for g in layout.glyphs), default=1.0)
+        base_baseline = min(
+            (g.baseline_y for g in layout.glyphs if g.fontsize >= base_fs * 0.95),
+            default=0.0,
+        )
+
         for gi, g in enumerate(layout.glyphs):
             if g.char == "√":
                 continue  # 上で連結ポリラインとして描画済み
@@ -696,6 +735,16 @@ class StrokeRenderer:
                     ]
                 result.append(np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64))
                 continue
+            # 中点 ·（\cdot, ρ·π/4 等）はペンを下ろすだけの単一点。skeleton 化で線・ティック
+            # にならないよう、グリフのインク中心に1点だけ置く（線でなく点）。
+            if g.char in ("·", "・"):
+                dink = glyph_ink_bbox(g.char, g.fontsize)
+                if dink is not None:
+                    dgx, dgy, dgw, dgh = dink
+                    cx_pt = g.x + dgx + dgw / 2.0
+                    cy_pt = g.baseline_y + dgy + dgh / 2.0
+                    result.append(np.array([to_mm(cx_pt, cy_pt)], dtype=np.float64))
+                continue
             unit = self._math_glyph_unit_strokes(g.char, g.is_large)
             if not unit:
                 continue  # 手書きにできない字は □ を出さずスキップ
@@ -706,6 +755,14 @@ class StrokeRenderer:
             # グリフの実インク矩形（pt 絶対）。x は g.x+gx 起点、y は g.baseline_y+gy 起点。
             x_lo_pt = g.x + gx
             y_lo_pt = g.baseline_y + gy
+            # 上付きのマイナス(指数 10^{-4} 等)は math axis で低く見えるため少し上げる。
+            # 縮小サイズ(上付き)かつ基準ベースラインより上に座る "-"/"−" のみが対象。
+            if (
+                g.char in ("-", "−")
+                and g.fontsize < base_fs * 0.95
+                and g.baseline_y > base_baseline + base_fs * 0.1
+            ):
+                y_lo_pt += g.fontsize * self._SUPERSCRIPT_MINUS_RISE
             placed = self._place_unit_in_pt_box(unit, x_lo_pt, y_lo_pt, gw, gh, to_mm)
             # 大型記号は構造線なので素のまま。直接ストローク(既にユーザーの手書き=自然な
             # 揺らぎ持ち)は追加 distortion を乗せると l/i 等の細い字が過剰にうねって歪む
@@ -951,12 +1008,7 @@ class StrokeRenderer:
         return out
 
     def _direct_stroke(self, char: str, vary: bool = True) -> list[Stroke] | None:
-        """ユーザーの実筆跡サンプルから字形を返す（文字ごとにサンプル固定）。
-
-        同じ字には常に同じベースサンプルを使う（``_direct_choice_cache``）。初回は
-        最も「丁寧に書かれた」＝総点数が多いサンプルを品質スコアとして選ぶ。等確率
-        ランダムだと隣接する同一字でベース字形が入れ替わり品質が極端に振れるため。
-        毎回の微小な多様性は ``_apply_stroke_variation`` / 温度ノイズが別途与える。
+        """ユーザーの実筆跡サンプルからランダムに字形を返す。
 
         Args:
             char: 描画対象文字。
@@ -967,15 +1019,7 @@ class StrokeRenderer:
         samples = self._user_stroke_db.get(char)
         if not samples:
             return None
-        idx = self._direct_choice_cache.get(char)
-        if idx is None:
-            # 総点数が多い＝丁寧に書かれたサンプルを品質スコアとして best を選ぶ。
-            idx = max(
-                range(len(samples)),
-                key=lambda i: sum(len(s) for s in samples[i]),
-            )
-            self._direct_choice_cache[char] = idx
-        chosen = samples[idx]
+        chosen = samples[np.random.randint(len(samples))]
         normalized = self._normalize_strokes_to_unit(chosen)
         # vary=False: 数式グリフ用。instance_variation のランダム affine(回転/シアー)を
         # かけない。細い縦字(I, l)が回転で大きく傾いて「斜め」に見える問題を避ける。
@@ -1024,15 +1068,32 @@ class StrokeRenderer:
             # \u53e5\u70b9\u306f\u30ec\u30dd\u30fc\u30c8\u4f53\u88c1\u306b\u5408\u308f\u305b\u3001\u4e38(\u5186)\u3067\u306f\u306a\u304f\u30d4\u30ea\u30aa\u30c9\u98a8\u306e\u77ed\u3044\u70b9(\u63cf\u3051\u308b\u30c9\u30c3\u30c8)
             # \u6b63\u898f\u5316\u5f8c\u306e\u672c\u6587\u53e5\u70b9\u306f\u3059\u3079\u3066\u300c\uff0e\u300d(U+FF0E)\u306b\u5bc4\u305b\u308b\u305f\u3081\u540c\u4e00\u5f62\u306b\u3059\u308b
             return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
-        elif char == "\u30fb":
-            return [self._middle_dot_spiral()]
-        elif char == "\u00b7":
-            # \u4e2d\u70b9 \u00b7\uff08kg\u00b7m\u00b2 \u7b49\uff09\u3002\u53ce\u96c6\u30b5\u30f3\u30d7\u30eb\u304c\u5857\u308a\u6f70\u3057\u30b9\u30af\u30ea\u30d6\u30eb\u3067\u25a1\u306b\u898b\u3048\u308b/\u77ed\u3044\u7dda\u3060\u3068
-            # \u7dda\u306b\u898b\u3048\u308b\u305f\u3081\u3001\u4e2d\u307b\u3069(0.5,0.5)\u306b\u5c0f\u3055\u306a\u5857\u308a\u6f70\u3057\u306e\u70b9(\u30b9\u30d1\u30a4\u30e9\u30eb)\u3092\u63cf\u304f\u3002
-            t = np.linspace(0.0, 8.0 * np.pi, 60)
-            r = np.linspace(0.07, 0.0, t.size)
+        elif char in ("\u30fb", "\u00b7"):
+            # \u4e2d\u9ed2\u30fb/\u4e2d\u70b9\u00b7\uff08kg\u00b7m\u00b2\u30fb\u03c1\u00b7\u03c0/4 \u7b49\uff09\u3002\u6e26\u5dfb\u304d(\u30ca\u30eb\u30c8)\u3067\u3082\u7dda\u3067\u3082\u306a\u304f\u3001\u30da\u30f3\u3092
+            # \u4e0b\u308d\u3059\u3060\u3051\u306e\u5358\u4e00\u70b9\u3002\u30ec\u30f3\u30c0\u30e9/G-code \u304c1\u70b9\u30b9\u30c8\u30ed\u30fc\u30af\u3092\u70b9(\u30da\u30f3\u30c0\u30a6\u30f3)\u3068\u3057\u3066\u63cf\u304f\u3002
+            return [np.array([[0.5, 0.5]], dtype=np.float64)]
+        elif char == "=":
             return [
-                np.stack([0.5 + r * np.cos(t), 0.5 + r * np.sin(t)], axis=1).astype(np.float64)
+                np.array([[0.10, 0.60], [0.90, 0.60]], dtype=np.float64),
+                np.array([[0.10, 0.38], [0.90, 0.38]], dtype=np.float64),
+            ]
+        elif char == "+":
+            return [
+                np.array([[0.50, 0.18], [0.50, 0.82]], dtype=np.float64),
+                np.array([[0.12, 0.50], [0.88, 0.50]], dtype=np.float64),
+            ]
+        elif char == "-":
+            return [
+                np.array([[0.12, 0.50], [0.88, 0.50]], dtype=np.float64),
+            ]
+        elif char == ":":
+            return [
+                np.array([[0.40, 0.65], [0.60, 0.65]], dtype=np.float64),
+                np.array([[0.40, 0.38], [0.60, 0.38]], dtype=np.float64),
+            ]
+        elif char == "_":
+            return [
+                np.array([[0.05, 0.06], [0.95, 0.06]], dtype=np.float64),
             ]
         return None
 
@@ -1090,16 +1151,14 @@ class StrokeRenderer:
         m/s² 等の単位で隙間にならないよう斜め1画で描く。
         """
         if char == "/":
-            return [np.array([[0.2, 0.0], [0.8, 1.0]], dtype=np.float64)]
+            t = np.linspace(0, 1, 8)
+            pts = np.column_stack([0.2 + 0.6 * t, t]).astype(np.float64)
+            return [pts]
         if char == "\\":
-            return [np.array([[0.2, 1.0], [0.8, 0.0]], dtype=np.float64)]
+            t = np.linspace(0, 1, 8)
+            pts = np.column_stack([0.2 + 0.6 * t, 1.0 - t]).astype(np.float64)
+            return [pts]
         return None
-
-    @staticmethod
-    def _middle_dot_spiral() -> Stroke:
-        t = np.linspace(0.0, 12.0 * np.pi, 145)
-        r = np.linspace(0.15, 0.0, t.size)
-        return np.stack([0.5 + r * np.cos(t), 0.5 + r * np.sin(t)], axis=1).astype(np.float64)
 
     def _simple_paren_strokes(self, char: str, placement: CharPlacement) -> list[Stroke] | None:
         if char in ("(", "\uff08"):
@@ -1248,7 +1307,7 @@ class StrokeRenderer:
             return [self._position_comma_mark(strokes, placement)]
         if placement.char in (".", "\u3002", "\uff0e"):
             return [self._position_period_dot(placement)]
-        if placement.char == "\u30fb":
+        if placement.char in ("\u30fb", "\u00b7"):
             return self._position_middle_dot(strokes, placement)
 
         all_pts = np.concatenate(strokes, axis=0)

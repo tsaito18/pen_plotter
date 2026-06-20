@@ -41,6 +41,8 @@ GUIDED_CHARS: list[str] = list(
     "0123456789ABCDEFMRabcdeforsu+-×÷="
     # 句読点・記号・括弧
     "、。・ー（）"
+    # スラッシュ（/ はファイル名不可なので全角 ／ で収集し / の描画に流用）
+    "／"
 )
 
 # レポート頻出文字の優先度（高→低の3段階）
@@ -53,7 +55,7 @@ _TIER1_CHARS: set[str] = set(
     "的方法用使変化比較大小高低"  # 説明文頻出
     "アイウエオカコサセタテナニノラルロングジダッデピプ"  # 頻出カタカナ
     "0123456789"  # 数字
-    "、。・ー（）"  # 句読点・括弧
+    "、。・ー（）／"  # 句読点・括弧・スラッシュ
 )
 # Tier 2: 中程度の頻度（基本漢字・残りカタカナ）
 _TIER2_CHARS: set[str] = set(
@@ -441,12 +443,16 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
     def _handle_undo_last(self) -> None:
         latest_path: Path | None = None
-        latest_mtime = 0.0
+        latest_key: tuple[float, str] = (0.0, "")
         if self.app.output_dir.exists():
             for json_file in self.app.output_dir.rglob("*.json"):
+                # mtime の精度が低い環境（一部の WSL2 FS）でも正しく最新ファイルを
+                # 見つけるため、mtime が同値の場合はファイル名（タイムスタンプ埋め込み）
+                # でタイブレーク。
                 mtime = json_file.stat().st_mtime
-                if mtime > latest_mtime:
-                    latest_mtime = mtime
+                key = (mtime, json_file.name)
+                if key > latest_key:
+                    latest_key = key
                     latest_path = json_file
         if latest_path is not None:
             character = latest_path.parent.name

@@ -76,7 +76,9 @@ def _normalize_body_punctuation(text: str) -> str:
 
     def _normalize(seg: str) -> str:
         seg = seg.replace(",", "，").replace("、", "，")
-        return seg.replace(".", "．").replace("。", "．")
+        # URL・小数点・ページ番号等の単語間の . は変換しない（\w の間 or \w の後ろ）
+        seg = re.sub(r"\.(?!\w)", "．", seg).replace("。", "．")
+        return seg
 
     result: list[str] = []
     last_end = 0
@@ -130,6 +132,8 @@ class CharPlacement:
     # True のとき render_math_handwritten（matplotlib 配置＋手書きグリフ差し替え）で描く。
     # False のとき render_latex_to_strokes（数式画像→skeletonize）。math_source 必須。
     math_handwrite: bool = False
+    # ブロック数式の罫線揃え（None 以外でレンダラが主分数線をこの罫線 y(mm) に乗せる）。
+    math_fraction_bar_y: float | None = None
 
 
 @dataclass
@@ -159,6 +163,7 @@ class Typesetter:
         font_size: float | None = None,
         augmenter: HandwritingAugmenter | None = None,
         handwrite_math: bool = False,
+        page_break_before_h1: bool = False,
     ) -> None:
         self._config = page_config
         self._layout = PageLayout(page_config)
@@ -168,6 +173,8 @@ class Typesetter:
         # 描く（matplotlib スケルトンを使わない）。グリフは _direct_stroke/KanjiVG、
         # 分数線・根号は line_segment ストロークで描画する。
         self.handwrite_math = handwrite_math
+        # True のとき level-1 見出し（# 章）ごとに改ページする（章を新しいページから開始）。
+        self._page_break_before_h1 = page_break_before_h1
 
     @property
     def augmenter(self) -> HandwritingAugmenter | None:
@@ -201,10 +208,21 @@ class Typesetter:
         拡大され「でかすぎ」になる。インクの em 比で縮め本文 em と縮尺を揃える。
         幅 = 高 * aspect。層の逆依存（layout → ui）を避け遅延 import。
         """
-        from src.ui.math_skeletonize import formula_aspect, formula_ink_em
+        from src.ui.math_skeletonize import (
+            formula_aspect,
+            formula_ink_em,
+            handwrite_draw_width_mm,
+        )
 
         body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src)
         h_mm = formula_ink_em(body_src) * self.font_size
+        # 幅: 手書き経路(render_math_handwritten)は cap 基準 advance 幅で描くため、その実幅を
+        # 予約する（aspect×ink高だと上付き・分数で実幅より ~17% 狭く見積もり、表セル等から
+        # はみ出す）。手書き無効 or 抽出不可時は aspect 基準（skeletonize 経路の実幅）。
+        if self.handwrite_math:
+            hw = handwrite_draw_width_mm(body_src, self.font_size)
+            if hw is not None and hw > 0:
+                return hw, h_mm
         draw_w = h_mm * formula_aspect(body_src)
         return draw_w, h_mm
 
@@ -535,6 +553,12 @@ class Typesetter:
                     lines.append("")
                 continue
 
+            # markdown 段落区切りの空行は出力の空行（罫線1本）を消費しない。段落の切れ目は
+            # 次段落の字下げ(　)で示す日本語組版の流儀に従い、「意味のない改行」を排除する。
+            # 見出し前の余白は下の heading 分岐が1行だけ確保する（---/表/数式は上で処理済み）。
+            if para.strip() == "":
+                continue
+
             heading_level = 0
             display_para = para
             if para.startswith("###"):
@@ -553,7 +577,16 @@ class Typesetter:
                 display_para = display_para[len(r"\noindent") + 1 :]
 
             if heading_level > 0:
-                if len(lines) > 0 and lines != [""]:
+                if (
+                    heading_level == 1
+                    and self._page_break_before_h1
+                    and len(lines) > 0
+                    and lines != [""]
+                ):
+                    # 章(level-1 見出し)ごとに改ページ。見出しを次ページ先頭へ送る。
+                    page_break_lines.add(len(lines))
+                    lines.append("")
+                elif len(lines) > 0 and lines != [""]:
                     lines.append("")
                 heading_lines[len(lines)] = heading_level
                 current_body_level = heading_level
@@ -906,7 +939,11 @@ class Typesetter:
                             if ch != " ":
                                 output.append(
                                     CharPlacement(
-                                        char=ch, x=cx, y=baseline, font_size=cell_fs, page=page_idx
+                                        char=ch,
+                                        x=cx,
+                                        y=baseline,
+                                        font_size=cell_fs * effective_char_scale(ch),
+                                        page=page_idx,
                                     )
                                 )
                             cx += self._body_char_advance(ch)
@@ -921,7 +958,13 @@ class Typesetter:
             for ch in caption:
                 if ch != " ":
                     output.append(
-                        CharPlacement(char=ch, x=cx, y=cap_baseline, font_size=fs, page=page_idx)
+                        CharPlacement(
+                            char=ch,
+                            x=cx,
+                            y=cap_baseline,
+                            font_size=fs * effective_char_scale(ch),
+                            page=page_idx,
+                        )
                     )
                 cx += self._body_char_advance(ch)
 
@@ -945,7 +988,14 @@ class Typesetter:
             消費した行数（>=2）。残り行数が足りない場合は -1（呼び出し側で次ページ送り）。
         """
         # 層の逆依存を避けるため遅延 import（layout → ui）
-        from src.ui.math_skeletonize import formula_draw_width_mm
+        from src.ui.math_skeletonize import (
+            MATH_BLOCK_CAP_RATIO,
+            detect_top_level_fraction_bar,
+            extract_math_layout,
+            formula_draw_width_mm,
+            handwrite_draw_width_mm,
+            ref_cap_height_pt,
+        )
 
         elements = MathParser.parse(math_src)
         # 本体中心位置を tag 幅から独立させるため、tag と tag 周辺の空白テキストを除外する
@@ -957,6 +1007,11 @@ class Typesetter:
         # \\ 改行でグループ分割。linebreak が無いときは 1 グループ＝従来挙動。
         groups = self._split_by_linebreak(body_elements)
 
+        # グループごとの body_src: \\ で物理行に分割。matplotlib は \\ を解しないため
+        # 各グループの描画には対応する行のソースのみを渡す。
+        _body_lines = [s.strip() for s in re.split(r"\\\\", body_src)]
+        group_srcs = [_body_lines[i] if i < len(_body_lines) else body_src for i in range(len(groups))]
+
         line_spacing = self._config.line_spacing
 
         # 各グループの寸法を仮配置で測定
@@ -964,24 +1019,63 @@ class Typesetter:
             MathLayoutEngine.layout(g, x=0.0, y=0.0, font_size=self.font_size) for g in groups
         ]
 
-        if group_boxes:
-            # 多段時はグループ間隔として line_spacing を使う（ベースライン間隔）。
-            # 全体高さ = 先頭グループ ascent + 末尾グループ descent + (n-1)*line_spacing
-            total_height = (
-                group_boxes[0].ascent
-                + group_boxes[-1].descent
-                + line_spacing * (len(group_boxes) - 1)
-            )
+        # 手書きブロック数式は cap 比 MATH_BLOCK_CAP_RATIO で一回り大きく描く。レンダラと同一
+        # 縮尺 s_block で実描画高・実描画幅・主分数線位置を見積もり、確保行数と幅を一致させる。
+        # 罫線揃え（ruling_bar_y）はトップレベル分数を持つ単一グループ式のみ。
+        block_layout = None
+        s_block = 0.0
+        ruling_bar_y: float | None = None
+        if self.handwrite_math and len(groups) == 1:
+            block_layout = extract_math_layout(body_src)
+        if block_layout is not None and block_layout.width > 0:
+            s_block = (self.font_size * MATH_BLOCK_CAP_RATIO) / ref_cap_height_pt()
+            bar_cy_pt = detect_top_level_fraction_bar(block_layout)
+            if bar_cy_pt is not None:
+                # 罫線揃え: 分子=主分数線より上、分母=下。各帯を実高から行数で確保。
+                num_h = (block_layout.height - bar_cy_pt) * s_block
+                den_h = (bar_cy_pt + block_layout.depth) * s_block
+                rows_above = max(1, math.ceil(num_h / line_spacing))
+                rows_below = max(1, math.ceil(den_h / line_spacing))
+                required_rows = rows_above + rows_below
+                remaining = len(line_positions) - line_idx
+                if remaining < required_rows:
+                    return -1
+                # 分数線を「分子が前テキストの直下行に収まる」罫線に置く。rows_above 行ぶんの
+                # 分子は最上段(line_idx)の帯から始まるので、その下端罫線=line_idx+rows_above-1。
+                # （line_idx+rows_above にすると分子の上に1行空き、式が1行下がって見える）。
+                ruling_bar_y = line_positions[line_idx + rows_above - 1]
+                # 次行が分母に食い込まないようクリアランス確保。次行本文は罫線帯の中央に
+                # 置かれグリフ上端が直上の罫線付近まで立ち上がるため、次行帯の上端
+                # (= line_positions[line_idx+required_rows-1]) が分母下端(ruling_bar_y-den_h)
+                # 以下になるまで行を足す（remaining を超えるなら次行は次ページ送り＝衝突なし）。
+                den_bottom = ruling_bar_y - den_h
+                while required_rows < remaining and (
+                    line_positions[line_idx + required_rows - 1] > den_bottom + 1e-6
+                ):
+                    required_rows += 1
+            else:
+                # 分数なし/横並び等: 罫線揃えはせず、拡大サイズの実高から中央配置で確保。
+                actual_h = (block_layout.height + block_layout.depth) * s_block
+                required_rows = max(2, math.ceil(actual_h / line_spacing))
+                remaining = len(line_positions) - line_idx
+                if remaining < required_rows:
+                    return -1
         else:
-            total_height = self.font_size
-
-        # 最低2行、それを超える高さなら必要な行数を ceil で確保
-        required_rows = max(2, math.ceil(total_height / line_spacing))
-
-        # ページ末尾チェック: 残り行数が足りなければ次ページ送りシグナル
-        remaining = len(line_positions) - line_idx
-        if remaining < required_rows:
-            return -1
+            if group_boxes:
+                # 多段時はグループ間隔として line_spacing を使う（ベースライン間隔）。
+                # 全体高さ = 先頭グループ ascent + 末尾グループ descent + (n-1)*line_spacing
+                total_height = (
+                    group_boxes[0].ascent
+                    + group_boxes[-1].descent
+                    + line_spacing * (len(group_boxes) - 1)
+                )
+            else:
+                total_height = self.font_size
+            # 最低2行、それを超える高さなら必要な行数を ceil で確保
+            required_rows = max(2, math.ceil(total_height / line_spacing))
+            remaining = len(line_positions) - line_idx
+            if remaining < required_rows:
+                return -1
 
         # 確保した行範囲の垂直中央にグループ列の中心を置く
         top_y = line_positions[line_idx]
@@ -997,18 +1091,29 @@ class Typesetter:
             offset = (group_count - 1) / 2 * line_spacing - i * line_spacing
             baseline_y = center_y + offset
             last_baseline_y = baseline_y
-            # 中央寄せ・式番号位置は実描画幅(draw_w=g_h*aspect)基準にする。論理幅(g_box.width)
-            # では上付き等で実描画が右へずれ、中央からはみ出す。本文幅を超える長い式は縮小して収める。
-            # handwrite / skeletonize とも matplotlib 実幅で g_bbox を作り、math_source 経路で
-            # 先頭 placement に式全体を渡す（描画方式は math_handwrite で切替）。
+            # 中央寄せ・式番号位置は実描画幅(draw_w)基準にする。論理幅(g_box.width)では
+            # 上付き等で実描画が右へずれ中央からはみ出す。本文幅を超える長い式は縮小して収める。
+            # handwrite は cap 比 MATH_BLOCK_CAP_RATIO の実幅、skeletonize は aspect×g_h。
+            g_src = group_srcs[i]  # このグループだけの LaTeX（\\ 改行を含まない）
             g_h = g_box.ascent + g_box.descent
-            draw_w = formula_draw_width_mm(body_src, g_h)
+            if block_layout is not None and s_block > 0:
+                draw_w = handwrite_draw_width_mm(
+                    g_src, self.font_size, cap_ratio=MATH_BLOCK_CAP_RATIO
+                ) or formula_draw_width_mm(g_src, g_h)
+                g_h = (block_layout.height + block_layout.depth) * s_block
+            else:
+                draw_w = formula_draw_width_mm(g_src, g_h)
+            # ブロック数式は用紙全幅（-5mm余白）まで使えるよう拡張。本文幅(area.width)より
+            # 広い式も縮小せず、用紙中央に配置する。
+            paper_w = self._config.paper_size[0]
+            math_max_w = paper_w - 10.0  # 左右各5mmセーフティ
             scale = 1.0
-            if draw_w > area.width and draw_w > 0:
-                scale = area.width / draw_w
+            if draw_w > math_max_w and draw_w > 0:
+                scale = math_max_w / draw_w
                 g_h *= scale
-                draw_w = area.width
-            center_x = area.x + (area.width - draw_w) / 2
+                draw_w = math_max_w
+            # 用紙中央寄せ（本文幅を超えた場合も用紙基準で中央に置く）
+            center_x = (paper_w - draw_w) / 2
             placed = MathLayoutEngine.layout(
                 g_elems, x=center_x, y=baseline_y, font_size=self.font_size
             )
@@ -1023,14 +1128,18 @@ class Typesetter:
                 placed.placements,
                 page_idx,
                 output,
-                body_src,
+                g_src,
                 g_bbox,
                 math_handwrite=self.handwrite_math,
+                math_fraction_bar_y=ruling_bar_y,
             )
             last_body_right = center_x + draw_w
 
         if tag_elem is not None:
-            tag_y = last_baseline_y if group_boxes else center_y
+            # 罫線揃え時は式番号を分数線の高さ（式の視覚中心）に置く。
+            tag_y = ruling_bar_y if ruling_bar_y is not None else last_baseline_y
+            if not group_boxes:
+                tag_y = center_y
             tag_temp = MathLayoutEngine.layout([tag_elem], x=0, y=tag_y, font_size=self.font_size)
             # 式番号は数式本体の直後（1文字分あけて）に置く。紙右端を超える場合のみ右端へ。
             tag_x = last_body_right + self.font_size
@@ -1076,10 +1185,20 @@ class Typesetter:
         # 単純な変数列は本文と同じ手書き経路で描く（書体を本文に統一）。
         if self._is_plain_math(elements):
             cursor = x
-            # 本文文字と同様、空白も placement 化（描画なし）して文字列順を保つ。
+            # LaTeX math mode はスペースを無視する。本文経路でも空白は除外する。
+            # font_size は本文と同じく字種スケール（半角 0.74 等）を掛ける。掛けないと
+            # 数式中の数字・英字だけ em フルサイズで描かれ本文より大きく浮く。
             for ch in self._plain_math_text(elements):
+                if ch == " ":
+                    continue  # LaTeX math mode ignores spaces
                 output.append(
-                    CharPlacement(char=ch, x=cursor, y=y, font_size=self.font_size, page=page_idx)
+                    CharPlacement(
+                        char=ch,
+                        x=cursor,
+                        y=y,
+                        font_size=self.font_size * effective_char_scale(ch),
+                        page=page_idx,
+                    )
                 )
                 cursor += self._body_char_advance(ch)
             return cursor
@@ -1115,6 +1234,7 @@ class Typesetter:
         math_bbox: tuple[float, float, float, float] | None = None,
         math_align: str = "center",
         math_handwrite: bool = False,
+        math_fraction_bar_y: float | None = None,
     ) -> None:
         """MathPlacement リストを CharPlacement に変換して output に追加。
 
@@ -1122,6 +1242,7 @@ class Typesetter:
         math_skip=True でマークする（レンダラが先頭 placement で式全体を一括描画する）。
         math_handwrite=True のとき先頭 placement に同フラグを立て、レンダラは matplotlib
         配置＋手書きグリフ差し替えで描く（False は数式画像→skeletonize）。
+        math_fraction_bar_y は罫線揃え（主分数線を乗せる罫線 y, mm）。先頭 placement に載せる。
         """
         first_placed = False
 
@@ -1134,6 +1255,7 @@ class Typesetter:
                     math_bbox=math_bbox,
                     math_align=math_align,
                     math_handwrite=math_handwrite,
+                    math_fraction_bar_y=math_fraction_bar_y,
                     **kwargs,  # type: ignore[arg-type]
                 )
             if math_source is not None:
