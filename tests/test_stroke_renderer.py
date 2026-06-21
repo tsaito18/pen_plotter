@@ -970,6 +970,21 @@ class TestSlashUserSampleFallback:
         assert strokes is not None
         assert any(len(s) == 8 for s in strokes)
 
+    def test_math_glyph_slash_uses_geometric_strokes(self):
+        """数式中の / も本文と同じ幾何斜線(_slash_strokes)で描画される。
+
+        以前は数式中の / が matplotlib skeleton 経路で描画され、本文の幾何斜線と
+        字形が違って混在していた。
+        """
+        r = StrokeRenderer()
+        # 数式グリフ描画経路（render_math_handwritten 内部の _math_glyph_unit_strokes）
+        unit = r._math_glyph_unit_strokes("/", is_large=False)
+        assert unit is not None
+        # _slash_strokes の幾何斜線（8 点の単一ストローク）が _normalize_strokes_to_unit
+        # を通って返る
+        assert len(unit) == 1
+        assert len(unit[0]) == 8
+
 
 class TestRenderMathHandwrittenFractionBar:
     """ブロック数式の罫線揃え（fraction_bar_y_mm）とサイズ拡大。"""

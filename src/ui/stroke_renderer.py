@@ -805,6 +805,11 @@ class StrokeRenderer:
             direct = self._direct_stroke(char, vary=False)
             if direct is not None:
                 return direct
+            # / \ は本文経路と同じ幾何斜線を使う（数式中の skeleton 化を回避し、本文
+            # 中の "[m/s²]" と数式中の "δα/4" でスラッシュの字形が揃うようにする）。
+            slash = self._slash_strokes(char)
+            if slash is not None:
+                return self._normalize_strokes_to_unit(slash)
             ref, _ = self._load_reference_strokes(char)
             if ref is not None:
                 return self._normalize_strokes_to_unit(ref)
