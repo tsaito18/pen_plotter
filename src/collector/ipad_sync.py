@@ -45,6 +45,12 @@ GUIDED_CHARS: list[str] = list(
     "／"
 )
 
+# 「分」「秒」「0-9」は測定値の表（0分23.05秒, 1分3.31秒 …）で同一文字が縦に
+# 並ぶため、3 サンプル程度だと同じ字形が繰り返し選ばれて「機械印字っぽく」見える。
+# 通常 Tier より上の最優先枠で、target を超えて追加収集する。
+_REPEAT_HEAVY_CHARS: set[str] = set("分秒0123456789")
+_REPEAT_HEAVY_TARGET: int = 10
+
 # レポート頻出文字の優先度（高→低の3段階）
 # Tier 1: レポートで非常に頻出するひらがな・漢字（最優先で収集）
 _TIER1_CHARS: set[str] = set(
@@ -66,6 +72,17 @@ _TIER2_CHARS: set[str] = set(
 )
 
 
+def _char_target(ch: str, base_target: int) -> int:
+    """文字ごとの収集目標サンプル数。
+
+    繰り返し並ぶ文字（分・秒・数字）は base_target を超えて ``_REPEAT_HEAVY_TARGET``
+    まで集め、表の中で同一字形の反復を回避する。
+    """
+    if ch in _REPEAT_HEAVY_CHARS:
+        return max(base_target, _REPEAT_HEAVY_TARGET)
+    return base_target
+
+
 def select_next_char(
     saved_counts: dict[str, int],
     target_samples: int = 3,
@@ -74,27 +91,32 @@ def select_next_char(
     """学習効率を最大化する次の文字を選択する。
 
     優先度ロジック:
-    1. Tier優先（Tier1 > Tier2 > Tier3）— レポート頻出文字を先に完成させる
-    2. 同一Tier内ではサンプル数が少ない文字を優先（0 > 1 > 2）
-    3. 同一優先度内ではランダム選択（偏りを防ぐ）
+    1. 繰り返し並ぶ文字（分・秒・0-9）を最優先（同字反復で機械印字感を出さない）
+    2. Tier優先（Tier1 > Tier2 > Tier3）— レポート頻出文字を先に完成させる
+    3. 同一Tier内ではサンプル数が少ない文字を優先（0 > 1 > 2）
+    4. 同一優先度内ではランダム選択（偏りを防ぐ）
     """
     import random
 
     rng = random.Random(seed)
 
-    remaining = [c for c in GUIDED_CHARS if saved_counts.get(c, 0) < target_samples]
+    remaining = [
+        c for c in GUIDED_CHARS if saved_counts.get(c, 0) < _char_target(c, target_samples)
+    ]
     if not remaining:
         return None
 
     def _priority(ch: str) -> tuple[int, int]:
         """(Tier, サンプル数) — 小さいほど優先"""
         count = saved_counts.get(ch, 0)
-        if ch in _TIER1_CHARS:
-            tier = 0
-        elif ch in _TIER2_CHARS:
+        if ch in _REPEAT_HEAVY_CHARS:
+            tier = 0  # 最優先（表で同字反復を避ける）
+        elif ch in _TIER1_CHARS:
             tier = 1
-        else:
+        elif ch in _TIER2_CHARS:
             tier = 2
+        else:
+            tier = 3
         return (tier, count)
 
     remaining.sort(key=_priority)
