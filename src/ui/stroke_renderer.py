@@ -673,9 +673,10 @@ class StrokeRenderer:
                 roof_x_left = max(right + gw * 0.05, content_left - gw * 0.10)
             else:
                 roof_x_left = right + gw * 0.20
-            # 屋根右端も中身右端へ詰める（無いときは matplotlib の元の幅で）。
+            # 屋根右端は中身右端ぴったりに詰める（パディングなし。微小パディングでも
+            # 揺らぎを合わせると分数の右に隙間として見えるため）。
             if content_right is not None:
-                roof_x_right = content_right + gw * 0.06
+                roof_x_right = content_right
             else:
                 roof_x_right = r.x + r.width
             # 屋根を中身上端のすぐ上に下げる（matplotlib のデフォルトは余白が広く、
