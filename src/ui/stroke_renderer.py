@@ -805,13 +805,17 @@ class StrokeRenderer:
             direct = self._direct_stroke(char, vary=False)
             if direct is not None:
                 return direct
-            # / \ は本文経路と同じ幾何斜線を使う（数式中の skeleton 化を回避し、本文
-            # 中の "[m/s²]" と数式中の "δα/4" でスラッシュの字形が揃うようにする）。
-            # _slash_strokes は既に Y-UP unit のため、_normalize_strokes_to_unit
-            # （Y 反転を含む）は通さない（通すと / が \ に反転する）。
-            slash = self._slash_strokes(char)
-            if slash is not None:
-                return slash
+            # / \ は本文経路と同じ幾何斜線を使う（数式中の skeleton 化を回避）。
+            # 本文用 _slash_strokes は cell_width 基準の見た目 [0.2, 0.8] パディング
+            # だが、数式中は ink bbox (aspect h/w≈2.4) にアスペクト保持で収めるため、
+            # そのまま使うと左右余白が出る。数式用に aspect 2.5 の縦長 unit を返し、
+            # bbox 横いっぱいに描かせる。
+            if char == "/":
+                t = np.linspace(0, 1, 8)
+                return [np.column_stack([0.4 * t, t]).astype(np.float64)]
+            if char == "\\":
+                t = np.linspace(0, 1, 8)
+                return [np.column_stack([0.4 * t, 1.0 - t]).astype(np.float64)]
             ref, _ = self._load_reference_strokes(char)
             if ref is not None:
                 return self._normalize_strokes_to_unit(ref)

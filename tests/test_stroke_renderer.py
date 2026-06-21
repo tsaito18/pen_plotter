@@ -971,23 +971,27 @@ class TestSlashUserSampleFallback:
         assert any(len(s) == 8 for s in strokes)
 
     def test_math_glyph_slash_uses_geometric_strokes(self):
-        """数式中の / も本文と同じ幾何斜線(_slash_strokes)で描画される。
+        """数式中の / は ink bbox aspect (≈2.4) に合わせた縦長 unit で描画される。
 
         以前は数式中の / が matplotlib skeleton 経路で描画され、本文の幾何斜線と
-        字形が違って混在していた。
+        字形が違って混在していた。今は専用の縦長 unit で本文と同じ向き、bbox 横
+        いっぱいに描画される。
         """
         import numpy as np
 
         r = StrokeRenderer()
-        # 数式グリフ描画経路（render_math_handwritten 内部の _math_glyph_unit_strokes）
         unit = r._math_glyph_unit_strokes("/", is_large=False)
         assert unit is not None
-        # _slash_strokes の幾何斜線（8 点の単一ストローク、Y-UP）が直接返る
         assert len(unit) == 1
-        assert len(unit[0]) == 8
-        # Y-UP で「左下→右上」(/)。y が増加していること（\ なら y が減少）。
+        # Y-UP で「左下→右上」(/)。y が単調増加（\ なら y が減少）。
         ys = unit[0][:, 1]
         assert np.all(np.diff(ys) > 0), f"/ should go bottom-left to top-right, got ys={ys}"
+        # aspect h/w が 2 以上（縦長、ink bbox に近い）。本文の [0.2, 0.8] aspect 1.67
+        # よりも縦長で、bbox 横いっぱいに描かせる。
+        xs = unit[0][:, 0]
+        w = xs.max() - xs.min()
+        h = ys.max() - ys.min()
+        assert h / w >= 2.0, f"slash unit should be tall (aspect>=2), got h/w={h/w:.2f}"
 
 
 class TestRenderMathHandwrittenFractionBar:
