@@ -683,16 +683,16 @@ class StrokeRenderer:
             roof_y = min(roof_y_orig, content_top + g.fontsize * 0.08)
             span = max(roof_x_left - left, gw)  # √記号横幅（√左端→屋根左端）
             # チェックマーク（✔︎）部分の縦範囲は √ glyph fontsize 相当に固定。
-            # ブロック数式でもインラインと同じ大きさの ✔︎ になる。
             check_h = g.fontsize * 0.55
             ctop = bottom + check_h
-            # 谷点は屋根左端の少し左に置く（中身が高い式では上昇が急峻になり、
-            # 中身が低い式では緩やか。中身に応じて ✓ の上昇角度が変わる）。
-            valley_x = roof_x_left - 0.22 * span
+            # ✓ の左部分（入り→谷）は短く（fontsize 比で控えめ）、右部分（谷→屋根）
+            # は長く急峻。これで「✓」らしい鋭いシルエットになる。
+            descent_x = min(g.fontsize * 0.15, span * 0.35)
+            valley_x = left + descent_x
             pts_pt = [
                 (left, ctop),                          # 入り（✔︎ 左上）
-                (valley_x, bottom),                     # 谷（屋根左端寄り、下端）
-                (roof_x_left, roof_y),                  # 屋根左端（急な上昇）
+                (valley_x, bottom),                     # 谷（入りの近く、下端）
+                (roof_x_left, roof_y),                  # 屋根左端（長く急な上昇）
                 (roof_x_right, roof_y),                 # 屋根右端（水平）
             ]
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
