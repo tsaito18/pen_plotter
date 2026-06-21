@@ -682,19 +682,17 @@ class StrokeRenderer:
             # 屋根を中身上端のすぐ上に下げる（matplotlib のデフォルトは余白が広く、
             # ✔︎ と屋根の間に隙間が見える）。
             roof_y = min(roof_y_orig, content_top + g.fontsize * 0.08)
-            # ✓ 部分の縦・横は √ glyph fontsize 相当に固定。✓ 内では「短く急な下降→
-            # 谷→急な上昇」で鋭いシルエットを作り、頂上から屋根左端までは水平の屋根
-            # 線で繋ぐ。これで ✓ の左右どちらも急角度になり、屋根は中身範囲をカバー。
+            # ✓ の頂上を屋根左端に直結する（中央の水平区間を作らない=中身の左に空きを
+            # 残さない）。谷は √記号横幅の 1/3 地点で下端。屋根は中身の左右端を結ぶ
+            # 水平線。
             check_h = g.fontsize * 0.55
-            check_w = g.fontsize * 0.45
             ctop = bottom + check_h
-            valley_x = left + check_w * 0.30   # 谷（✓ 下端、左寄り）
-            peak_x = min(left + check_w, roof_x_left)  # ✓ 頂上（屋根高で右端）
+            span = max(roof_x_left - left, gw)
+            valley_x = left + span * 0.30
             pts_pt = [
                 (left, ctop),                          # 入り（✔︎ 左上）
                 (valley_x, bottom),                     # 谷（下端）
-                (peak_x, roof_y),                       # ✓ 頂上（屋根高、急上昇）
-                (roof_x_left, roof_y),                  # 屋根左端（水平で続く）
+                (roof_x_left, roof_y),                  # ✓ 頂上 = 屋根左端（直結）
                 (roof_x_right, roof_y),                 # 屋根右端
             ]
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
