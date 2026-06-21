@@ -976,14 +976,18 @@ class TestSlashUserSampleFallback:
         以前は数式中の / が matplotlib skeleton 経路で描画され、本文の幾何斜線と
         字形が違って混在していた。
         """
+        import numpy as np
+
         r = StrokeRenderer()
         # 数式グリフ描画経路（render_math_handwritten 内部の _math_glyph_unit_strokes）
         unit = r._math_glyph_unit_strokes("/", is_large=False)
         assert unit is not None
-        # _slash_strokes の幾何斜線（8 点の単一ストローク）が _normalize_strokes_to_unit
-        # を通って返る
+        # _slash_strokes の幾何斜線（8 点の単一ストローク、Y-UP）が直接返る
         assert len(unit) == 1
         assert len(unit[0]) == 8
+        # Y-UP で「左下→右上」(/)。y が増加していること（\ なら y が減少）。
+        ys = unit[0][:, 1]
+        assert np.all(np.diff(ys) > 0), f"/ should go bottom-left to top-right, got ys={ys}"
 
 
 class TestRenderMathHandwrittenFractionBar:
