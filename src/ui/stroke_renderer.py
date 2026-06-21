@@ -697,7 +697,9 @@ class StrokeRenderer:
                 (roof_x_right, roof_y),                 # 屋根右端
             ]
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
-            result.append(poly)
+            # √ ポリラインも本文・数式グリフと同じ waver で揺らがせて手書き感を出す
+            # （素のまま append すると屋根・✓ が定規線に見える）。
+            result.extend(self._apply_distortion([poly], waver_scale=self._WAVER_MATH_IMAGE))
 
         # ---- グリフ（通常＝手書き / 大型＝skeleton）----
         # 大型括弧の縦範囲を「中身（囲まれたグリフ/罫線）の上下端」に合わせる。
