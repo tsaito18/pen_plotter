@@ -686,12 +686,13 @@ class StrokeRenderer:
             # ブロック数式でもインラインと同じ大きさの ✔︎ になる。
             check_h = g.fontsize * 0.55
             ctop = bottom + check_h
-            # 手書きの √ は「短い下降→谷→屋根への斜め上昇→水平屋根」のシンプルな
-            # 4点ライン。中間点を増やしすぎると違和感が出る。
+            # 谷点は屋根左端の少し左に置く（中身が高い式では上昇が急峻になり、
+            # 中身が低い式では緩やか。中身に応じて ✓ の上昇角度が変わる）。
+            valley_x = roof_x_left - 0.22 * span
             pts_pt = [
                 (left, ctop),                          # 入り（✔︎ 左上）
-                (left + 0.25 * span, bottom),           # 谷（下端、左寄り）
-                (roof_x_left, roof_y),                  # 屋根左端（斜めで上昇）
+                (valley_x, bottom),                     # 谷（屋根左端寄り、下端）
+                (roof_x_left, roof_y),                  # 屋根左端（急な上昇）
                 (roof_x_right, roof_y),                 # 屋根右端（水平）
             ]
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
