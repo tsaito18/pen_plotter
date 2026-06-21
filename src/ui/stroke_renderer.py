@@ -632,9 +632,32 @@ class StrokeRenderer:
                 continue
             r = layout.rects[best]
             consumed_rects.add(best)
-            roof_x = r.x
             roof_y = r.y + r.height / 2.0
-            span = max(roof_x - left, gw)  # チェックマーク横幅（√左端→屋根左端）
+            # matplotlib の屋根 rect (r.x, r.x+r.width) は √記号右端から大きく離れて
+            # 始まり、中身の右端より太いパディングを持つため「√と中身が離れて見え」かつ
+            # 「屋根が横長」に見える。屋根の左端を √記号の右端へ詰め、右端は中身
+            # （√内のグリフ・分数線）の実右端へ詰めて、隙間と冗長な横長を解消する。
+            roof_x_left = right + gw * 0.08
+            content_right = right
+            roof_x_orig_end = r.x + r.width
+            for gg in layout.glyphs:
+                if gg is g or gg.char == "√":
+                    continue
+                gik = glyph_ink_bbox(gg.char, gg.fontsize)
+                if gik is None:
+                    continue
+                # √の屋根範囲内にある中身のグリフのみ
+                if not (r.x <= gg.x <= roof_x_orig_end):
+                    continue
+                content_right = max(content_right, gg.x + gik[0] + gik[2])
+            for rr in layout.rects:
+                # 屋根 rect 自身を除き、屋根範囲内の rect（分数線等）を見る
+                if rr is r:
+                    continue
+                if rr.x >= r.x and rr.x + rr.width <= roof_x_orig_end and rr.y < roof_y - 1:
+                    content_right = max(content_right, rr.x + rr.width)
+            roof_x_right = content_right + gw * 0.06
+            span = max(roof_x_left - left, gw)  # チェックマーク横幅（√左端→屋根左端）
             rise = roof_y - bottom  # 谷→屋根の高さ（中身の高さに追従）
             pts_pt = [
                 (left, bottom + 0.80 * rise),          # 入り（左・高め）
@@ -643,8 +666,8 @@ class StrokeRenderer:
                 (left + 0.20 * span, bottom),           # 谷（左寄り最下点）
                 (left + 0.35 * span, bottom + 0.25 * rise),  # 上昇開始
                 (left + 0.55 * span, bottom + 0.60 * rise),  # 急上昇中
-                (roof_x, roof_y),                       # 屋根左端
-                (roof_x + r.width, roof_y),             # 屋根右端
+                (roof_x_left, roof_y),                  # 屋根左端（√右端から詰める）
+                (roof_x_right, roof_y),                 # 屋根右端（中身右端へ詰める）
             ]
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
             result.append(poly)
