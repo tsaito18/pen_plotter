@@ -994,6 +994,7 @@ class Typesetter:
             extract_math_layout,
             formula_draw_width_mm,
             handwrite_draw_width_mm,
+            promote_top_level_frac_to_dfrac,
             ref_cap_height_pt,
             split_math_for_width,
         )
@@ -1004,12 +1005,18 @@ class Typesetter:
         body_elements = self._strip_tag_and_adjacent_spaces(elements)
         # 画像レンダラに渡すソースから \tag{} を除去（matplotlib は \tag 非対応）
         body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src).strip()
+        # 手書き経路: トップレベル \frac を \dfrac に昇格。matplotlib mathtext は
+        # \frac を script style (≈0.7em) で描くため、横並び分数で文字が小さく見える
+        # (式(4)等)。\dfrac は display style で本文 em のまま描画するため subsize
+        # 累積が消える。入れ子 \frac (\sqrt 内等、深さ>0) はそのまま (\dfrac 化すると
+        # √屋根を突き抜ける)。
+        if self.handwrite_math:
+            body_src = promote_top_level_frac_to_dfrac(body_src)
 
         # \\ 改行でグループ分割。linebreak が無いときは 1 グループ＝従来挙動。
         groups = self._split_by_linebreak(body_elements)
 
-        # 手書き経路で長い式・複数分数式は subsize 累積で文字が小さく見える。関係演算子・
-        # 加減で分割し、各セグメントを個別のブロック数式として配置する（再帰呼び出し）。
+        # \dfrac 化しても本文幅を超える長い式は関係演算子・加減で分割（後方互換）。
         # \\ 改行で既に多段の式は対象外（ユーザー意図の改行を尊重）。
         if (
             self.handwrite_math
@@ -1021,7 +1028,7 @@ class Typesetter:
                 self.font_size,
                 area.width,
                 cap_ratio=MATH_BLOCK_CAP_RATIO,
-                force_split_multiple_fractions=True,
+                force_split_multiple_fractions=False,
             )
             if len(segments) > 1:
                 # 各セグメントの required_rows を事前見積もりし、全部入らないなら

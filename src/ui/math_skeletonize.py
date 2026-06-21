@@ -709,6 +709,53 @@ _RELATION_SINGLE_OPS: tuple[str, ...] = ("=", "<", ">")
 _ADDITIVE_OPS: tuple[str, ...] = ("+", "-")
 
 
+def promote_top_level_frac_to_dfrac(src: str) -> str:
+    """ソース中の **深さ 0** にある ``\\frac`` を ``\\dfrac`` に置換する。
+
+    matplotlib mathtext は通常 ``\\frac`` を script style（≈0.7em）で描き、複数の
+    分数が並ぶと各文字が小さく見える（subsize 累積）。``\\dfrac`` は display style
+    で常に本文 em で描くため、ブロック数式のトップレベル分数を ``\\dfrac`` に
+    置換すると分子・分母の文字が本文サイズになり読みやすくなる。
+
+    入れ子 ``\\frac`` (例: ``\\sqrt{\\frac{I}{Mgh}}`` の内側) は深さ > 0 で
+    そのまま残る（display style 化すると \\sqrt の屋根を突き抜けるため）。
+    """
+    result: list[str] = []
+    depth = 0
+    n = len(src)
+    i = 0
+    while i < n:
+        c = src[i]
+        if c == "{":
+            depth += 1
+            result.append(c)
+            i += 1
+        elif c == "}":
+            depth -= 1
+            result.append(c)
+            i += 1
+        elif c == "\\":
+            j = i + 1
+            while j < n and src[j].isalpha():
+                j += 1
+            cmd = src[i:j]
+            if cmd == "\\left":
+                depth += 1
+                result.append(cmd)
+            elif cmd == "\\right":
+                depth -= 1
+                result.append(cmd)
+            elif depth == 0 and cmd == "\\frac":
+                result.append("\\dfrac")
+            else:
+                result.append(cmd)
+            i = j
+        else:
+            result.append(c)
+            i += 1
+    return "".join(result)
+
+
 def _count_top_level_fracs(src: str) -> int:
     """``src`` 中の深さ 0 にある ``\\frac`` の個数を数える。
 
