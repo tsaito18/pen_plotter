@@ -710,28 +710,42 @@ _ADDITIVE_OPS: tuple[str, ...] = ("+", "-")
 
 
 def promote_top_level_frac_to_dfrac(src: str) -> str:
-    """ソース中の **深さ 0** にある ``\\frac`` を ``\\dfrac`` に置換する。
+    """ソース中の **深さ 0**（``\\sqrt`` 内を除く）にある ``\\frac`` を ``\\dfrac`` に置換。
 
     matplotlib mathtext は通常 ``\\frac`` を script style（≈0.7em）で描き、複数の
     分数が並ぶと各文字が小さく見える（subsize 累積）。``\\dfrac`` は display style
     で常に本文 em で描くため、ブロック数式のトップレベル分数を ``\\dfrac`` に
     置換すると分子・分母の文字が本文サイズになり読みやすくなる。
 
-    入れ子 ``\\frac`` (例: ``\\sqrt{\\frac{I}{Mgh}}`` の内側) は深さ > 0 で
-    そのまま残る（display style 化すると \\sqrt の屋根を突き抜けるため）。
+    深さ追跡は ``\\sqrt{...}`` のみ（``\\left( ... \\right)`` 括弧内の \\frac は
+    対象に含める）。括弧で囲まれた分数（例: ``\\left(\\frac{2\\pi}{T}\\right)^2``）
+    は subsize にすべきでない。``\\sqrt`` 内の \\frac は屋根突き抜けを避けるため
+    除外する。
     """
     result: list[str] = []
-    depth = 0
+    depth = 0  # \sqrt 内の深さのみ追跡（\left \right や { } は深さに含めない）
     n = len(src)
     i = 0
+    # \sqrt 直後の { ... } を sqrt のスコープと判定するため、最後に見た \sqrt 直後で
+    # depth+1 にするフラグを立て、対応する閉じ } で -1 する。
+    sqrt_brace_pending = False
+    sqrt_depths: list[int] = []  # 入れ子 \sqrt 内の brace 深さスタック
+    brace_depth = 0
     while i < n:
         c = src[i]
         if c == "{":
-            depth += 1
+            brace_depth += 1
+            if sqrt_brace_pending:
+                sqrt_depths.append(brace_depth)
+                depth += 1
+                sqrt_brace_pending = False
             result.append(c)
             i += 1
         elif c == "}":
-            depth -= 1
+            if sqrt_depths and brace_depth == sqrt_depths[-1]:
+                sqrt_depths.pop()
+                depth -= 1
+            brace_depth -= 1
             result.append(c)
             i += 1
         elif c == "\\":
@@ -739,11 +753,8 @@ def promote_top_level_frac_to_dfrac(src: str) -> str:
             while j < n and src[j].isalpha():
                 j += 1
             cmd = src[i:j]
-            if cmd == "\\left":
-                depth += 1
-                result.append(cmd)
-            elif cmd == "\\right":
-                depth -= 1
+            if cmd == "\\sqrt":
+                sqrt_brace_pending = True
                 result.append(cmd)
             elif depth == 0 and cmd == "\\frac":
                 result.append("\\dfrac")
