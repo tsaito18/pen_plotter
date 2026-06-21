@@ -682,27 +682,30 @@ class StrokeRenderer:
             # 屋根を中身上端のすぐ上に下げる（matplotlib のデフォルトは余白が広く、
             # ✔︎ と屋根の間に隙間が見える）。
             roof_y = min(roof_y_orig, content_top + g.fontsize * 0.08)
-            # ✓ の頂上を屋根左端に直結する（中央の水平区間=中身の左空きを作らない）。
-            # 谷の位置は中身の構造で動的に: 中身に分数があれば屋根寄り (上昇短→急峻)、
-            # 無ければ入り寄り (上昇長→緩やか) にして角度を中身に応じて変える。
+            # ✓ のサイズは √ glyph fontsize 基準で完全固定（中身の構造に依存しない）。
+            # ✓ 頂上 = 屋根左端として、屋根は ✓ 頂上から中身右端まで水平に伸びる。
+            # 中身が広い式では屋根が長くなるが、✓ 自体の大きさは一定。
+            check_w = g.fontsize * 0.45
             check_h = g.fontsize * 0.55
             ctop = bottom + check_h
-            span = max(roof_x_left - left, gw)
-            has_inner_frac = any(
-                rr is not r
-                and rr.x >= r.x
-                and rr.x + rr.width <= roof_x_orig_end
-                and rr.y < roof_y_orig - 1
-                for rr in layout.rects
-            )
-            valley_x_factor = 0.55 if has_inner_frac else 0.20
-            valley_x = left + span * valley_x_factor
+            peak_x = left + check_w           # ✓ 頂上（固定サイズ）
+            valley_x = left + check_w * 0.30  # 谷（✓ 内 30% 地点、固定）
+            # ✓ 頂上が中身左端より右なら屋根は中身左端まで戻る。左なら ✓ 頂上から開始
+            # （中身の左に余白なし or 屋根が中身より左にはみ出る）。
+            roof_left_actual = min(peak_x, roof_x_left)
             pts_pt = [
-                (left, ctop),                          # 入り（✔︎ 左上）
-                (valley_x, bottom),                     # 谷（下端、構造で動的）
-                (roof_x_left, roof_y),                  # ✓ 頂上 = 屋根左端（直結）
-                (roof_x_right, roof_y),                 # 屋根右端
+                (left, ctop),                          # 入り（✔︎ 左上、固定）
+                (valley_x, bottom),                     # 谷（下端、固定）
+                (peak_x, roof_y),                       # ✓ 頂上（固定）
+                (roof_left_actual, roof_y) if roof_left_actual != peak_x else (peak_x, roof_y),
+                (roof_x_right, roof_y),                 # 屋根右端（中身右端）
             ]
+            # 重複点を排除
+            cleaned: list[tuple[float, float]] = []
+            for pt in pts_pt:
+                if not cleaned or cleaned[-1] != pt:
+                    cleaned.append(pt)
+            pts_pt = cleaned
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
             # √ ポリラインも本文・数式グリフと同じ waver で揺らがせて手書き感を出す
             # （素のまま append すると屋根・✓ が定規線に見える）。
