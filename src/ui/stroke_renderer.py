@@ -682,16 +682,24 @@ class StrokeRenderer:
             # 屋根を中身上端のすぐ上に下げる（matplotlib のデフォルトは余白が広く、
             # ✔︎ と屋根の間に隙間が見える）。
             roof_y = min(roof_y_orig, content_top + g.fontsize * 0.08)
-            # ✓ の頂上を屋根左端に直結する（中央の水平区間を作らない=中身の左に空きを
-            # 残さない）。谷は √記号横幅の 1/3 地点で下端。屋根は中身の左右端を結ぶ
-            # 水平線。
+            # ✓ の頂上を屋根左端に直結する（中央の水平区間=中身の左空きを作らない）。
+            # 谷の位置は中身の構造で動的に: 中身に分数があれば屋根寄り (上昇短→急峻)、
+            # 無ければ入り寄り (上昇長→緩やか) にして角度を中身に応じて変える。
             check_h = g.fontsize * 0.55
             ctop = bottom + check_h
             span = max(roof_x_left - left, gw)
-            valley_x = left + span * 0.30
+            has_inner_frac = any(
+                rr is not r
+                and rr.x >= r.x
+                and rr.x + rr.width <= roof_x_orig_end
+                and rr.y < roof_y_orig - 1
+                for rr in layout.rects
+            )
+            valley_x_factor = 0.55 if has_inner_frac else 0.20
+            valley_x = left + span * valley_x_factor
             pts_pt = [
                 (left, ctop),                          # 入り（✔︎ 左上）
-                (valley_x, bottom),                     # 谷（下端）
+                (valley_x, bottom),                     # 谷（下端、構造で動的）
                 (roof_x_left, roof_y),                  # ✓ 頂上 = 屋根左端（直結）
                 (roof_x_right, roof_y),                 # 屋根右端
             ]
