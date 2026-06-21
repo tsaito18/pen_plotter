@@ -633,13 +633,13 @@ class StrokeRenderer:
             r = layout.rects[best]
             consumed_rects.add(best)
             roof_y_orig = r.y + r.height / 2.0
-            # matplotlib の屋根 rect (r.x, r.x+r.width) は √記号右端から大きく離れて
-            # 始まり、中身の右端より太いパディングを持つため「√と中身が離れて見え」かつ
-            # 「屋根が横長」に見える。屋根の左端を √記号の右端へ詰め、右端は中身
-            # （√内のグリフ・分数線）の実右端へ詰めて、隙間と冗長な横長を解消する。
-            roof_x_left = right + gw * 0.08
-            content_right = right
-            content_top = bottom  # 中身の最高 y（屋根を下げるため）
+            # matplotlib の屋根 rect (r.x, r.x+r.width) は中身（√内のグリフ）に対して
+            # 左右に太いパディングを持つため、屋根の下に余白が見える。屋根の x 範囲を
+            # 中身の実左右端へ詰めて余白を解消し、屋根 y も中身上端のすぐ上へ下げて
+            # ✔︎ と屋根の隙間を消す。
+            content_left: float | None = None
+            content_right: float | None = None
+            content_top = bottom
             roof_x_orig_end = r.x + r.width
             for gg in layout.glyphs:
                 if gg is g or gg.char == "√":
@@ -650,16 +650,34 @@ class StrokeRenderer:
                 # √の屋根範囲内にある中身のグリフのみ
                 if not (r.x <= gg.x <= roof_x_orig_end):
                     continue
-                content_right = max(content_right, gg.x + gik[0] + gik[2])
+                gl = gg.x + gik[0]
+                gr = gl + gik[2]
+                content_left = gl if content_left is None else min(content_left, gl)
+                content_right = gr if content_right is None else max(content_right, gr)
                 content_top = max(content_top, gg.baseline_y + gik[1] + gik[3])
             for rr in layout.rects:
                 # 屋根 rect 自身を除き、屋根範囲内の rect（分数線等）を見る
                 if rr is r:
                     continue
                 if rr.x >= r.x and rr.x + rr.width <= roof_x_orig_end and rr.y < roof_y_orig - 1:
-                    content_right = max(content_right, rr.x + rr.width)
+                    content_left = rr.x if content_left is None else min(content_left, rr.x)
+                    content_right = (
+                        rr.x + rr.width
+                        if content_right is None
+                        else max(content_right, rr.x + rr.width)
+                    )
                     content_top = max(content_top, rr.y + rr.height)
-            roof_x_right = content_right + gw * 0.06
+            # 屋根左端は「中身左端の少し左」へ詰める（中身が屋根の下で左に空いて
+            # 見えるのを解消）。中身が無いとき（√単独）は √記号右端から控えめに伸ばす。
+            if content_left is not None:
+                roof_x_left = max(right + gw * 0.05, content_left - gw * 0.10)
+            else:
+                roof_x_left = right + gw * 0.20
+            # 屋根右端も中身右端へ詰める（無いときは matplotlib の元の幅で）。
+            if content_right is not None:
+                roof_x_right = content_right + gw * 0.06
+            else:
+                roof_x_right = r.x + r.width
             # 屋根を中身上端のすぐ上に下げる（matplotlib のデフォルトは余白が広く、
             # ✔︎ と屋根の間に隙間が見える）。
             roof_y = min(roof_y_orig, content_top + g.fontsize * 0.08)
