@@ -605,7 +605,12 @@ class StrokeRenderer:
         # チェックマークの上がりを屋根左端へ直結し、そのまま屋根右端まで1本で描く。
         # 使った屋根 rect は下の rect ループで二重描画しないよう除外する。
         consumed_rects: set[int] = set()
-        for g in layout.glyphs:
+        # √ 内のグリフ・rect を左にシフトして ✓ 頂上に直結させるための位置補正辞書。
+        # glyph index / rect index → x_pt の差分（負＝左へ）。下のグリフ・rect ループで
+        # 描画時に適用する。
+        sqrt_glyph_shifts: dict[int, float] = {}
+        sqrt_rect_shifts: dict[int, float] = {}
+        for gi_root, g in enumerate(layout.glyphs):
             if g.char != "√":
                 continue
             ink = glyph_ink_bbox(g.char, g.fontsize)
@@ -682,30 +687,35 @@ class StrokeRenderer:
             # 屋根を中身上端のすぐ上に下げる（matplotlib のデフォルトは余白が広く、
             # ✔︎ と屋根の間に隙間が見える）。
             roof_y = min(roof_y_orig, content_top + g.fontsize * 0.08)
-            # ✓ のサイズは √ glyph fontsize 基準で完全固定（中身の構造に依存しない）。
-            # ✓ 頂上 = 屋根左端として、屋根は ✓ 頂上から中身右端まで水平に伸びる。
-            # 中身が広い式では屋根が長くなるが、✓ 自体の大きさは一定。
+            # ✓ サイズを fontsize 基準で完全固定。中身（√ 内のグリフ・rect）を左に
+            # シフトして ✓ 頂上にぴったり揃え、中央の水平区間（中身の左空き）を排除。
             check_w = g.fontsize * 0.45
             check_h = g.fontsize * 0.55
             ctop = bottom + check_h
             peak_x = left + check_w           # ✓ 頂上（固定サイズ）
-            valley_x = left + check_w * 0.30  # 谷（✓ 内 30% 地点、固定）
-            # ✓ 頂上が中身左端より右なら屋根は中身左端まで戻る。左なら ✓ 頂上から開始
-            # （中身の左に余白なし or 屋根が中身より左にはみ出る）。
-            roof_left_actual = min(peak_x, roof_x_left)
+            valley_x = left + check_w * 0.30
+            # 中身を peak_x にぴったり揃えるためのシフト量（content_left → peak_x）。
+            if content_left is not None and content_left > peak_x:
+                shift = peak_x - content_left
+                for gj, gg in enumerate(layout.glyphs):
+                    if gj == gi_root or gg.char == "√":
+                        continue
+                    if not (r.x <= gg.x <= roof_x_orig_end):
+                        continue
+                    sqrt_glyph_shifts[gj] = shift
+                for rj, rr in enumerate(layout.rects):
+                    if rr is r:
+                        continue
+                    if rr.x >= r.x and rr.x + rr.width <= roof_x_orig_end:
+                        sqrt_rect_shifts[rj] = shift
+                # 屋根右端もシフト分だけ詰める
+                roof_x_right = (content_right + shift) if content_right is not None else (roof_x_right + shift)
             pts_pt = [
                 (left, ctop),                          # 入り（✔︎ 左上、固定）
                 (valley_x, bottom),                     # 谷（下端、固定）
-                (peak_x, roof_y),                       # ✓ 頂上（固定）
-                (roof_left_actual, roof_y) if roof_left_actual != peak_x else (peak_x, roof_y),
-                (roof_x_right, roof_y),                 # 屋根右端（中身右端）
+                (peak_x, roof_y),                       # ✓ 頂上 = 屋根左端
+                (roof_x_right, roof_y),                 # 屋根右端
             ]
-            # 重複点を排除
-            cleaned: list[tuple[float, float]] = []
-            for pt in pts_pt:
-                if not cleaned or cleaned[-1] != pt:
-                    cleaned.append(pt)
-            pts_pt = cleaned
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
             # √ ポリラインも本文・数式グリフと同じ waver で揺らがせて手書き感を出す
             # （素のまま append すると屋根・✓ が定規線に見える）。
@@ -799,11 +809,12 @@ class StrokeRenderer:
                 continue
             # 中点 ·（\cdot, ρ·π/4 等）はペンを下ろすだけの単一点。skeleton 化で線・ティック
             # にならないよう、グリフのインク中心に1点だけ置く（線でなく点）。
+            shift_x = sqrt_glyph_shifts.get(gi, 0.0)  # √ 内のグリフは左にシフト
             if g.char in ("·", "・"):
                 dink = glyph_ink_bbox(g.char, g.fontsize)
                 if dink is not None:
                     dgx, dgy, dgw, dgh = dink
-                    cx_pt = g.x + dgx + dgw / 2.0
+                    cx_pt = g.x + dgx + dgw / 2.0 + shift_x
                     cy_pt = g.baseline_y + dgy + dgh / 2.0
                     result.append(np.array([to_mm(cx_pt, cy_pt)], dtype=np.float64))
                 continue
@@ -815,7 +826,7 @@ class StrokeRenderer:
                 continue
             gx, gy, gw, gh = ink  # baseline 原点・上向き正の pt。gy は下端
             # グリフの実インク矩形（pt 絶対）。x は g.x+gx 起点、y は g.baseline_y+gy 起点。
-            x_lo_pt = g.x + gx
+            x_lo_pt = g.x + gx + shift_x
             y_lo_pt = g.baseline_y + gy
             # 上付きのマイナス(指数 10^{-4} 等)は math axis で低く見えるため少し上げる。
             # 縮小サイズ(上付き)かつ基準ベースラインより上に座る "-"/"−" のみが対象。
@@ -838,9 +849,10 @@ class StrokeRenderer:
         for ri, r in enumerate(layout.rects):
             if ri in consumed_rects:
                 continue  # √ の屋根は連結ポリラインに含めたので二重描画しない
+            shift_x = sqrt_rect_shifts.get(ri, 0.0)
             cy_pt = r.y + r.height / 2.0
-            p0 = to_mm(r.x, cy_pt)
-            p1 = to_mm(r.x + r.width, cy_pt)
+            p0 = to_mm(r.x + shift_x, cy_pt)
+            p1 = to_mm(r.x + r.width + shift_x, cy_pt)
             result.append(np.array([p0, p1], dtype=np.float64))
 
         return result
