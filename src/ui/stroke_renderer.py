@@ -659,13 +659,18 @@ class StrokeRenderer:
             roof_x_right = content_right + gw * 0.06
             span = max(roof_x_left - left, gw)  # チェックマーク横幅（√左端→屋根左端）
             rise = roof_y - bottom  # 谷→屋根の高さ（中身の高さに追従）
+            # チェックマーク（✔︎）の縦範囲は √ glyph の標準 fontsize 相当に固定し、
+            # 中身（分数）の高さに引きずられない。ブロック数式でもインラインと同じ
+            # 大きさの ✔︎ になり、屋根へは斜めの長い線で繋ぐ。
+            check_h = g.fontsize * 0.55  # 本文 √ のチェックマーク高さ相当（pt）
+            ctop = bottom + check_h  # チェックマーク上端
             pts_pt = [
-                (left, bottom + 0.80 * rise),          # 入り（左・高め）
-                (left + 0.05 * span, bottom + 0.60 * rise),  # 短い下降
-                (left + 0.10 * span, bottom + 0.20 * rise),  # 谷へ向かう
-                (left + 0.20 * span, bottom),           # 谷（左寄り最下点）
-                (left + 0.35 * span, bottom + 0.25 * rise),  # 上昇開始
-                (left + 0.55 * span, bottom + 0.60 * rise),  # 急上昇中
+                (left, ctop),                          # 入り（✔︎ 左上）
+                (left + 0.06 * span, ctop - check_h * 0.30),
+                (left + 0.12 * span, ctop - check_h * 0.70),
+                (left + 0.20 * span, ctop - check_h * 0.90),  # 谷（下端付近）
+                (left + 0.35 * span, bottom + 0.30 * rise),   # 屋根へ向けた上昇開始
+                (left + 0.55 * span, bottom + 0.65 * rise),   # 急上昇中
                 (roof_x_left, roof_y),                  # 屋根左端（√右端から詰める）
                 (roof_x_right, roof_y),                 # 屋根右端（中身右端へ詰める）
             ]
