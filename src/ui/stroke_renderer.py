@@ -681,22 +681,18 @@ class StrokeRenderer:
             # 屋根を中身上端のすぐ上に下げる（matplotlib のデフォルトは余白が広く、
             # ✔︎ と屋根の間に隙間が見える）。
             roof_y = min(roof_y_orig, content_top + g.fontsize * 0.08)
-            span = max(roof_x_left - left, gw)  # チェックマーク横幅（√左端→屋根左端）
-            rise = roof_y - bottom  # 谷→屋根の高さ（中身の高さに追従）
-            # チェックマーク（✔︎）の縦範囲は √ glyph の標準 fontsize 相当に固定し、
-            # 中身（分数）の高さに引きずられない。ブロック数式でもインラインと同じ
-            # 大きさの ✔︎ になり、屋根へは斜めの長い線で繋ぐ。
-            check_h = g.fontsize * 0.55  # 本文 √ のチェックマーク高さ相当（pt）
-            ctop = bottom + check_h  # チェックマーク上端
+            span = max(roof_x_left - left, gw)  # √記号横幅（√左端→屋根左端）
+            # チェックマーク（✔︎）部分の縦範囲は √ glyph fontsize 相当に固定。
+            # ブロック数式でもインラインと同じ大きさの ✔︎ になる。
+            check_h = g.fontsize * 0.55
+            ctop = bottom + check_h
+            # 手書きの √ は「短い下降→谷→屋根への斜め上昇→水平屋根」のシンプルな
+            # 4点ライン。中間点を増やしすぎると違和感が出る。
             pts_pt = [
                 (left, ctop),                          # 入り（✔︎ 左上）
-                (left + 0.06 * span, ctop - check_h * 0.30),
-                (left + 0.12 * span, ctop - check_h * 0.70),
-                (left + 0.20 * span, ctop - check_h * 0.90),  # 谷（下端付近）
-                (left + 0.35 * span, bottom + 0.30 * rise),   # 屋根へ向けた上昇開始
-                (left + 0.55 * span, bottom + 0.65 * rise),   # 急上昇中
-                (roof_x_left, roof_y),                  # 屋根左端（√右端から詰める）
-                (roof_x_right, roof_y),                 # 屋根右端（中身右端へ詰める）
+                (left + 0.25 * span, bottom),           # 谷（下端、左寄り）
+                (roof_x_left, roof_y),                  # 屋根左端（斜めで上昇）
+                (roof_x_right, roof_y),                 # 屋根右端（水平）
             ]
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
             result.append(poly)
