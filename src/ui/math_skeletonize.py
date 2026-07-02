@@ -756,7 +756,11 @@ def promote_top_level_frac_to_dfrac(src: str) -> str:
             if cmd == "\\sqrt":
                 sqrt_brace_pending = True
                 result.append(cmd)
-            elif depth == 0 and cmd == "\\frac":
+            elif depth <= 1 and cmd == "\\frac":
+                # depth==1 は「トップレベル √ の中」。旧 √ 描画（matplotlib glyph）は
+                # dfrac 化すると屋根を突き抜けたため除外していたが、現行 √ は中身
+                # bbox 追従のポリライン描画なので昇格してよい（√ 内の分数が script
+                # size で潰れるのを防ぐ）。√ の入れ子（depth>=2）は据え置き。
                 result.append("\\dfrac")
             else:
                 result.append(cmd)

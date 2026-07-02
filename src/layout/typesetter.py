@@ -1184,8 +1184,11 @@ class Typesetter:
             if remaining < required_rows:
                 return -1
 
-        # 確保した行範囲の垂直中央にグループ列の中心を置く
-        top_y = line_positions[line_idx]
+        # 確保した行範囲の垂直中央にグループ列の中心を置く。
+        # line_positions[i] は罫線 y ＝行 i の「下端」。帯の上端は先頭行の上の罫線
+        # (line_positions[line_idx] + line_spacing) なので、それを使わないと中心が
+        # 半行低くなる（小さい式が帯の下に張り付いて見える）。
+        top_y = line_positions[line_idx] + line_spacing
         bottom_y = line_positions[line_idx + required_rows - 1]
         center_y = (top_y + bottom_y) / 2
 
@@ -1224,10 +1227,12 @@ class Typesetter:
             placed = MathLayoutEngine.layout(
                 g_elems, x=center_x, y=baseline_y, font_size=self.font_size
             )
-            # render center 経路は bbox の (x0, w_mm, h_mm) を使う（w_mm を無視せず実描画幅で描く）
+            # render center 経路は bbox の (x0, w_mm, h_mm) を使う（w_mm を無視せず実描画幅で描く）。
+            # y0 は「実描画高 g_h を baseline_y 中心に置く」下端。renderer は bbox 中央へ
+            # 墨域を中央化するので、これで式の視覚中心が帯中央(baseline_y=center_y)に一致する。
             g_bbox = (
                 center_x,
-                baseline_y - placed.descent * scale,
+                baseline_y - g_h / 2,
                 draw_w,
                 g_h,
             )
@@ -1247,6 +1252,13 @@ class Typesetter:
             tag_y = ruling_bar_y if ruling_bar_y is not None else last_baseline_y
             if not group_boxes:
                 tag_y = center_y
+            # tag_y は baseline でグリフはその上に立ち上がるため、そのままだと
+            # 式番号が式の視覚中心より半文字上に浮く。グリフ高の半分だけ下げて
+            # 番号の縦中心を式中心（罫線揃え時は分数線）に合わせる。
+            # 多段式（\\）はグループ自体がベースライン基準で並ぶため補正しない
+            # （最終行のベースラインに tag を揃える従来挙動を維持）。
+            if ruling_bar_y is not None or (block_layout is not None and group_count == 1):
+                tag_y -= self.font_size * 0.5
             tag_temp = MathLayoutEngine.layout([tag_elem], x=0, y=tag_y, font_size=self.font_size)
             # 式番号は数式本体の直後（1文字分あけて）に置く。紙右端を超える場合のみ右端へ。
             tag_x = last_body_right + self.font_size

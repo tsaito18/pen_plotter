@@ -582,12 +582,12 @@ class StrokeRenderer:
             x_left = x0 + w_mm / 2 - draw_w / 2
             baseline_mm = fraction_bar_y_mm - bar_cy_pt * s
         else:
-            # ブロック: bbox 中央へ上寄せ（render_latex_to_strokes center と同等の縦位置）。
-            # 縦の中央化は cap 縮尺での実描画高(ink_h*s)で行う（bbox高 h_mm で中央化すると
-            # cap 縮尺で式が縮んだ分だけ中心がずれる）。横は実描画幅で bbox 中央へ。
+            # ブロック: 実描画高(ink_h*s)を bbox（確保した行帯）の縦中央へ置く。
+            # 以前あった +h_mm*0.2 のリフトはインライン用の名残で、式高に比例して
+            # 上へずれ「分子が前行のテキストに食い込む」原因だったため撤去。
             draw_ink_h = ink_h * s
             cx = x0 + w_mm / 2
-            cy = y0 + h_mm / 2 + h_mm * 0.2  # _MATH_LIFT_FRACTION 相当（行内でやや上寄せ）
+            cy = y0 + h_mm / 2
             x_left = cx - draw_w / 2
             # 墨域 [-depth, +height] を実描画高 draw_ink_h で中央化し、baseline は下端 + depth*s。
             bottom_mm = cy - draw_ink_h / 2
@@ -622,14 +622,17 @@ class StrokeRenderer:
             bottom = g.baseline_y + gy  # √ インク下端＝谷の最下点
             # 屋根 rect は「√ の右側にあって最も左の上部横棒」を選ぶ。√記号の advance が
             # ink より広く・背の高い根号では√グリフ上端が屋根に届かないため、ink 右端での
-            # 厳密 x 一致ではなく『√右側で最左・かつ √下端より上』の rect を採る。
+            # 厳密 x 一致ではなく『√右寄りで最左・かつ √下端より上』の rect を採る。
             # （√(L/g) 等で内側の分数線も候補に入るが、屋根の方が左なので最左選択で分離）
+            # x 下限は √ インク中央（left+gw*0.5）: √ が分数の分母にあるとき、外側の
+            # 分数線は √ より左から始まるため、下限を緩くすると分数線を屋根と誤認し
+            # 本物の屋根 rect が罫線ループで直線描画されて二重線になる。
             best = None
             for ri, r in enumerate(layout.rects):
                 if ri in consumed_rects:
                     continue
                 roof_y = r.y + r.height / 2.0
-                in_x = (left - gw * 0.3) <= r.x <= (right + gw * 2.5)
+                in_x = (left + gw * 0.5) <= r.x <= (right + gw * 2.5)
                 above = roof_y >= bottom + gh * 0.3
                 if in_x and above and (best is None or r.x < layout.rects[best].x):
                     best = ri
@@ -652,8 +655,14 @@ class StrokeRenderer:
                 gik = glyph_ink_bbox(gg.char, gg.fontsize)
                 if gik is None:
                     continue
-                # √の屋根範囲内にある中身のグリフのみ
+                # √の屋根範囲内にある中身のグリフのみ（x と y の両方で判定）。
+                # y を見ないと、√ が分数の分母にあるとき分子のグリフ（x範囲が重なる）
+                # まで中身扱いになり content_top が分子上端へ跳ね、屋根が下がらず
+                # 分数線と二重線になる。中身＝グリフ縦中心が屋根より下のもの。
                 if not (r.x <= gg.x <= roof_x_orig_end):
+                    continue
+                g_cy = gg.baseline_y + gik[1] + gik[3] / 2.0
+                if g_cy >= roof_y_orig:
                     continue
                 gl = gg.x + gik[0]
                 gr = gl + gik[2]

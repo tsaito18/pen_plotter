@@ -871,8 +871,9 @@ class TestBlockMathRowConsumption:
         placements = pages[0]
         x_chars = [p.y for p in placements if p.char == "x"]
         assert len(x_chars) == 1
-        # 2行ぶん確保 → 中央 = (line_positions[0] + line_positions[1]) / 2
-        expected_center = (line_positions[0] + line_positions[1]) / 2
+        # 2行ぶん確保 → 帯中央 = 先頭行の上端(line_positions[0]+spacing) と
+        # 末尾行の下端(line_positions[1]) の中点 = line_positions[0]
+        expected_center = (line_positions[0] + line_spacing + line_positions[1]) / 2
         # 数式のベースライン（'x' の y）が中央付近にあるか（半行ぶんの誤差を許容）
         assert abs(x_chars[0] - expected_center) < line_spacing * 0.5
 
