@@ -1050,6 +1050,9 @@ class Typesetter:
         # √屋根を突き抜ける)。
         if self.handwrite_math:
             body_src = promote_top_level_frac_to_dfrac(body_src)
+            # 隣接する分数（\frac{l}{d}\frac{v^2}{2g} 等）は間隔ゼロで並び
+            # 1つの分数に見えるため、間に thick space を挿入して分離する。
+            body_src = re.sub(r"\}\s*\\dfrac", r"}\\;\\dfrac", body_src)
 
         # \\ 改行でグループ分割。linebreak が無いときは 1 グループ＝従来挙動。
         groups = self._split_by_linebreak(body_elements)
