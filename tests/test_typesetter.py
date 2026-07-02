@@ -940,11 +940,15 @@ class TestBlockMathFractionRulingAlignment:
         head = next(p for p in pages[0] if p.math_source)
         assert head.math_fraction_bar_y is None
 
-    def test_sqrt_formula_not_ruling_aligned(self):
+    def test_sqrt_formula_ruling_aligned(self):
+        # √ の屋根 rect を除外した上で内側の分数線を検出し、罫線に揃える
+        # （屋根と分数線の二重線を避けつつ、分数線自体は他の式と同じく整列させる）。
         ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=True)
+        line_positions = ts._layout.line_positions()
         pages = ts.typeset(r"$$ T_{0} = 2\pi\sqrt{\frac{I}{Mgh}} $$")
         head = next(p for p in pages[0] if p.math_source)
-        assert head.math_fraction_bar_y is None
+        assert head.math_fraction_bar_y is not None
+        assert any(abs(head.math_fraction_bar_y - y) < 1e-6 for y in line_positions)
 
     def test_handwrite_false_no_ruling_alignment(self):
         ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=False)

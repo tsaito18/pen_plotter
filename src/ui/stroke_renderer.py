@@ -845,6 +845,10 @@ class StrokeRenderer:
             # ため素のまま。matplotlib skeleton 由来(収集の無い字)だけ手書き揺らぎを乗せる。
             if g.is_large or g.char in self._user_stroke_db:
                 result.extend(placed)
+            elif self._simple_punct_strokes(self._CHAR_SUBSTITUTIONS.get(g.char, g.char)) is not None:
+                # 幾何字形（- = : 等の短い直線）は強い歪みだと線全体が回転して
+                # 見えるため、本文記号と同じ弱い揺らぎに留める。
+                result.extend(self._apply_distortion(placed, waver_scale=self._WAVER_SYMBOL))
             else:
                 result.extend(self._apply_distortion(placed, waver_scale=self._WAVER_MATH_IMAGE))
 
@@ -893,6 +897,12 @@ class StrokeRenderer:
             if char == "\\":
                 t = np.linspace(0, 1, 8)
                 return [np.column_stack([0.4 * t, 1.0 - t]).astype(np.float64)]
+            # 本文と同じ幾何字形（- = : 等）。matplotlib skeleton だと 2 点線に
+            # 強い歪み(waver 2.5)が乗り「-」が回転して見えるため、本文と同じ
+            # 幾何経路に寄せる（歪みはループ側で弱める）。
+            punct = self._simple_punct_strokes(char)
+            if punct is not None:
+                return punct
             ref, _ = self._load_reference_strokes(char)
             if ref is not None:
                 return self._normalize_strokes_to_unit(ref)

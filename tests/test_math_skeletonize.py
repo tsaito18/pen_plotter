@@ -68,6 +68,20 @@ class TestDetectTopLevelFractionBar:
         [
             r"\frac{\Delta g}{g} \leq 2\frac{\Delta\pi}{\pi} + 2\frac{\Delta T}{T}",  # (4) 横並び
             r"\gamma = \frac{1}{200\,T}\ln\frac{430}{320}",  # (7) 横並び
+        ],
+    )
+    def test_side_by_side_fractions_share_common_bar(self, src):
+        # 横並びの複数分数（v²/2g + p/ρg + … 等）は全分数線が同一 axis 帯に
+        # 並ぶため、共通の帯として平均 cy に揃えられる（分子=上の行・分母=下の行で
+        # 自然に手書き展開できる）。
+        layout = extract_math_layout(src)
+        cy = detect_top_level_fraction_bar(layout)
+        assert cy is not None
+        assert 4.0 <= cy <= 9.0
+
+    @pytest.mark.parametrize(
+        "src",
+        [
             r"g = \left(\frac{2\pi}{T}\right)^{2} L",  # (3) 括弧内のみ
             r"g = 9.80 \pm 0.01",  # 分数なし
         ],

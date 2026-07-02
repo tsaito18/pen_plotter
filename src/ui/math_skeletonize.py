@@ -676,17 +676,49 @@ def detect_top_level_fraction_bar(layout: "MathLayout") -> float | None:
     """
     if not layout.rects:
         return None
-    # √・大括弧・∑・∫ など構造的な大型記号を含む式は罫線揃えしない（√内部分数
-    # T_0=2π√(I/Mgh) や 括弧内分数 (2π/T)^2 等）。is_large はフォント由来の判定で
-    # プライム記号 ' 等も該当するため、構造記号の char に限定する。
-    if any(g.is_large and g.char in _STRUCTURAL_LARGE_CHARS for g in layout.glyphs):
+    # 大括弧・∑・∫ など構造的な大型記号を含む式は罫線揃えしない（括弧内分数
+    # (2π/T)^2 等）。is_large はフォント由来の判定でプライム記号 ' 等も該当する
+    # ため、構造記号の char に限定する。√ は屋根 rect を除外した上で内側/外側の
+    # 分数線を罫線揃えできるため対象に含める。
+    if any(g.is_large and g.char in _STRUCTURAL_LARGE_CHARS and g.char != "√" for g in layout.glyphs):
         return None
-    widest = max(layout.rects, key=lambda r: r.width)
+    # √ の屋根 rect を候補から除外する（renderer と同じヒューリスティック:
+    # √ インク中央より右から始まり √ 下端より上にある最左の rect）。屋根は分数線
+    # と紛らわしい高さに来ることがあり、含めると axis 判定が狂う。
+    roof_ids: set[int] = set()
+    for g in layout.glyphs:
+        if g.char != "√":
+            continue
+        ink = glyph_ink_bbox(g.char, g.fontsize)
+        if ink is None:
+            continue
+        gx, gy, gw, gh = ink
+        left = g.x + gx
+        right = left + gw
+        bottom = g.baseline_y + gy
+        best_i = None
+        for ri, r in enumerate(layout.rects):
+            if ri in roof_ids:
+                continue
+            rcy = r.y + r.height / 2.0
+            in_x = (left + gw * 0.5) <= r.x <= (right + gw * 2.5)
+            above = rcy >= bottom + gh * 0.3
+            if in_x and above and (best_i is None or r.x < layout.rects[best_i].x):
+                best_i = ri
+        if best_i is not None:
+            roof_ids.add(best_i)
+    cands = [r for ri, r in enumerate(layout.rects) if ri not in roof_ids]
+    if not cands:
+        return None
+    widest = max(cands, key=lambda r: r.width)
     wcy = widest.y + widest.height / 2.0
-    near = [r for r in layout.rects if abs((r.y + r.height / 2.0) - wcy) <= _FRACTION_AXIS_TOL_PT]
-    if len(near) != 1:
+    near = [r for r in cands if abs((r.y + r.height / 2.0) - wcy) <= _FRACTION_AXIS_TOL_PT]
+    if not near:
         return None
-    return wcy
+    # 横並びの複数分数（v²/2g + p/ρg + … や l/d・v²/2g）は全分数線が同一 axis 帯に
+    # 並ぶため、共通の帯として平均 cy へ揃える（従来は「1本のみ」に限定していたが、
+    # 複数でも同じ罫線に乗せれば分子=上の行・分母=下の行で自然に手書き展開できる）。
+    return sum(r.y + r.height / 2.0 for r in near) / len(near)
 
 
 # 数式分割で「文の切れ目」として扱う演算子。
