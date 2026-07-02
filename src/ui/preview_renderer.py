@@ -36,6 +36,9 @@ class PreviewRenderer:
         page_number_strokes: list[Stroke] | None = None,
         finishes: list[str] | None = None,
     ) -> None:
+        import matplotlib
+
+        matplotlib.use("Agg")
         import matplotlib.patches as patches
         import matplotlib.pyplot as plt
 
@@ -121,3 +124,53 @@ class PreviewRenderer:
         plt.tight_layout()
         fig.savefig(str(save_path), dpi=300)
         plt.close(fig)
+
+
+# --- ProcessPoolExecutor 用ワーカー（モジュールレベル関数、pickle 可能） ---
+
+# ワーカープロセスごとの PreviewRenderer キャッシュ。プロセスは
+# ProcessPoolExecutor により使い回されるため、同一 config が続く限り
+# 毎回の再構築を避ける。dataclass は非 hashable なので dict キーではなく
+# 単純な == 比較で使い回し判定する。
+_worker_renderer_state: dict[str, object] = {"key": None, "renderer": None}
+
+
+def render_page_worker(
+    strokes: list[Stroke],
+    finishes: list[str],
+    ruled_lines: list[Stroke],
+    save_path: str | Path,
+    page_number: int | None,
+    page_number_strokes: list[Stroke] | None,
+    plotter_config: PlotterConfig,
+    page_config: PageConfig,
+    report_bg_path: Path | None,
+) -> None:
+    """1ページ分のプレビュー描画をワーカープロセスで行う。
+
+    ``ProcessPoolExecutor.submit`` の対象になるトップレベル関数（pickle 可能な
+    引数のみ受け取る）。matplotlib はスレッドセーフでないため描画をプロセス
+    並列にし、親プロセス（CUDA/モデル推論）とは別プロセスで実行する。
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+
+    key = (plotter_config, page_config, report_bg_path)
+    if _worker_renderer_state["key"] != key:
+        _worker_renderer_state["renderer"] = PreviewRenderer(
+            plotter_config=plotter_config,
+            page_config=page_config,
+            report_bg_path=report_bg_path,
+        )
+        _worker_renderer_state["key"] = key
+
+    renderer: PreviewRenderer = _worker_renderer_state["renderer"]  # type: ignore[assignment]
+    renderer.preview_with_ruled_lines(
+        strokes,
+        ruled_lines,
+        save_path,
+        page_number=page_number,
+        page_number_strokes=page_number_strokes,
+        finishes=finishes,
+    )

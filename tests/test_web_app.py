@@ -1361,6 +1361,38 @@ class TestMultiPagePreview:
         assert result[0] == tmp_path / "preview_p1.png"
         assert result[1] == tmp_path / "preview_p2.png"
 
+    def test_multipage_render_error_propagates(self, pipeline, tmp_path):
+        """描画ワーカー（別プロセス）で例外が起きた場合、generate_preview がそれを伝播する。
+
+        描画はProcessPoolExecutorの別プロセスで実行されるため、インスタンスメソッドの
+        monkeypatchは子プロセスに反映されない。存在しない保存先ディレクトリを指定して
+        実際にワーカー内のsavefigを失敗させ、例外伝播を検証する。
+        """
+        long_text = "\n".join(["あ" * 20] * 40)
+        save_path = tmp_path / "no_such_dir" / "preview.png"
+
+        with pytest.raises(Exception):  # noqa: B017 (savefig の例外型はOS依存)
+            pipeline.generate_preview(long_text, save_path=save_path)
+
+    def test_multipage_render_order_matches_page_content(self, pipeline, tmp_path):
+        """並列描画後も戻り値のパス順・命名がページ順と一致する（取り違えていないこと）。
+
+        各submitのstrokes/page_number/page_pathはループ内でその場で計算されて渡され、
+        イテレーション間で共有可変状態を持たないため、混線（取り違え）は構造的に
+        起こり得ない。ここではその結果として現れるべき出力（順序・命名・非空ファイル）
+        を確認する。
+        """
+        long_text = "\n".join(["あ" * 20] * 40)
+        save_path = tmp_path / "preview.png"
+
+        result = pipeline.generate_preview(long_text, save_path=save_path)
+
+        assert len(result) >= 2
+        for i, p in enumerate(result, start=1):
+            assert p == tmp_path / f"preview_p{i}.png"
+            assert p.exists()
+            assert p.stat().st_size > 0
+
     def test_empty_text_returns_single_page(self, pipeline, tmp_path):
         """空テキストは1ページ（空ページ）を返す。"""
         save_path = tmp_path / "empty.png"
@@ -1376,6 +1408,66 @@ class TestMultiPagePreview:
         result = pipeline.generate_preview("テスト", save_path=preview_path)
         assert preview_path.exists()
         assert result[0] == preview_path
+
+
+class TestRenderPageWorker:
+    """ProcessPoolExecutor に渡すモジュールレベル描画関数のテスト（プロセス境界を跨がず直接呼び出し）。"""
+
+    def test_render_page_worker_creates_file(self, tmp_path):
+        from src.gcode.config import PlotterConfig
+        from src.layout.page_layout import PageConfig
+        from src.ui.preview_renderer import render_page_worker
+
+        save_path = tmp_path / "worker_test.png"
+        render_page_worker(
+            strokes=[np.array([[0.0, 0.0], [10.0, 10.0]])],
+            finishes=["none"],
+            ruled_lines=[],
+            save_path=save_path,
+            page_number=3,
+            page_number_strokes=None,
+            plotter_config=PlotterConfig(),
+            page_config=PageConfig(),
+            report_bg_path=None,
+        )
+        assert save_path.exists()
+
+    def test_render_page_worker_reuses_cached_renderer_for_same_config(self, tmp_path):
+        """同一configが続く限りPreviewRendererを再構築しない（プロセス内キャッシュ）。"""
+        from src.gcode.config import PlotterConfig
+        from src.layout.page_layout import PageConfig
+        from src.ui import preview_renderer as preview_renderer_module
+
+        cfg = PlotterConfig()
+        pcfg = PageConfig()
+
+        preview_renderer_module.render_page_worker(
+            strokes=[],
+            finishes=[],
+            ruled_lines=[],
+            save_path=tmp_path / "w1.png",
+            page_number=1,
+            page_number_strokes=None,
+            plotter_config=cfg,
+            page_config=pcfg,
+            report_bg_path=None,
+        )
+        renderer_after_first = preview_renderer_module._worker_renderer_state["renderer"]
+
+        preview_renderer_module.render_page_worker(
+            strokes=[],
+            finishes=[],
+            ruled_lines=[],
+            save_path=tmp_path / "w2.png",
+            page_number=2,
+            page_number_strokes=None,
+            plotter_config=cfg,
+            page_config=pcfg,
+            report_bg_path=None,
+        )
+        renderer_after_second = preview_renderer_module._worker_renderer_state["renderer"]
+
+        assert renderer_after_first is renderer_after_second
 
 
 class TestGradioGallery:
@@ -1411,6 +1503,38 @@ class TestGradioGallery:
                     pytest.fail("gr.Image with label 'Preview' should be replaced by gr.Gallery")
 
 
+class _ImmediateExecutor:
+    """ProcessPoolExecutor の代替テストダブル。実プロセスを起こさず同期実行する。
+
+    generate_preview はページ描画を ProcessPoolExecutor.submit するため、
+    submit した関数への引数を素通しでキャプチャしたい既存テストは実プロセス境界を
+    跨げない（monkeypatch/lambda はサブプロセスに引き継がれない・pickle不可）。
+    submit を同一プロセスで即時実行するこのスタブに差し替えることで、
+    submitted 引数をテストプロセス内でそのまま検証できるようにする。
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def submit(self, fn, *args, **kwargs):
+        from concurrent.futures import Future
+
+        future: Future = Future()
+        try:
+            result = fn(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001 (Futureへ例外をそのまま転送)
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+        return future
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info) -> bool:
+        return False
+
+
 class TestPageNumber:
     """ページ番号の手書きストローク生成テスト。"""
 
@@ -1439,11 +1563,24 @@ class TestPageNumber:
             "_generate_page_number_strokes",
             lambda _page_number: page_number_strokes,
         )
-        monkeypatch.setattr(
-            pipeline,
-            "_preview_with_ruled_lines",
-            lambda _strokes, _ruled, _path, **kwargs: seen.update(kwargs),
-        )
+        # 描画は ProcessPoolExecutor 経由（別プロセス）のため、submit 引数を
+        # テストプロセス内で検証できるよう同期実行スタブに差し替える。
+        monkeypatch.setattr("src.ui.web_app.ProcessPoolExecutor", _ImmediateExecutor)
+
+        def _capture_render(
+            _strokes,
+            _finishes,
+            _ruled_lines,
+            _save_path,
+            _page_number,
+            page_number_strokes,
+            _plotter_config,
+            _page_config,
+            _report_bg_path,
+        ):
+            seen["page_number_strokes"] = page_number_strokes
+
+        monkeypatch.setattr("src.ui.preview_renderer.render_page_worker", _capture_render)
 
         pipeline.generate_preview("あ", tmp_path / "preview.png")
 
@@ -1460,11 +1597,22 @@ class TestPageNumber:
             "_generate_page_number_strokes",
             lambda _page_number: page_number_strokes,
         )
-        monkeypatch.setattr(
-            pipeline,
-            "_preview_with_ruled_lines",
-            lambda _strokes, _ruled, _path, **kwargs: seen.update(kwargs),
-        )
+        monkeypatch.setattr("src.ui.web_app.ProcessPoolExecutor", _ImmediateExecutor)
+
+        def _capture_render(
+            _strokes,
+            _finishes,
+            _ruled_lines,
+            _save_path,
+            _page_number,
+            page_number_strokes,
+            _plotter_config,
+            _page_config,
+            _report_bg_path,
+        ):
+            seen["page_number_strokes"] = page_number_strokes
+
+        monkeypatch.setattr("src.ui.preview_renderer.render_page_worker", _capture_render)
 
         pipeline.generate_preview("あ", tmp_path / "preview.png")
 

@@ -672,12 +672,6 @@ class StrokeRenderer:
                         else max(content_right, rr.x + rr.width)
                     )
                     content_top = max(content_top, rr.y + rr.height)
-            # 屋根左端は中身左端ぴったりに詰める（パディングなし、屋根下に空きを
-            # 残さない）。中身が無いとき（√単独）は √記号右端から控えめに伸ばす。
-            if content_left is not None:
-                roof_x_left = max(right + gw * 0.05, content_left)
-            else:
-                roof_x_left = right + gw * 0.20
             # 屋根右端は中身右端ぴったりに詰める（パディングなし。微小パディングでも
             # 揺らぎを合わせると分数の右に隙間として見えるため）。
             if content_right is not None:

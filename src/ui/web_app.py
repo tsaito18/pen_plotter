@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
+import os
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -514,9 +516,19 @@ class PlotterPipeline:
             for i in range(1, n_pages + 1)
         ]
 
-        # 描画（matplotlib, スレッドセーフでないため1ワーカー固定）は次ページの
-        # ストローク生成（ML/CUDA・numpy後処理）と重ねて実行する（プロデューサ・コンシューマ）。
-        with ThreadPoolExecutor(max_workers=1) as render_executor:
+        from src.ui.preview_renderer import render_page_worker
+
+        report_bg_path = self._REPORT_PAPER_BG or self._preview_renderer._report_bg_path
+        max_render_workers = min(4, os.cpu_count() or 1)
+
+        # 描画（matplotlib）はGILバウンドでスレッド並列の恩恵が薄いためプロセス並列にし、
+        # 親プロセス（ストローク生成: ML/CUDA・numpy後処理）とは別プロセスで実行する。
+        # start method は "fork" を明示指定（Python 3.14 のデフォルト "forkserver" は
+        # このサンドボックス環境で forkserver プロセスとの接続に失敗するため）。
+        mp_context = multiprocessing.get_context("fork")
+        with ProcessPoolExecutor(
+            max_workers=max_render_workers, mp_context=mp_context
+        ) as render_executor:
             render_futures: list[Future[None]] = []
 
             for i, page_placements in enumerate(pages, start=1):
@@ -544,13 +556,16 @@ class PlotterPipeline:
                 page_num_strokes = self._page_number_strokes_for(i)
                 render_futures.append(
                     render_executor.submit(
-                        self._preview_with_ruled_lines,
+                        render_page_worker,
                         optimized,
+                        optimized_finishes,
                         ruled_lines,
                         page_path,
-                        page_number=i,
-                        page_number_strokes=page_num_strokes,
-                        finishes=optimized_finishes,
+                        i,
+                        page_num_strokes,
+                        self._plotter_config,
+                        self._page_config,
+                        report_bg_path,
                     )
                 )
                 if progress_callback:
