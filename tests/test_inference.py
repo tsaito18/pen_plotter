@@ -533,6 +533,57 @@ class TestStrokeInferenceV3:
                 reference_strokes=reference,
             )
 
+    def test_v3_style_vector_cached_across_calls(self, v3_engine):
+        """同一 style_sample の呼び出しでは StyleEncoder を再実行しない。"""
+        style_sample = torch.randn(1, 20, 3)
+        reference = [np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64)]
+
+        calls = []
+        original_forward = v3_engine.style_encoder.forward
+
+        def counting_forward(*args, **kwargs):
+            calls.append(1)
+            return original_forward(*args, **kwargs)
+
+        v3_engine.style_encoder.forward = counting_forward
+        v3_engine.generate(style_sample=style_sample, reference_strokes=reference)
+        v3_engine.generate(style_sample=style_sample, reference_strokes=reference)
+        v3_engine.generate(style_sample=style_sample, reference_strokes=reference)
+
+        assert sum(calls) == 1
+
+    def test_v3_style_cache_invalidated_on_new_sample(self, v3_engine):
+        """異なる style_sample を渡すと StyleEncoder が再実行される。"""
+        reference = [np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64)]
+
+        calls = []
+        original_forward = v3_engine.style_encoder.forward
+
+        def counting_forward(*args, **kwargs):
+            calls.append(1)
+            return original_forward(*args, **kwargs)
+
+        v3_engine.style_encoder.forward = counting_forward
+        v3_engine.generate(style_sample=torch.randn(1, 20, 3), reference_strokes=reference)
+        v3_engine.generate(style_sample=torch.randn(1, 20, 3), reference_strokes=reference)
+
+        assert sum(calls) == 2
+
+    def test_v3_cached_style_same_output(self, v3_engine):
+        """キャッシュ利用時も出力が変わらない（決定論的部分の同一性）。"""
+        torch.manual_seed(0)
+        np.random.seed(0)
+        style_sample = torch.randn(1, 20, 3)
+        reference = [np.array([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=np.float64)]
+
+        np.random.seed(42)
+        first = v3_engine.generate(style_sample=style_sample, reference_strokes=reference)
+        np.random.seed(42)
+        second = v3_engine.generate(style_sample=style_sample, reference_strokes=reference)
+
+        for a, b in zip(first, second, strict=True):
+            np.testing.assert_allclose(a, b, rtol=1e-5)
+
 
 class TestStrokeInferenceV3Offset:
     """V3 offset deformer batch tests."""

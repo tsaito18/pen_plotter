@@ -474,11 +474,18 @@ class StrokeInference:
         if reference_strokes is None or len(reference_strokes) == 0:
             raise ValueError("V3 inference requires reference_strokes")
 
-        if self.norm_stats is not None:
-            style_sample = normalize_deltas(style_sample, self.norm_stats)
-
-        style_sample = _limit_style_sample(style_sample).to(self.device)
-        style = self.style_encoder(style_sample)
+        # style ベクトルは style_sample にのみ依存し文字ごとに不変。同一テンソル
+        # (id で同定) の再計算を避ける — 1ページ数百字の描画で LSTM が支配的なため。
+        cached = getattr(self, "_style_cache", None)
+        if cached is not None and cached[0] is style_sample:
+            style = cached[1]
+        else:
+            normalized = style_sample
+            if self.norm_stats is not None:
+                normalized = normalize_deltas(normalized, self.norm_stats)
+            normalized = _limit_style_sample(normalized).to(self.device)
+            style = self.style_encoder(normalized)
+            self._style_cache = (style_sample, style)
 
         batch_refs: list[NDArray[np.float32]] = []
         batch_indices: list[int] = []
