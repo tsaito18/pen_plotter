@@ -991,7 +991,7 @@ class TestSlashUserSampleFallback:
         xs = unit[0][:, 0]
         w = xs.max() - xs.min()
         h = ys.max() - ys.min()
-        assert h / w >= 2.0, f"slash unit should be tall (aspect>=2), got h/w={h/w:.2f}"
+        assert h / w >= 2.0, f"slash unit should be tall (aspect>=2), got h/w={h / w:.2f}"
 
 
 class TestRenderMathHandwrittenFractionBar:
@@ -1038,6 +1038,53 @@ class TestRenderMathHandwrittenFractionBar:
         inline_h = ih[:, 1].max() - ih[:, 1].min()
         # ブロック(cap MATH_BLOCK_CAP_RATIO) はインライン(0.70)より大きい
         assert block_h > inline_h * 1.1
+
+
+class TestMathMinusAndDot:
+    """数式中の − は数字の縦中央、. は本文と同じ小さい点で描かれる。"""
+
+    def test_math_minus_at_mid_height(self):
+        """p_1 - p_2 の − がベースラインでなく数字の縦中央付近に来る。
+
+        幾何 unit（y=0.5 の水平 2 点線、高さゼロ）を ink 矩形の下端合わせで
+        貼ると − が下線 _ の位置に落ちる（regression）。縦中央合わせを検証。
+        """
+        from pathlib import Path
+
+        r = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        bbox = (50.0, 90.0, 40.0, 12.0)
+        strokes = r.render_math_handwritten("1 - 2", bbox, align="center", font_size=4.5)
+        assert strokes
+        bar = None
+        for s in strokes:
+            xr = s[:, 0].max() - s[:, 0].min()
+            yr = s[:, 1].max() - s[:, 1].min()
+            if len(s) >= 2 and xr > 0.5 and yr < xr * 0.3:
+                bar = s
+                break
+        assert bar is not None, "− の水平ストロークが見つからない"
+        digits = np.concatenate([s for s in strokes if s is not bar], axis=0)
+        digit_cy = (digits[:, 1].max() + digits[:, 1].min()) / 2
+        digit_h = digits[:, 1].max() - digits[:, 1].min()
+        bar_cy = (bar[:, 1].max() + bar[:, 1].min()) / 2
+        # − の中心が数字の縦中心 ±30% 以内（ベースライン合わせだと大きく下へ外れる）
+        assert abs(bar_cy - digit_cy) < digit_h * 0.3
+
+    def test_math_decimal_dot_small(self):
+        """0.3 の小数点が読点「、」化せず、小さい点のまま描かれる。"""
+        from pathlib import Path
+
+        r = StrokeRenderer(kanjivg_dir=Path("data/strokes"))
+        bbox = (50.0, 90.0, 40.0, 12.0)
+        strokes = r.render_math_handwritten("0.3", bbox, align="center", font_size=4.5)
+        assert strokes
+        # 最小 bbox のストロークが小数点。幅・高さとも font_size の 15% 以下。
+        smallest = min(
+            strokes,
+            key=lambda s: (np.ptp(s[:, 0]) + 1e-9) * (np.ptp(s[:, 1]) + 1e-9),
+        )
+        assert np.ptp(smallest[:, 0]) < 4.5 * 0.15
+        assert np.ptp(smallest[:, 1]) < 4.5 * 0.15
 
 
 class TestSuperscriptMinusAndApproxEqual:

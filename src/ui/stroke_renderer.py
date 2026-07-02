@@ -695,7 +695,7 @@ class StrokeRenderer:
             check_w = g.fontsize * 0.45
             check_h = g.fontsize * 0.55
             ctop = bottom + check_h
-            peak_x = left + check_w           # ✓ 頂上（固定サイズ）
+            peak_x = left + check_w  # ✓ 頂上（固定サイズ）
             valley_x = left + check_w * 0.30
             # 中身を peak_x にぴったり揃えるためのシフト量（content_left → peak_x）。
             if content_left is not None and content_left > peak_x:
@@ -712,12 +712,14 @@ class StrokeRenderer:
                     if rr.x >= r.x and rr.x + rr.width <= roof_x_orig_end:
                         sqrt_rect_shifts[rj] = shift
                 # 屋根右端もシフト分だけ詰める
-                roof_x_right = (content_right + shift) if content_right is not None else (roof_x_right + shift)
+                roof_x_right = (
+                    (content_right + shift) if content_right is not None else (roof_x_right + shift)
+                )
             pts_pt = [
-                (left, ctop),                          # 入り（✔︎ 左上、固定）
-                (valley_x, bottom),                     # 谷（下端、固定）
-                (peak_x, roof_y),                       # ✓ 頂上 = 屋根左端
-                (roof_x_right, roof_y),                 # 屋根右端
+                (left, ctop),  # 入り（✔︎ 左上、固定）
+                (valley_x, bottom),  # 谷（下端、固定）
+                (peak_x, roof_y),  # ✓ 頂上 = 屋根左端
+                (roof_x_right, roof_y),  # 屋根右端
             ]
             poly = np.array([to_mm(px, py) for px, py in pts_pt], dtype=np.float64)
             # √ ポリラインも本文・数式グリフと同じ waver で揺らがせて手書き感を出す
@@ -821,6 +823,26 @@ class StrokeRenderer:
                     cy_pt = g.baseline_y + dgy + dgh / 2.0
                     result.append(np.array([to_mm(cx_pt, cy_pt)], dtype=np.float64))
                 continue
+            # 小数点 . / カンマ , は unit をインク矩形へ引き伸ばすと読点「、」の
+            # ように大きくなるため、本文の点と同じ固定サイズの短いダッシュを
+            # インク中心に置く（大きさは g.fontsize 比で本文 _simple_punct と同等）。
+            if self._CHAR_SUBSTITUTIONS.get(g.char, g.char) in (".", ","):
+                dink = glyph_ink_bbox(g.char, g.fontsize)
+                if dink is not None:
+                    dgx, dgy, dgw, dgh = dink
+                    cx_pt = g.x + dgx + dgw / 2.0 + shift_x
+                    cy_pt = g.baseline_y + dgy + dgh / 2.0
+                    dl = g.fontsize * 0.03
+                    result.append(
+                        np.array(
+                            [
+                                to_mm(cx_pt - dl, cy_pt + dl * 0.8),
+                                to_mm(cx_pt + dl, cy_pt - dl * 0.8),
+                            ],
+                            dtype=np.float64,
+                        )
+                    )
+                continue
             unit = self._math_glyph_unit_strokes(g.char, g.is_large)
             if not unit:
                 continue  # 手書きにできない字は □ を出さずスキップ
@@ -845,7 +867,9 @@ class StrokeRenderer:
             # ため素のまま。matplotlib skeleton 由来(収集の無い字)だけ手書き揺らぎを乗せる。
             if g.is_large or g.char in self._user_stroke_db:
                 result.extend(placed)
-            elif self._simple_punct_strokes(self._CHAR_SUBSTITUTIONS.get(g.char, g.char)) is not None:
+            elif (
+                self._simple_punct_strokes(self._CHAR_SUBSTITUTIONS.get(g.char, g.char)) is not None
+            ):
                 # 幾何字形（- = : 等の短い直線）は強い歪みだと線全体が回転して
                 # 見えるため、本文記号と同じ弱い揺らぎに留める。
                 result.extend(self._apply_distortion(placed, waver_scale=self._WAVER_SYMBOL))
@@ -946,9 +970,12 @@ class StrokeRenderer:
         uh = max(umax[1] - umin[1], 1e-6)
         s = min(w_pt / uw, h_pt / uh)
         gw = uw * s
-        # x: bbox 中央へ。y: bbox 下端(y_lo)から（インク矩形下端＝グリフ下端を合わせる）。
+        gh_scaled = uh * s
+        # x: bbox 中央へ。y も bbox 縦中央へ（高さ律速の通常グリフは uh*s == h_pt で
+        # 下端合わせと同値。幅律速の横バー(- = 等、uh≈0)を下端合わせにすると
+        # インク矩形の下端＝下線の位置に落ちるため、縦中央合わせが正しい）。
         x_off = x_lo_pt + (w_pt - gw) / 2.0 - umin[0] * s
-        y_off = y_lo_pt - umin[1] * s
+        y_off = y_lo_pt + (h_pt - gh_scaled) / 2.0 - umin[1] * s
         out: list[Stroke] = []
         for st in unit_strokes:
             xs = x_off + st[:, 0] * s
