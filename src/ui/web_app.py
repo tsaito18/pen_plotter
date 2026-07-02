@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -95,6 +96,9 @@ class PlotterPipeline:
             # レイアウト揺らぎを得る（A/B目視比較の定点観測用）
             augmenter=HandwritingAugmenter(_scaled_augment_config(messiness), seed=seed),
             page_break_before_h1=page_break_before_h1,
+            # 添字・分数・√ を含む数式もユーザー筆跡グリフで描く（印刷体の混在防止）。
+            # 字形が無い記号は renderer 側で matplotlib skeleton にフォールバックする。
+            handwrite_math=True,
         )
         self._generator = GCodeGenerator(self._plotter_config)
 
@@ -505,43 +509,58 @@ class PlotterPipeline:
         stem = save_path.stem
         suffix = save_path.suffix
         parent = save_path.parent
-        result: list[Path] = []
+        result: list[Path] = [
+            save_path if n_pages == 1 else parent / f"{stem}_p{i}{suffix}"
+            for i in range(1, n_pages + 1)
+        ]
 
-        for i, page_placements in enumerate(pages, start=1):
-            page_base = (i - 1) / n_pages
-            page_span = 1.0 / n_pages
+        # 描画（matplotlib, スレッドセーフでないため1ワーカー固定）は次ページの
+        # ストローク生成（ML/CUDA・numpy後処理）と重ねて実行する（プロデューサ・コンシューマ）。
+        with ThreadPoolExecutor(max_workers=1) as render_executor:
+            render_futures: list[Future[None]] = []
 
-            def _page_stroke_progress(
-                frac: float, desc: str, _base=page_base, _span=page_span
-            ) -> None:
+            for i, page_placements in enumerate(pages, start=1):
+                page_base = (i - 1) / n_pages
+                page_span = 1.0 / n_pages
+
+                def _page_stroke_progress(
+                    frac: float, desc: str, _base=page_base, _span=page_span
+                ) -> None:
+                    if progress_callback:
+                        progress_callback(_base + frac * _span * 0.8, desc)
+
+                page_path = result[i - 1]
+                strokes, finishes = self.placements_to_strokes_with_finishes(
+                    page_placements, progress_callback=_page_stroke_progress
+                )
                 if progress_callback:
-                    progress_callback(_base + frac * _span * 0.8, desc)
+                    progress_callback(
+                        page_base + page_span * 0.85,
+                        f"ストローク最適化中 ({i}/{n_pages})...",
+                    )
+                optimized, optimized_finishes = optimize_stroke_order_with_finishes(
+                    strokes, finishes
+                )
+                page_num_strokes = self._page_number_strokes_for(i)
+                render_futures.append(
+                    render_executor.submit(
+                        self._preview_with_ruled_lines,
+                        optimized,
+                        ruled_lines,
+                        page_path,
+                        page_number=i,
+                        page_number_strokes=page_num_strokes,
+                        finishes=optimized_finishes,
+                    )
+                )
+                if progress_callback:
+                    progress_callback(
+                        page_base + page_span,
+                        f"プレビュー描画中 ({i}/{n_pages})...",
+                    )
 
-            page_path = save_path if n_pages == 1 else parent / f"{stem}_p{i}{suffix}"
-            strokes, finishes = self.placements_to_strokes_with_finishes(
-                page_placements, progress_callback=_page_stroke_progress
-            )
-            if progress_callback:
-                progress_callback(
-                    page_base + page_span * 0.85,
-                    f"ストローク最適化中 ({i}/{n_pages})...",
-                )
-            optimized, optimized_finishes = optimize_stroke_order_with_finishes(strokes, finishes)
-            if progress_callback:
-                progress_callback(
-                    page_base + page_span * 0.9,
-                    f"プレビュー描画中 ({i}/{n_pages})...",
-                )
-            page_num_strokes = self._page_number_strokes_for(i)
-            self._preview_with_ruled_lines(
-                optimized,
-                ruled_lines,
-                page_path,
-                page_number=i,
-                page_number_strokes=page_num_strokes,
-                finishes=optimized_finishes,
-            )
-            result.append(page_path)
+            for future in render_futures:
+                future.result()
 
         if progress_callback:
             progress_callback(1.0, "完了")
@@ -698,5 +717,6 @@ def build_pipeline(
             page_config,
             font_size=settings.font_size,
             augmenter=pipeline._typesetter.augmenter,
+            handwrite_math=True,
         )
     return pipeline
