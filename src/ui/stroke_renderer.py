@@ -1180,6 +1180,14 @@ class StrokeRenderer:
             return [
                 np.array([[0.05, 0.06], [0.95, 0.06]], dtype=np.float64),
             ]
+        elif char == "≒":
+            # 「=」の2本線に、左上・右下に短い点(教科書字形の「ほぼ等しい」)を添える。
+            return [
+                np.array([[0.10, 0.58], [0.90, 0.58]], dtype=np.float64),
+                np.array([[0.10, 0.36], [0.90, 0.36]], dtype=np.float64),
+                np.array([[0.13, 0.78], [0.20, 0.74]], dtype=np.float64),
+                np.array([[0.80, 0.20], [0.87, 0.16]], dtype=np.float64),
+            ]
         return None
 
     _SUPERSCRIPT_BASE: dict[str, str] = {
@@ -1193,6 +1201,7 @@ class StrokeRenderer:
         "⁷": "7",
         "⁸": "8",
         "⁹": "9",
+        "⁻": "-",  # 10⁻⁷ 等の上付きマイナス
     }
 
     def _superscript_digit_strokes(self, char: str) -> list[Stroke] | None:
@@ -1213,7 +1222,8 @@ class StrokeRenderer:
         ref, _ = self._load_reference_strokes(base)
         if ref is not None:
             return self._normalize_strokes_to_unit(ref)
-        return None
+        # user db/KanjiVG に無い base（"-" 等）は幾何字形にフォールバック。
+        return self._simple_punct_strokes(base)
 
     @staticmethod
     def _raise_superscript(positioned: list[Stroke], font_size: float) -> list[Stroke]:

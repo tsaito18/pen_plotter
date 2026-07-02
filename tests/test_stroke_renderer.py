@@ -1038,3 +1038,38 @@ class TestRenderMathHandwrittenFractionBar:
         inline_h = ih[:, 1].max() - ih[:, 1].min()
         # ブロック(cap MATH_BLOCK_CAP_RATIO) はインライン(0.70)より大きい
         assert block_h > inline_h * 1.1
+
+
+class TestSuperscriptMinusAndApproxEqual:
+    """⁻(上付きマイナス) と ≒(ほぼ等しい) は幾何フォールバックで描画される（0ストローク回避）。"""
+
+    def test_superscript_minus_renders_strokes(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="⁻", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) > 0
+        assert len(strokes) == len(finishes)
+        assert "⁻" not in renderer._last_coverage.missing_glyphs
+
+    def test_superscript_minus_is_raised_above_baseline_center(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="⁻", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes = renderer.generate_char_strokes(placement)
+
+        assert len(strokes) > 0
+        all_pts = np.concatenate(strokes, axis=0)
+        # 上付き＝行の上半分（font_size=8 の中央4.0より上）に描かれる
+        assert all_pts[:, 1].min() > placement.font_size * 0.5
+
+    def test_approx_equal_renders_four_strokes(self):
+        renderer = StrokeRenderer()
+        placement = CharPlacement(char="≒", x=0.0, y=0.0, font_size=8.0, page=0)
+
+        strokes, finishes = renderer.generate_char_strokes_with_finishes(placement)
+
+        assert len(strokes) == 4
+        assert len(strokes) == len(finishes)
+        assert "≒" not in renderer._last_coverage.missing_glyphs
