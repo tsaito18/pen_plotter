@@ -24,7 +24,6 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_KANJIVG = _REPO_ROOT / "data" / "strokes"
 _DEFAULT_USER_STROKES = _REPO_ROOT / "data_examples" / "user_strokes" / "yamataku_v1"
 _DEFAULT_CHECKPOINT = _REPO_ROOT / "data_examples" / "models_yamataku" / "finetuned.pt"
-_SYNTAX_HELP = _REPO_ROOT / "docs" / "書式リファレンス.md"
 
 
 def _env_path(key: str, default: Path) -> Path | None:
@@ -125,12 +124,49 @@ def generate_gcode(
         return [{"page": i, "gcode": p.read_text(encoding="utf-8")} for i, p in selected]
 
 
+_MCP_SYNTAX_HELP = """\
+# レポート MD 書式（手書きレンダ用）
+
+## 見出し
+`# 大` `## 中` `### 小`（3段階、階層でインデントが深くなる）
+
+## 段落
+空行で区切る。自動折り返し（禁則処理あり）。`\\noindent 本文` で字下げなし。
+
+## 数式
+- インライン: `$V = IR$`（文中）
+- ブロック: `$$E = mc^2 \\tag{1}$$`（独立行・中央。\\tag で式番号）
+- 分数: `\\frac{a}{b}`。**ブロック内の入れ子分数は `\\dfrac`**（縮小防止）
+- 平方根: `\\sqrt{2gh}`（入れ子OK）
+- 上付き/下付き: `x^2` `p_1` `x^{10}`（複数文字はブレース）
+- ギリシャ: `\\alpha \\beta \\Delta \\sigma \\rho \\nu \\lambda \\pi \\mu` または Unicode 直書き（Δ σ ν）
+- 演算子: `\\cos \\sin \\log \\sum \\int \\cdot`
+- 数式内の `.` は小数点のまま。本文の `.` は句点 `。` に自動変換
+
+## 表
+```
+| 列1 | 列2 |
+|---|---|
+| a | b |
+: 表1 タイトル
+```
+- 区切り行 `|---|---|` 必須
+- 表直後の `: タイトル` 行がキャプション（省略可）
+
+## 使えない記法
+画像 `![]()`、リンク、箇条書き `- `、太字/斜体、コードブロックは非対応（そのまま文字として描かれるか無視）。
+
+## settings（render_preview / generate_gcode の引数）
+既定＝レポート提出向け。変える場合の目安:
+- きれいめ: `{"messiness": 0.3, "temperature": 0.15, "instance_variation": 0.05}`
+- 汚し: `{"messiness": 0.8, "temperature": 0.35, "instance_variation": 0.3}`
+"""
+
+
 @mcp.tool()
 def get_syntax_help() -> str:
-    """MD 書式リファレンス（見出し・数式・表・キャプション・記号・スライダー）を返す。"""
-    if not _SYNTAX_HELP.exists():
-        return "書式リファレンスが見つかりません: " + str(_SYNTAX_HELP)
-    return _SYNTAX_HELP.read_text(encoding="utf-8")
+    """レポート MD の書き方（見出し・数式・表・settings）を返す。md 作成前に必ず読む。"""
+    return _MCP_SYNTAX_HELP
 
 
 def _select_pages(paths: list[Path], spec: str | None) -> list[tuple[int, Path]]:
