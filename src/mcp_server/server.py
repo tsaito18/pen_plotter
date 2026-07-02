@@ -22,7 +22,7 @@ from src.ui.web_app import build_pipeline
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_KANJIVG = _REPO_ROOT / "data" / "strokes"
-_DEFAULT_USER_STROKES = _REPO_ROOT / "data" / "user_strokes"
+_DEFAULT_USER_STROKES = _REPO_ROOT / "data_examples" / "user_strokes" / "yamataku_v1"
 _DEFAULT_CHECKPOINT = _REPO_ROOT / "data_examples" / "models_yamataku" / "finetuned.pt"
 _SYNTAX_HELP = _REPO_ROOT / "docs" / "書式リファレンス.md"
 
