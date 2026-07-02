@@ -473,11 +473,21 @@ class Typesetter:
 
         ti = 0
         while ti < len(paragraphs):
-            # 上キャプション: 「: タイトル」行の直後が表
+            # 上キャプション: 「: タイトル」行の後（空行を挟んでも）が表
             cap_above = _caption_text(paragraphs[ti])
-            if cap_above is not None and detect_pipe_table(paragraphs, ti + 1) is not None:
-                rows, consumed = detect_pipe_table(paragraphs, ti + 1)
-                ti += 1 + consumed
+            if cap_above is not None:
+                cap_lookahead = ti + 1
+                while (
+                    cap_lookahead < len(paragraphs)
+                    and paragraphs[cap_lookahead].strip() == ""
+                ):
+                    cap_lookahead += 1
+                upper_tbl = detect_pipe_table(paragraphs, cap_lookahead)
+            else:
+                upper_tbl = None
+            if cap_above is not None and upper_tbl is not None:
+                rows, consumed = upper_tbl
+                ti = cap_lookahead + consumed
                 stashed_tables.append((rows, cap_above, True))
                 collapsed.append(
                     _TABLE_PLACEHOLDER_PREFIX
@@ -491,11 +501,16 @@ class Typesetter:
                 rows, consumed = tbl
                 ti += consumed
                 caption = ""
-                if ti < len(paragraphs):
-                    cap_below = _caption_text(paragraphs[ti])
+                # 表の後の空行を skip して下キャプション "（: タイトル）" を探す。
+                # paragraphs は 1 行ごとに分割されているため、空行が混在する。
+                lookahead = ti
+                while lookahead < len(paragraphs) and paragraphs[lookahead].strip() == "":
+                    lookahead += 1
+                if lookahead < len(paragraphs):
+                    cap_below = _caption_text(paragraphs[lookahead])
                     if cap_below is not None:
                         caption = cap_below
-                        ti += 1  # 下キャプション行も消費
+                        ti = lookahead + 1  # 空行＋下キャプション行をまとめて消費
                 stashed_tables.append((rows, caption, False))
                 collapsed.append(
                     _TABLE_PLACEHOLDER_PREFIX
@@ -857,13 +872,34 @@ class Typesetter:
         if n_rows == 0:
             return 1
         n_cols = max(len(r) for r in rows)
-        cap_rows = 1 if caption else 0
+        # キャプションが本文幅を超える場合は文字単位で折り返す（長文タイトルが
+        # 罫線をはみ出して読めなくなるのを防ぐ）。
+        cap_lines: list[str] = []
+        if caption:
+            cur = ""
+            cur_w = 0.0
+            for ch in caption:
+                ch_w = self._body_char_advance(ch)
+                if cur and cur_w + ch_w > area.width:
+                    cap_lines.append(cur)
+                    cur = ch
+                    cur_w = ch_w
+                else:
+                    cur += ch
+                    cur_w += ch_w
+            if cur:
+                cap_lines.append(cur)
+        cap_rows = len(cap_lines)
+        # 表の上下に1行ずつ空きを入れて窮屈感を解消（前テキスト/前表との詰まり、
+        # 次キャプション/次表との詰まりを防ぐ）。page 先頭は上余白なし。
+        margin_top = 0 if line_idx == 0 else 1
+        margin_bottom = 1
         remaining = len(line_positions) - line_idx
-        if remaining < n_rows + cap_rows:
+        if remaining < margin_top + n_rows + cap_rows + margin_bottom:
             return -1
 
-        # キャプションが上なら表は1行下から始まる
-        tbl_idx = line_idx + (1 if (caption and caption_above) else 0)
+        # キャプションが上なら表は cap_rows 行下から始まる
+        tbl_idx = line_idx + margin_top + (cap_rows if caption_above else 0)
 
         fs = self.font_size
         pad = fs * 0.3
@@ -948,27 +984,29 @@ class Typesetter:
                                 )
                             cx += self._body_char_advance(ch)
 
-        # キャプション: 上(line_idx)または下(表の次行)に表幅中央で配置
-        if caption:
-            cap_idx = line_idx if caption_above else tbl_idx + n_rows
-            cap_baseline = line_positions[cap_idx]
-            cap_w = sum(self._body_char_advance(ch) for ch in caption)
+        # キャプション: 上(line_idx + margin_top)または下(表の次行)に表幅中央で配置。
+        # 折返した複数行は順に下へ並べる。
+        if cap_lines:
+            cap_start_idx = (line_idx + margin_top) if caption_above else tbl_idx + n_rows
             table_center = (xs[0] + xs[-1]) / 2
-            cx = table_center - cap_w / 2
-            for ch in caption:
-                if ch != " ":
-                    output.append(
-                        CharPlacement(
-                            char=ch,
-                            x=cx,
-                            y=cap_baseline,
-                            font_size=fs * effective_char_scale(ch),
-                            page=page_idx,
+            for line_offset, line_text in enumerate(cap_lines):
+                cap_baseline = line_positions[cap_start_idx + line_offset]
+                line_w = sum(self._body_char_advance(ch) for ch in line_text)
+                cx = table_center - line_w / 2
+                for ch in line_text:
+                    if ch != " ":
+                        output.append(
+                            CharPlacement(
+                                char=ch,
+                                x=cx,
+                                y=cap_baseline,
+                                font_size=fs * effective_char_scale(ch),
+                                page=page_idx,
+                            )
                         )
-                    )
-                cx += self._body_char_advance(ch)
+                    cx += self._body_char_advance(ch)
 
-        return n_rows + cap_rows
+        return margin_top + n_rows + cap_rows + margin_bottom
 
     def _place_block_math(
         self,
@@ -1121,8 +1159,11 @@ class Typesetter:
                     required_rows += 1
             else:
                 # 分数なし/横並び等: 罫線揃えはせず、拡大サイズの実高から中央配置で確保。
+                # ceil ではなく round を使い「式が前ページに収まりそうなら 1 ページに収める」
+                # （1ページに式しか乗らない孤立配置を避ける。実高が罫線高の半分以下なら 1
+                # 行少なくしても式は中央に収まる）。
                 actual_h = (block_layout.height + block_layout.depth) * s_block
-                required_rows = max(2, math.ceil(actual_h / line_spacing))
+                required_rows = max(2, round(actual_h / line_spacing))
                 remaining = len(line_positions) - line_idx
                 if remaining < required_rows:
                     return -1
