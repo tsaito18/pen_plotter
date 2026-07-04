@@ -15,6 +15,7 @@ from src.layout.math_layout import (
     MathPlacement,
     _CHAR_WIDTH_RATIO,
 )
+from src.layout.diagram_layout import DiagramNode, DiagramSpec, detect_blockdiagram
 from src.layout.page_layout import PageConfig, PageLayout
 from src.layout.table_layout import detect_pipe_table
 
@@ -36,6 +37,25 @@ _KANJI_ADVANCE_SCALE = 1.08
 # 本文字間トラッキング(font_size比)。手書きは字が詰まって見えるため、字種に依らず
 # 本文の字送りへ一律の隙間を加える(乗算でなく加算で全字種に均一な間隔を与える)。
 _LETTER_SPACING_SCALE = 0.05
+
+
+def _arrow_head(
+    x_tip: float, y_tip: float, angle: float, size: float = 1.0
+) -> list[tuple[float, float, float, float]]:
+    """矢じりの2本の線分を返す（ブロック図の接続線の終端用）。
+
+    ``angle`` は矢が指す向き(rad, 0=+x方向)。両線分とも先端 ``(x_tip, y_tip)`` を
+    端点に持ち、そこから ``angle+pi`` 方向へ左右 ``±25°`` 開いた向きに ``size`` だけ
+    伸びる（V字が先端を指す形）。
+    """
+    spread = math.radians(25)
+    segments: list[tuple[float, float, float, float]] = []
+    for sign in (-1, 1):
+        back_angle = angle + math.pi + sign * spread
+        x2 = x_tip + size * math.cos(back_angle)
+        y2 = y_tip + size * math.sin(back_angle)
+        segments.append((x_tip, y_tip, x2, y2))
+    return segments
 
 
 def _is_kanji(ch: str) -> bool:
@@ -61,6 +81,9 @@ _INLINE_MATH_PLACEHOLDER_BASE = 0xE000
 # パイプ表を段落処理前に1段落へ畳むためのプレースホルダ（NULL文字で衝突回避）
 _TABLE_PLACEHOLDER_PREFIX = "\x00TBL\x00"
 _TABLE_PLACEHOLDER_SUFFIX = "\x00TBL\x00"
+# ブロック図（```blockdiagram ... ```）を段落処理前に1段落へ畳むためのプレースホルダ
+_DIAGRAM_PLACEHOLDER_PREFIX = "\x00DIA\x00"
+_DIAGRAM_PLACEHOLDER_SUFFIX = "\x00DIA\x00"
 
 # 数式内の . , は変換しない（小数点・引数区切りは LaTeX でそのまま使う）
 _MATH_OR_BLOCK_RE = re.compile(r"\$\$.*?\$\$|\$[^$]+?\$", re.DOTALL)
@@ -152,6 +175,8 @@ class ParsedDocument:
     table_captions: dict[int, str] = field(default_factory=dict)
     # global_line_idx → キャプションを表の上に置くか（True=上, False=下）。
     table_caption_above: dict[int, bool] = field(default_factory=dict)
+    # global_line_idx → パース済みブロック図（```blockdiagram ... ``` ブロックの起点行）。
+    diagram_blocks: dict[int, DiagramSpec] = field(default_factory=dict)
     # 改ページ指示（"-----" 行）の global_line_idx 集合。以降を次ページへ送る。
     page_break_lines: set[int] = field(default_factory=set)
 
@@ -391,6 +416,24 @@ class Typesetter:
                 line_idx += consumed
                 continue
 
+            if global_line_idx in doc.diagram_blocks:
+                spec = doc.diagram_blocks[global_line_idx]
+                consumed = self._place_diagram(
+                    spec, line_idx, line_positions, area, page_idx, current_page
+                )
+                if consumed == -1:
+                    pages.append(current_page)
+                    current_page = []
+                    page_idx += 1
+                    line_idx = 0
+                    consumed = self._place_diagram(
+                        spec, 0, line_positions, area, page_idx, current_page
+                    )
+                    if consumed == -1:
+                        consumed = 1  # 1ページに収まらない巨大図は無限ループ回避
+                line_idx += consumed
+                continue
+
             is_heading = global_line_idx in doc.heading_lines
             h_level = doc.heading_lines.get(global_line_idx, 0)
             body_level = doc.line_body_level.get(global_line_idx, 0)
@@ -465,6 +508,7 @@ class Typesetter:
         # パイプ表を検出して 1 プレースホルダ段落へ畳む（複数行表を後段で一括配置）。
         # キャプション "「: タイトル」行" は表の直前なら上、直後なら下に中央寄せする。
         stashed_tables: list[tuple[list[list[str]], str, bool]] = []
+        stashed_diagrams: list[DiagramSpec] = []
         collapsed: list[str] = []
 
         def _caption_text(s: str) -> str | None:
@@ -477,10 +521,7 @@ class Typesetter:
             cap_above = _caption_text(paragraphs[ti])
             if cap_above is not None:
                 cap_lookahead = ti + 1
-                while (
-                    cap_lookahead < len(paragraphs)
-                    and paragraphs[cap_lookahead].strip() == ""
-                ):
+                while cap_lookahead < len(paragraphs) and paragraphs[cap_lookahead].strip() == "":
                     cap_lookahead += 1
                 upper_tbl = detect_pipe_table(paragraphs, cap_lookahead)
             else:
@@ -517,12 +558,29 @@ class Typesetter:
                     + str(len(stashed_tables) - 1)
                     + _TABLE_PLACEHOLDER_SUFFIX
                 )
+                continue
+
+            dia = detect_blockdiagram(paragraphs, ti)
+            if dia is not None:
+                spec, consumed = dia
+                ti += consumed
+                stashed_diagrams.append(spec)
+                collapsed.append(
+                    _DIAGRAM_PLACEHOLDER_PREFIX
+                    + str(len(stashed_diagrams) - 1)
+                    + _DIAGRAM_PLACEHOLDER_SUFFIX
+                )
             else:
                 collapsed.append(paragraphs[ti])
                 ti += 1
         paragraphs = collapsed
         table_placeholder_re = re.compile(
             re.escape(_TABLE_PLACEHOLDER_PREFIX) + r"(\d+)" + re.escape(_TABLE_PLACEHOLDER_SUFFIX)
+        )
+        diagram_placeholder_re = re.compile(
+            re.escape(_DIAGRAM_PLACEHOLDER_PREFIX)
+            + r"(\d+)"
+            + re.escape(_DIAGRAM_PLACEHOLDER_SUFFIX)
         )
 
         lines: list[str] = []
@@ -532,6 +590,7 @@ class Typesetter:
         table_blocks: dict[int, list[list[str]]] = {}
         table_captions: dict[int, str] = {}
         table_caption_above: dict[int, bool] = {}
+        diagram_blocks: dict[int, DiagramSpec] = {}
         page_break_lines: set[int] = set()
         heading_lines: dict[int, int] = {}
         line_body_level: dict[int, int] = {}
@@ -553,6 +612,16 @@ class Typesetter:
                 if caption:
                     table_captions[len(lines)] = caption
                     table_caption_above[len(lines)] = cap_above
+                line_body_level[len(lines)] = current_body_level
+                lines.append("")
+                continue
+
+            # ブロック図プレースホルダ: 図ブロック起点行として登録
+            diagram_match = diagram_placeholder_re.fullmatch(para.strip())
+            if diagram_match is not None:
+                spec = stashed_diagrams[int(diagram_match.group(1))]
+                para_start_indices.add(len(lines))
+                diagram_blocks[len(lines)] = spec
                 line_body_level[len(lines)] = current_body_level
                 lines.append("")
                 continue
@@ -662,6 +731,7 @@ class Typesetter:
             table_blocks=table_blocks,
             table_captions=table_captions,
             table_caption_above=table_caption_above,
+            diagram_blocks=diagram_blocks,
             page_break_lines=page_break_lines,
         )
 
@@ -1008,6 +1078,237 @@ class Typesetter:
 
         return margin_top + n_rows + cap_rows + margin_bottom
 
+    def _diagram_node_width(self, node: DiagramNode) -> float:
+        """ノード1つの未スケール幅(mm)。箱=ラベル幅+パディング、円=固定径、信号=ラベル幅。"""
+        row_h = self._config.line_spacing
+        if node.kind == "signal":
+            w = sum(self._body_char_advance(ch) for ch in node.label)
+            return max(self.font_size * 0.9, w)
+        if node.kind == "circle":
+            return row_h * 0.65
+        pad = self.font_size * 0.3
+        label_w = sum(self._body_char_advance(ch) for ch in node.label)
+        return max(row_h * 0.75, label_w + 2 * pad)
+
+    def _diagram_draw_label(
+        self,
+        label: str,
+        center_x: float,
+        baseline_y: float,
+        font_size: float,
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> None:
+        """ラベルをそのセルの中心 ``center_x`` を基準に左寄せ配置で描く（等幅近似の中央寄せ）。"""
+        with self._with_font_size(font_size):
+            total_w = sum(self._body_char_advance(ch) for ch in label)
+            cx = center_x - total_w / 2
+            for ch in label:
+                if ch != " ":
+                    output.append(
+                        CharPlacement(
+                            char=ch,
+                            x=cx,
+                            y=baseline_y,
+                            font_size=self.font_size * effective_char_scale(ch),
+                            page=page_idx,
+                        )
+                    )
+                cx += self._body_char_advance(ch)
+
+    def _place_diagram(
+        self,
+        spec: DiagramSpec,
+        line_idx: int,
+        line_positions: list[float],
+        area: object,
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> int:
+        """ブロック図（箱・円・信号ラベル＋矢印付き接続線）を配置する。
+
+        メインチェーンは1行帯に左→右で配置。帰還経路があれば下側に2行分の帯を
+        確保し、出力から下へ→左へ（帰還箱を通す）→Σ（自動挿入）の下入力へ戻す。
+        図が本文幅を超える場合は全体を一律縮小して収める（表と同じ方針）。残り行が
+        足りなければ -1（呼び出し側で次ページ送り）。
+
+        Returns:
+            消費した行数。残り行不足なら -1。
+        """
+        nodes = list(spec.nodes)
+        if not nodes:
+            return 1
+
+        has_feedback = spec.is_closed_loop
+        if has_feedback:
+            already_sum = len(nodes) >= 2 and nodes[1].kind == "circle" and nodes[1].is_sum
+            if not already_sum:
+                nodes = [nodes[0], DiagramNode(kind="circle", label="Σ", is_sum=True)] + nodes[1:]
+
+        fs = self.font_size
+        row_h = self._config.line_spacing
+        gap = fs * 1.0
+
+        widths = [self._diagram_node_width(n) for n in nodes]
+        n = len(nodes)
+        total_w = sum(widths) + max(0, n - 1) * gap
+        scale = min(1.0, area.width / total_w) if total_w > 0 else 1.0
+        widths = [w * scale for w in widths]
+        gap *= scale
+        cell_fs = fs * scale
+        box_h = row_h * 0.75
+        circle_d = row_h * 0.65
+
+        margin_top = 0 if line_idx == 0 else 1
+        feedback_rows = 2 if has_feedback else 0
+        margin_bottom = 1
+        required_rows = margin_top + 1 + feedback_rows + margin_bottom
+        remaining = len(line_positions) - line_idx
+        if remaining < required_rows:
+            return -1
+
+        chain_row = line_idx + margin_top
+        baseline_y = line_positions[chain_row]
+        chain_center_y = baseline_y + row_h / 2
+        box_y0 = baseline_y + (row_h - box_h) / 2
+        box_y1 = box_y0 + box_h
+
+        total_w_final = sum(widths) + max(0, n - 1) * gap
+        x0 = area.x + max(0.0, (area.width - total_w_final) / 2)
+
+        xs_left: list[float] = []
+        xs_right: list[float] = []
+        x = x0
+        for w in widths:
+            xs_left.append(x)
+            xs_right.append(x + w)
+            x += w + gap
+
+        def add_seg(seg: tuple[float, float, float, float]) -> None:
+            output.append(
+                CharPlacement(
+                    char="",
+                    x=seg[0],
+                    y=seg[1],
+                    font_size=cell_fs,
+                    page=page_idx,
+                    line_segment=seg,
+                )
+            )
+
+        def draw_arrow(x_tip: float, y_tip: float, angle: float) -> None:
+            for seg in _arrow_head(x_tip, y_tip, angle, size=cell_fs * 0.3):
+                add_seg(seg)
+
+        def draw_rect(x0_: float, y0_: float, x1_: float, y1_: float) -> None:
+            for seg in (
+                (x0_, y0_, x1_, y0_),
+                (x1_, y0_, x1_, y1_),
+                (x1_, y1_, x0_, y1_),
+                (x0_, y1_, x0_, y0_),
+            ):
+                add_seg(seg)
+
+        def draw_circle(cx: float, cy: float, d: float) -> None:
+            r = d / 2
+            n_sides = 16
+            pts = [
+                (
+                    cx + r * math.cos(2 * math.pi * i / n_sides),
+                    cy + r * math.sin(2 * math.pi * i / n_sides),
+                )
+                for i in range(n_sides)
+            ]
+            for i in range(n_sides):
+                px, py = pts[i]
+                qx, qy = pts[(i + 1) % n_sides]
+                add_seg((px, py, qx, qy))
+
+        sigma_idx: int | None = None
+        for i, node in enumerate(nodes):
+            cx = (xs_left[i] + xs_right[i]) / 2
+            if node.kind == "box":
+                draw_rect(xs_left[i], box_y0, xs_right[i], box_y1)
+            elif node.kind == "circle":
+                draw_circle(cx, chain_center_y, circle_d)
+                if node.is_sum:
+                    sigma_idx = i
+            self._diagram_draw_label(node.label, cx, baseline_y, cell_fs, page_idx, output)
+
+        for i in range(n - 1):
+            x_from, x_to = xs_right[i], xs_left[i + 1]
+            add_seg((x_from, chain_center_y, x_to, chain_center_y))
+            draw_arrow(x_to, chain_center_y, 0.0)
+
+        if has_feedback and sigma_idx is not None:
+            sigma_cx = (xs_left[sigma_idx] + xs_right[sigma_idx]) / 2
+            tap_x = xs_left[-1]
+            feedback_row = chain_row + 2
+            feedback_baseline_y = line_positions[feedback_row]
+            feedback_center_y = feedback_baseline_y + row_h / 2
+
+            fb_nodes = spec.feedback
+            fb_widths = [self._diagram_node_width(fn) * scale for fn in fb_nodes]
+            fb_gap = gap
+            span = tap_x - sigma_cx
+            n_fb = len(fb_nodes)
+            fb_total = sum(fb_widths) + max(0, n_fb - 1) * fb_gap
+            fb_centers: list[float] = []
+            if n_fb > 0:
+                start_x = tap_x - max(0.0, (span - fb_total) / 2)
+                x = start_x
+                for w in fb_widths:
+                    x -= w
+                    fb_centers.append(x + w / 2)
+                    x -= fb_gap
+
+            # 出力から分岐して下へ
+            add_seg((tap_x, chain_center_y, tap_x, feedback_center_y))
+
+            # 帰還箱を右→左へ順に配置し、間を接続線でつなぐ
+            prev_x = tap_x
+            for fn, fw, fcx in zip(fb_nodes, fb_widths, fb_centers):
+                add_seg((prev_x, feedback_center_y, fcx + fw / 2, feedback_center_y))
+                draw_arrow(fcx + fw / 2, feedback_center_y, math.pi)
+                fb_y0 = feedback_baseline_y + (row_h - box_h) / 2
+                fb_y1 = fb_y0 + box_h
+                draw_rect(fcx - fw / 2, fb_y0, fcx + fw / 2, fb_y1)
+                self._diagram_draw_label(
+                    fn.label, fcx, feedback_baseline_y, cell_fs, page_idx, output
+                )
+                prev_x = fcx - fw / 2
+
+            # 最後の帰還箱（または分岐点、箱が無ければ直接）からΣ列まで左へ
+            add_seg((prev_x, feedback_center_y, sigma_cx, feedback_center_y))
+
+            # Σの下入力へ立ち上がる
+            sigma_bottom_y = chain_center_y - circle_d / 2
+            add_seg((sigma_cx, feedback_center_y, sigma_cx, sigma_bottom_y))
+            draw_arrow(sigma_cx, sigma_bottom_y, math.pi / 2)
+
+            # 符号表示: Σ の左に "+"（Rからの入力）、下に "-"（帰還入力）
+            sign_fs = cell_fs * 0.7
+            output.append(
+                CharPlacement(
+                    char="+",
+                    x=xs_left[sigma_idx] - sign_fs * 0.9,
+                    y=chain_center_y + circle_d * 0.15,
+                    font_size=sign_fs,
+                    page=page_idx,
+                )
+            )
+            output.append(
+                CharPlacement(
+                    char="-",
+                    x=sigma_cx - sign_fs * 0.3,
+                    y=sigma_bottom_y - sign_fs * 2.2,
+                    font_size=sign_fs,
+                    page=page_idx,
+                )
+            )
+
+        return required_rows
+
     def _place_block_math(
         self,
         math_src: str,
@@ -1059,11 +1360,7 @@ class Typesetter:
 
         # \dfrac 化しても本文幅を超える長い式は関係演算子・加減で分割（後方互換）。
         # \\ 改行で既に多段の式は対象外（ユーザー意図の改行を尊重）。
-        if (
-            self.handwrite_math
-            and len(groups) == 1
-            and (tag_elem is None or tag_elem.content)
-        ):
+        if self.handwrite_math and len(groups) == 1 and (tag_elem is None or tag_elem.content):
             segments = split_math_for_width(
                 body_src,
                 self.font_size,
@@ -1095,9 +1392,7 @@ class Typesetter:
                 if total_rows > (len(line_positions) - line_idx):
                     return -1
 
-                tag_suffix = (
-                    f" \\tag{{{tag_elem.content.strip('()')}}}" if tag_elem else ""
-                )
+                tag_suffix = f" \\tag{{{tag_elem.content.strip('()')}}}" if tag_elem else ""
                 consumed_total = 0
                 cur_line = line_idx
                 for i, seg in enumerate(segments):
@@ -1117,7 +1412,9 @@ class Typesetter:
         # グループごとの body_src: \\ で物理行に分割。matplotlib は \\ を解しないため
         # 各グループの描画には対応する行のソースのみを渡す。
         _body_lines = [s.strip() for s in re.split(r"\\\\", body_src)]
-        group_srcs = [_body_lines[i] if i < len(_body_lines) else body_src for i in range(len(groups))]
+        group_srcs = [
+            _body_lines[i] if i < len(_body_lines) else body_src for i in range(len(groups))
+        ]
 
         line_spacing = self._config.line_spacing
 

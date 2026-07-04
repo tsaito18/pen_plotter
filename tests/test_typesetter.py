@@ -1741,9 +1741,7 @@ class TestPlainMathBodyRouting:
         table = "| 回数 | 値 |\n|---|---|\n| 10 | 230 |\n"
         pls = ts.typeset(table)[0]
         # セル内の数字 '2'（line_segment なしの実文字）
-        digit = next(
-            p for p in pls if p.char == "2" and not getattr(p, "line_segment", None)
-        )
+        digit = next(p for p in pls if p.char == "2" and not getattr(p, "line_segment", None))
         # 表 scale は列幅次第だが、最大でも self.font_size。字種スケールが効いていれば
         # 4.5 フルサイズより必ず小さい。
         assert digit.font_size <= 4.5 * effective_char_scale("2") + 1e-6
@@ -1763,3 +1761,74 @@ class TestPlainMathBodyRouting:
         math_fs = next(p.font_size for p in math if p.char == "8")
         assert math_fs == pytest.approx(body_fs)
         assert math_fs == pytest.approx(4.5 * effective_char_scale("8"))
+
+
+class TestBlockDiagram:
+    """ブロック図DSL（```blockdiagram ... ```）の組版。"""
+
+    _OPEN_LOOP = "```blockdiagram\nR --> [制御器] --> [プラント] --> C\n```\n"
+    _CLOSED_LOOP = "```blockdiagram\nR --> [制御器] --> [プラント] --> C\nfeedback: [センサ]\n```\n"
+
+    def test_box_labels_present(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._OPEN_LOOP)[0]
+        chars = {p.char for p in placements if p.char}
+        assert {"制", "御", "器"} <= chars
+        assert {"プ", "ラ", "ン", "ト"} <= chars
+
+    def test_has_multiple_line_segments(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._OPEN_LOOP)[0]
+        segs = [p for p in placements if p.line_segment is not None]
+        # 箱2つ(4辺x2=8) + 接続線3本 + 矢じり3x2=6 以上
+        assert len(segs) >= 14
+
+    def test_open_loop_has_no_sigma(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._OPEN_LOOP)[0]
+        assert not any(p.char == "Σ" for p in placements)
+
+    def test_closed_loop_has_sigma(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._CLOSED_LOOP)[0]
+        assert any(p.char == "Σ" for p in placements)
+
+    def test_closed_loop_has_feedback_box_label(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._CLOSED_LOOP)[0]
+        chars = {p.char for p in placements if p.char}
+        assert {"セ", "ン", "サ"} <= chars
+
+    def test_diagram_consumes_rows_and_next_block_follows(self):
+        """図の下に続く段落が図のブロック分の行を消費した後に配置される。"""
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        md = self._OPEN_LOOP + "\n続きの文章。"
+        placements = ts.typeset(md)[0]
+        text_chars = [p for p in placements if p.char in ("続", "き")]
+        assert text_chars  # 図の下に文章が配置されている
+        # 続きの文章は図の要素より下(小さいy=罫線が下にある)に位置する
+        diagram_min_y = min(p.y for p in placements if p.line_segment is not None)
+        for tc in text_chars:
+            assert tc.y <= diagram_min_y + 1e-6
+
+    def test_diagram_fits_in_content_width(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._OPEN_LOOP)[0]
+        layout = PageLayout(PageConfig())
+        area = layout.content_area()
+        xs = [seg[0] for p in placements if p.line_segment for seg in [p.line_segment]]
+        xs += [seg[2] for p in placements if p.line_segment for seg in [p.line_segment]]
+        assert xs
+        assert min(xs) >= area.x - 1e-6
+        assert max(xs) <= area.x + area.width + 1e-6
+
+
+class TestArrowHead:
+    def test_arrow_head_returns_two_segments_sharing_tip(self):
+        from src.layout.typesetter import _arrow_head
+
+        segs = _arrow_head(10.0, 20.0, 0.0, size=2.0)
+        assert len(segs) == 2
+        for x1, y1, x2, y2 in segs:
+            assert (x1, y1) == (10.0, 20.0)
+            assert (x2, y2) != (x1, y1)
