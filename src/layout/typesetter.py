@@ -582,7 +582,9 @@ class Typesetter:
                     if cap_below is not None:
                         caption = cap_below
                         ti = lookahead + 1  # 空行＋下キャプション行をまとめて消費
-                stashed_tables.append((rows, caption, False))
+                # 学術慣例では表のタイトルは表の上に置く。`: タイトル` を表の前後
+                # どちらに書いても表キャプションは常に上へ配置する（図は下）。
+                stashed_tables.append((rows, caption, True))
                 collapsed.append(
                     _TABLE_PLACEHOLDER_PREFIX
                     + str(len(stashed_tables) - 1)
@@ -1024,12 +1026,15 @@ class Typesetter:
         # 次キャプション/次表との詰まりを防ぐ）。page 先頭は上余白なし。
         margin_top = 0 if line_idx == 0 else 1
         margin_bottom = 1
+        # 上キャプション時は追加で1行確保する。表の最上罫線は tbl_idx より 1 行上
+        # (line_positions[tbl_idx]+row_h) に描かれるため、キャプションと重ならせない。
+        extra_above = 1 if (caption_above and cap_rows > 0) else 0
         remaining = len(line_positions) - line_idx
-        if remaining < margin_top + n_rows + cap_rows + margin_bottom:
+        if remaining < margin_top + n_rows + cap_rows + extra_above + margin_bottom:
             return -1
 
-        # キャプションが上なら表は cap_rows 行下から始まる
-        tbl_idx = line_idx + margin_top + (cap_rows if caption_above else 0)
+        # キャプションが上なら表は cap_rows(+1) 行下から始まる
+        tbl_idx = line_idx + margin_top + (cap_rows + extra_above if caption_above else 0)
 
         fs = self.font_size
         pad = fs * 0.3
@@ -1136,7 +1141,7 @@ class Typesetter:
                         )
                     cx += self._body_char_advance(ch)
 
-        return margin_top + n_rows + cap_rows + margin_bottom
+        return margin_top + n_rows + cap_rows + extra_above + margin_bottom
 
     def _diagram_node_width(self, node: DiagramNode) -> float:
         """ノード1つの未スケール幅(mm)。箱=ラベル幅+パディング、円=固定径、信号=ラベル幅。"""
