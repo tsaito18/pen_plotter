@@ -489,7 +489,14 @@ class PlotterPipeline:
         text: str,
         save_path: str | Path,
         progress_callback: Callable[[float, str], None] | None = None,
+        only_pages: set[int] | None = None,
     ) -> list[Path]:
+        """\u30c6\u30ad\u30b9\u30c8\u3092\u30d7\u30ec\u30d3\u30e5\u30fc PNG \u306b\u30ec\u30f3\u30c0\u3059\u308b\u3002
+
+        only_pages \u6307\u5b9a\u6642\u306f\u305d\u306e\u30da\u30fc\u30b8\u756a\u53f7\uff081\u59cb\u307e\u308a\uff09\u3060\u3051\u3092\u63cf\u753b\u3057\u3001\u4ed6\u30da\u30fc\u30b8\u306e
+        \u30b9\u30c8\u30ed\u30fc\u30af\u751f\u6210\u30fb\u63cf\u753b\u3092\u30b9\u30ad\u30c3\u30d7\u3059\u308b\uff08MCP \u306a\u3069\u4e00\u90e8\u30da\u30fc\u30b8\u3060\u3051\u6b32\u3057\u3044\u547c\u3073\u51fa\u3057\u3067
+        \u5168\u30da\u30fc\u30b8\u63cf\u753b\u306b\u3088\u308b\u30bf\u30a4\u30e0\u30a2\u30a6\u30c8\u3092\u907f\u3051\u308b\uff09\u3002\u7d44\u7248\uff08\u30da\u30fc\u30b8\u5206\u5272\uff09\u306f\u5168\u4f53\u3092\u884c\u3046\u3002
+        """
         save_path = Path(save_path)
 
         if progress_callback:
@@ -511,9 +518,21 @@ class PlotterPipeline:
         stem = save_path.stem
         suffix = save_path.suffix
         parent = save_path.parent
-        result: list[Path] = [
+        all_paths: list[Path] = [
             save_path if n_pages == 1 else parent / f"{stem}_p{i}{suffix}"
             for i in range(1, n_pages + 1)
+        ]
+        # only_pages 指定時は該当ページのみ描画（他はスキップ）。返すのも描画分のみ。
+        render_set = (
+            {i for i in only_pages if 1 <= i <= n_pages} if only_pages is not None else None
+        )
+        if render_set is not None and not render_set:
+            # 範囲外指定のみ → 描くものなし
+            if progress_callback:
+                progress_callback(1.0, "完了")
+            return []
+        result: list[Path] = [
+            all_paths[i - 1] for i in range(1, n_pages + 1) if render_set is None or i in render_set
         ]
 
         from src.ui.preview_renderer import render_page_worker
@@ -532,6 +551,8 @@ class PlotterPipeline:
             render_futures: list[Future[None]] = []
 
             for i, page_placements in enumerate(pages, start=1):
+                if render_set is not None and i not in render_set:
+                    continue  # 要求外ページはストローク生成・描画ともスキップ
                 page_base = (i - 1) / n_pages
                 page_span = 1.0 / n_pages
 
@@ -541,7 +562,7 @@ class PlotterPipeline:
                     if progress_callback:
                         progress_callback(_base + frac * _span * 0.8, desc)
 
-                page_path = result[i - 1]
+                page_path = all_paths[i - 1]
                 strokes, finishes = self.placements_to_strokes_with_finishes(
                     page_placements, progress_callback=_page_stroke_progress
                 )

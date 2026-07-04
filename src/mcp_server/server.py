@@ -37,29 +37,68 @@ _KANJIVG = _env_path("PEN_PLOTTER_KANJIVG_DIR", _DEFAULT_KANJIVG)
 _USER_STROKES = _env_path("PEN_PLOTTER_USER_STROKES_DIR", _DEFAULT_USER_STROKES)
 
 
+_ALLOWED_SETTINGS = {
+    "font_size",
+    "line_spacing",
+    "margin_top",
+    "margin_bottom",
+    "margin_left",
+    "margin_right",
+    "temperature",
+    "messiness",
+    "pressure_variation",
+    "instance_variation",
+    "entry_taper",
+    "connection_strength",
+    "plot_page_numbers",
+    "paper_width",
+    "paper_height",
+}
+
+
 def _make_settings(overrides: dict[str, Any] | None) -> UISettings:
     s = UISettings.default()
     if not overrides:
         return s
-    allowed = {
-        "font_size",
-        "line_spacing",
-        "margin_top",
-        "margin_bottom",
-        "margin_left",
-        "margin_right",
-        "temperature",
-        "messiness",
-        "pressure_variation",
-        "instance_variation",
-        "entry_taper",
-        "connection_strength",
-        "plot_page_numbers",
-        "paper_width",
-        "paper_height",
-    }
-    kw = {k: v for k, v in overrides.items() if k in allowed}
+    kw = {k: v for k, v in overrides.items() if k in _ALLOWED_SETTINGS}
     return replace(s, **kw)
+
+
+# パイプライン（モデル・スタイルサンプルのロードが重い）を settings ごとにキャッシュ
+# する。MCP は呼び出しごとに新プロセスでなく常駐プロセスなので、同一設定の連続
+# 呼び出しでモデル再ロード（数秒）を避けタイムアウトを減らす。
+_pipeline_cache: dict[tuple, Any] = {}
+
+
+def _get_pipeline(settings: UISettings):
+    key = tuple(sorted(vars(settings).items()))
+    pipe = _pipeline_cache.get(key)
+    if pipe is None:
+        pipe = build_pipeline(
+            settings,
+            checkpoint_path=_CHECKPOINT,
+            kanjivg_dir=_KANJIVG,
+            user_strokes_dir=_USER_STROKES,
+        )
+        _pipeline_cache[key] = pipe
+    return pipe
+
+
+def _parse_pages(spec: str | None) -> set[int] | None:
+    """ "1,3-5" → {1,3,4,5}。None/空はすべて（None を返す）。"""
+    if not spec:
+        return None
+    wanted: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            wanted.update(range(int(a), int(b) + 1))
+        else:
+            wanted.add(int(part))
+    return wanted or None
 
 
 mcp = FastMCP("pen-plotter")
@@ -81,20 +120,36 @@ def render_preview(
             entry_taper, plot_page_numbers, margin_*, line_spacing 等）。
     """
     ui = _make_settings(settings)
-    pipe = build_pipeline(
-        ui,
-        checkpoint_path=_CHECKPOINT,
-        kanjivg_dir=_KANJIVG,
-        user_strokes_dir=_USER_STROKES,
-    )
+    pipe = _get_pipeline(ui)
+    only = _parse_pages(pages)
     with tempfile.TemporaryDirectory() as tmp:
         save = Path(tmp) / "preview.png"
-        paths = pipe.generate_preview(md_text, save)
-        selected = _select_pages(paths, pages)
-        return [
-            {"page": i, "png_base64": base64.b64encode(p.read_bytes()).decode()}
-            for i, p in selected
-        ]
+        # only 指定時は該当ページだけ描画（全ページ描画によるタイムアウト回避）
+        paths = pipe.generate_preview(md_text, save, only_pages=only)
+        # generate_preview は only 指定時に該当ページのみ返す。ページ番号を復元する
+        # ため、番号順ソート済みの only か、単一/全ページ時は連番を使う。
+        nums = sorted(only) if only else list(range(1, len(paths) + 1))
+        return [{"page": n, "png_base64": _encode_preview(p)} for n, p in zip(nums, paths)]
+
+
+def _encode_preview(path: Path, max_width: int = 1400) -> str:
+    """プレビュー PNG を base64 で返す。フル解像度(3000px, ~2MB)はレスポンスが
+    大きくクライアントで扱いにくいため、確認用に横 max_width へ縮小する。"""
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(path) as im:
+            if im.width > max_width:
+                h = round(im.height * max_width / im.width)
+                im = im.resize((max_width, h), Image.LANCZOS)
+            buf = BytesIO()
+            im.save(buf, "PNG", optimize=True)
+            return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        # Pillow が無い/失敗時はフル解像度で返す（後方互換）
+        return base64.b64encode(path.read_bytes()).decode()
 
 
 @mcp.tool()
@@ -111,12 +166,7 @@ def generate_gcode(
         settings: UISettings 上書き辞書。
     """
     ui = _make_settings(settings)
-    pipe = build_pipeline(
-        ui,
-        checkpoint_path=_CHECKPOINT,
-        kanjivg_dir=_KANJIVG,
-        user_strokes_dir=_USER_STROKES,
-    )
+    pipe = _get_pipeline(ui)
     with tempfile.TemporaryDirectory() as tmp:
         save = Path(tmp) / "out.gcode"
         paths = pipe.generate_gcode_file(md_text, save)
