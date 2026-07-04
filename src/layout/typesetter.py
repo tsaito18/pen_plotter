@@ -15,7 +15,13 @@ from src.layout.math_layout import (
     MathPlacement,
     _CHAR_WIDTH_RATIO,
 )
-from src.layout.diagram_layout import DiagramNode, DiagramSpec, detect_blockdiagram
+from src.layout.diagram_layout import (
+    DendrogramSpec,
+    DiagramNode,
+    DiagramSpec,
+    detect_blockdiagram,
+    detect_dendrogram,
+)
 from src.layout.page_layout import PageConfig, PageLayout
 from src.layout.table_layout import detect_pipe_table
 
@@ -84,6 +90,9 @@ _TABLE_PLACEHOLDER_SUFFIX = "\x00TBL\x00"
 # ブロック図（```blockdiagram ... ```）を段落処理前に1段落へ畳むためのプレースホルダ
 _DIAGRAM_PLACEHOLDER_PREFIX = "\x00DIA\x00"
 _DIAGRAM_PLACEHOLDER_SUFFIX = "\x00DIA\x00"
+# デンドログラム（```dendrogram ... ```）を段落処理前に1段落へ畳むためのプレースホルダ
+_DENDROGRAM_PLACEHOLDER_PREFIX = "\x00DEN\x00"
+_DENDROGRAM_PLACEHOLDER_SUFFIX = "\x00DEN\x00"
 
 # 数式内の . , は変換しない（小数点・引数区切りは LaTeX でそのまま使う）
 _MATH_OR_BLOCK_RE = re.compile(r"\$\$.*?\$\$|\$[^$]+?\$", re.DOTALL)
@@ -177,6 +186,8 @@ class ParsedDocument:
     table_caption_above: dict[int, bool] = field(default_factory=dict)
     # global_line_idx → パース済みブロック図（```blockdiagram ... ``` ブロックの起点行）。
     diagram_blocks: dict[int, DiagramSpec] = field(default_factory=dict)
+    # global_line_idx → パース済みデンドログラム（```dendrogram ... ``` ブロックの起点行）。
+    dendrogram_blocks: dict[int, DendrogramSpec] = field(default_factory=dict)
     # 改ページ指示（"-----" 行）の global_line_idx 集合。以降を次ページへ送る。
     page_break_lines: set[int] = field(default_factory=set)
 
@@ -434,6 +445,24 @@ class Typesetter:
                 line_idx += consumed
                 continue
 
+            if global_line_idx in doc.dendrogram_blocks:
+                spec = doc.dendrogram_blocks[global_line_idx]
+                consumed = self._place_dendrogram(
+                    spec, line_idx, line_positions, area, page_idx, current_page
+                )
+                if consumed == -1:
+                    pages.append(current_page)
+                    current_page = []
+                    page_idx += 1
+                    line_idx = 0
+                    consumed = self._place_dendrogram(
+                        spec, 0, line_positions, area, page_idx, current_page
+                    )
+                    if consumed == -1:
+                        consumed = 1  # 1ページに収まらない巨大図は無限ループ回避
+                line_idx += consumed
+                continue
+
             is_heading = global_line_idx in doc.heading_lines
             h_level = doc.heading_lines.get(global_line_idx, 0)
             body_level = doc.line_body_level.get(global_line_idx, 0)
@@ -509,6 +538,7 @@ class Typesetter:
         # キャプション "「: タイトル」行" は表の直前なら上、直後なら下に中央寄せする。
         stashed_tables: list[tuple[list[list[str]], str, bool]] = []
         stashed_diagrams: list[DiagramSpec] = []
+        stashed_dendrograms: list[DendrogramSpec] = []
         collapsed: list[str] = []
 
         def _caption_text(s: str) -> str | None:
@@ -570,9 +600,22 @@ class Typesetter:
                     + str(len(stashed_diagrams) - 1)
                     + _DIAGRAM_PLACEHOLDER_SUFFIX
                 )
-            else:
-                collapsed.append(paragraphs[ti])
-                ti += 1
+                continue
+
+            dendro = detect_dendrogram(paragraphs, ti)
+            if dendro is not None:
+                dendro_spec, consumed = dendro
+                ti += consumed
+                stashed_dendrograms.append(dendro_spec)
+                collapsed.append(
+                    _DENDROGRAM_PLACEHOLDER_PREFIX
+                    + str(len(stashed_dendrograms) - 1)
+                    + _DENDROGRAM_PLACEHOLDER_SUFFIX
+                )
+                continue
+
+            collapsed.append(paragraphs[ti])
+            ti += 1
         paragraphs = collapsed
         table_placeholder_re = re.compile(
             re.escape(_TABLE_PLACEHOLDER_PREFIX) + r"(\d+)" + re.escape(_TABLE_PLACEHOLDER_SUFFIX)
@@ -581,6 +624,11 @@ class Typesetter:
             re.escape(_DIAGRAM_PLACEHOLDER_PREFIX)
             + r"(\d+)"
             + re.escape(_DIAGRAM_PLACEHOLDER_SUFFIX)
+        )
+        dendrogram_placeholder_re = re.compile(
+            re.escape(_DENDROGRAM_PLACEHOLDER_PREFIX)
+            + r"(\d+)"
+            + re.escape(_DENDROGRAM_PLACEHOLDER_SUFFIX)
         )
 
         lines: list[str] = []
@@ -591,6 +639,7 @@ class Typesetter:
         table_captions: dict[int, str] = {}
         table_caption_above: dict[int, bool] = {}
         diagram_blocks: dict[int, DiagramSpec] = {}
+        dendrogram_blocks: dict[int, DendrogramSpec] = {}
         page_break_lines: set[int] = set()
         heading_lines: dict[int, int] = {}
         line_body_level: dict[int, int] = {}
@@ -622,6 +671,16 @@ class Typesetter:
                 spec = stashed_diagrams[int(diagram_match.group(1))]
                 para_start_indices.add(len(lines))
                 diagram_blocks[len(lines)] = spec
+                line_body_level[len(lines)] = current_body_level
+                lines.append("")
+                continue
+
+            # デンドログラムプレースホルダ: 図ブロック起点行として登録
+            dendrogram_match = dendrogram_placeholder_re.fullmatch(para.strip())
+            if dendrogram_match is not None:
+                dendro_spec = stashed_dendrograms[int(dendrogram_match.group(1))]
+                para_start_indices.add(len(lines))
+                dendrogram_blocks[len(lines)] = dendro_spec
                 line_body_level[len(lines)] = current_body_level
                 lines.append("")
                 continue
@@ -732,6 +791,7 @@ class Typesetter:
             table_captions=table_captions,
             table_caption_above=table_caption_above,
             diagram_blocks=diagram_blocks,
+            dendrogram_blocks=dendrogram_blocks,
             page_break_lines=page_break_lines,
         )
 
@@ -1305,6 +1365,131 @@ class Typesetter:
                     font_size=sign_fs,
                     page=page_idx,
                 )
+            )
+
+        return required_rows
+
+    @staticmethod
+    def _format_height(h: float) -> str:
+        """結合高さの目盛りラベル文字列（整数はそのまま、小数は末尾0を落とす）。"""
+        if h == int(h):
+            return str(int(h))
+        return f"{h:.2f}".rstrip("0").rstrip(".")
+
+    def _place_dendrogram(
+        self,
+        spec: DendrogramSpec,
+        line_idx: int,
+        line_positions: list[float],
+        area: object,
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> int:
+        """デンドログラム（葉ラベル＋U字ブラケット＋高さ軸）を配置する。
+
+        葉を x 軸上に ``order`` の順で等間隔配置し、各結合を子2つの x 位置から
+        高さ h まで垂直線を立ち上げてその上端を水平線で結ぶ U 字ブラケットで描く。
+        結合後クラスタの x は2子の中点。左側に高さ軸と目盛りラベルを置く。
+        図が本文幅を超える場合は葉の間隔を縮小して収める（ブロック図と同じ方針）。
+        残り行が足りなければ -1（呼び出し側で次ページ送り）。
+
+        Returns:
+            消費した行数。残り行不足なら -1。
+        """
+        order = list(spec.order)
+        if not order or not spec.merges:
+            return 1
+
+        fs = self.font_size
+        row_h = self._config.line_spacing
+        n = len(order)
+
+        # 縦方向: 高さ軸に body_rows 分、葉ラベルに1行を確保する。
+        body_rows = 4
+        margin_top = 0 if line_idx == 0 else 1
+        margin_bottom = 1
+        required_rows = margin_top + body_rows + 1 + margin_bottom
+        remaining = len(line_positions) - line_idx
+        if remaining < required_rows:
+            return -1
+
+        body_top_row = line_idx + margin_top
+        label_row = body_top_row + body_rows
+        label_baseline_y = line_positions[label_row]
+        axis_bottom_y = label_baseline_y + row_h * 0.5
+        axis_top_y = line_positions[body_top_row] + row_h
+
+        max_h = max(m.height for m in spec.merges)
+        unit_height = (axis_top_y - axis_bottom_y) / max_h if max_h > 0 else 1.0
+
+        def y_of(h: float) -> float:
+            return axis_bottom_y + h * unit_height
+
+        # 横方向: 軸＋目盛りラベル用に左マージンを確保し、残りへ葉を等間隔配置。
+        tick_label_reserve = fs * 1.8
+        axis_x = area.x + tick_label_reserve
+        leaf_start_x = axis_x + fs * 1.2
+        desired_gap = fs * 2.2
+        avail_w = max(0.0, area.x + area.width - leaf_start_x)
+        total_desired = max(0, n - 1) * desired_gap
+        scale = min(1.0, avail_w / total_desired) if total_desired > 0 else 1.0
+        gap = desired_gap * scale
+        cell_fs = fs * scale
+        leaf_xs = [leaf_start_x + i * gap for i in range(n)]
+
+        def add_seg(seg: tuple[float, float, float, float]) -> None:
+            output.append(
+                CharPlacement(
+                    char="",
+                    x=seg[0],
+                    y=seg[1],
+                    font_size=cell_fs,
+                    page=page_idx,
+                    line_segment=seg,
+                )
+            )
+
+        # 葉ラベル配置＋クラスタの初期位置/高さ登録
+        cluster_x: dict[frozenset[str], float] = {}
+        cluster_h: dict[frozenset[str], float] = {}
+        for tok, x in zip(order, leaf_xs):
+            key = frozenset(tok)
+            cluster_x[key] = x
+            cluster_h[key] = 0.0
+            self._diagram_draw_label(tok, x, label_baseline_y, cell_fs, page_idx, output)
+
+        # 結合を順に処理し、U字ブラケットを描画
+        for merge in spec.merges:
+            x_left = cluster_x.get(merge.left)
+            x_right = cluster_x.get(merge.right)
+            if x_left is None or x_right is None:
+                continue
+            y_left = y_of(cluster_h.get(merge.left, 0.0))
+            y_right = y_of(cluster_h.get(merge.right, 0.0))
+            y_top = y_of(merge.height)
+            add_seg((x_left, y_left, x_left, y_top))
+            add_seg((x_right, y_right, x_right, y_top))
+            add_seg((x_left, y_top, x_right, y_top))
+            merged_key = merge.left | merge.right
+            cluster_x[merged_key] = (x_left + x_right) / 2
+            cluster_h[merged_key] = merge.height
+
+        # 高さ軸＋目盛り
+        add_seg((axis_x, axis_bottom_y, axis_x, axis_top_y))
+        tick_heights = sorted({0.0} | {m.height for m in spec.merges})
+        tick_len = fs * 0.4
+        tick_fs = cell_fs * 0.7
+        for h in tick_heights:
+            y = y_of(h)
+            add_seg((axis_x - tick_len, y, axis_x, y))
+            label = self._format_height(h)
+            self._diagram_draw_label(
+                label,
+                axis_x - tick_len - fs * 0.7,
+                y - tick_fs * 0.3,
+                tick_fs,
+                page_idx,
+                output,
             )
 
         return required_rows

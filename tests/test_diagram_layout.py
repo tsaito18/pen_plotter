@@ -1,4 +1,9 @@
-from src.layout.diagram_layout import detect_blockdiagram, parse_blockdiagram
+from src.layout.diagram_layout import (
+    detect_blockdiagram,
+    detect_dendrogram,
+    parse_blockdiagram,
+    parse_dendrogram,
+)
 
 
 class TestParseBlockdiagram:
@@ -87,3 +92,83 @@ class TestDetectBlockdiagram:
 
     def test_detect_out_of_range_start(self):
         assert detect_blockdiagram(["a"], 5) is None
+
+
+class TestParseDendrogram:
+    _LINES = [
+        "order: B C A D E",
+        "B + C : 1",
+        "A + D : 2",
+        "BC + AD : 3",
+        "ABCD + E : 4",
+    ]
+
+    def test_parse_order(self):
+        spec = parse_dendrogram(self._LINES)
+        assert spec.order == ["B", "C", "A", "D", "E"]
+
+    def test_parse_merges_left_right_height(self):
+        spec = parse_dendrogram(self._LINES)
+        assert len(spec.merges) == 4
+        assert spec.merges[0].left == frozenset("B")
+        assert spec.merges[0].right == frozenset("C")
+        assert spec.merges[0].height == 1
+        assert spec.merges[1].left == frozenset("A")
+        assert spec.merges[1].right == frozenset("D")
+        assert spec.merges[1].height == 2
+
+    def test_parse_merges_normalize_cluster_as_set(self):
+        """クラスタは構成要素の集合として正規化される（順不同）。"""
+        spec = parse_dendrogram(self._LINES)
+        merged_clusters = [m.left | m.right for m in spec.merges]
+        assert merged_clusters[0] == frozenset("BC")
+        assert merged_clusters[1] == frozenset("AD")
+        assert merged_clusters[2] == frozenset("ABCD")
+        assert merged_clusters[3] == frozenset("ABCDE")
+        assert spec.merges[3].height == 4
+
+    def test_parse_empty_input_returns_empty_spec(self):
+        spec = parse_dendrogram([])
+        assert spec.order == []
+        assert spec.merges == []
+
+    def test_parse_blank_lines_only(self):
+        spec = parse_dendrogram(["", "   ", ""])
+        assert spec.order == []
+        assert spec.merges == []
+
+    def test_parse_malformed_lines_are_skipped_not_raised(self):
+        spec = parse_dendrogram(["order: A B", "garbage line", "A + B : notanumber"])
+        assert spec.order == ["A", "B"]
+        assert spec.merges == []
+
+
+class TestDetectDendrogram:
+    def test_detect_fence(self):
+        paragraphs = [
+            "text before",
+            "```dendrogram",
+            "order: B C A D E",
+            "B + C : 1",
+            "A + D : 2",
+            "BC + AD : 3",
+            "ABCD + E : 4",
+            "```",
+            "text after",
+        ]
+        result = detect_dendrogram(paragraphs, 1)
+        assert result is not None
+        spec, consumed = result
+        assert consumed == 7
+        assert spec.order == ["B", "C", "A", "D", "E"]
+        assert len(spec.merges) == 4
+
+    def test_detect_not_matching(self):
+        assert detect_dendrogram(["not a fence"], 0) is None
+
+    def test_detect_unterminated_fence_returns_none(self):
+        paragraphs = ["```dendrogram", "order: A B"]
+        assert detect_dendrogram(paragraphs, 0) is None
+
+    def test_detect_out_of_range_start(self):
+        assert detect_dendrogram(["a"], 5) is None

@@ -1823,6 +1823,54 @@ class TestBlockDiagram:
         assert max(xs) <= area.x + area.width + 1e-6
 
 
+class TestDendrogram:
+    """デンドログラムDSL（```dendrogram ... ```）の組版。"""
+
+    _DENDRO = (
+        "```dendrogram\norder: B C A D E\nB + C : 1\nA + D : 2\nBC + AD : 3\nABCD + E : 4\n```\n"
+    )
+
+    def test_leaf_labels_present(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._DENDRO)[0]
+        chars = {p.char for p in placements if p.char}
+        assert {"B", "C", "A", "D", "E"} <= chars
+
+    def test_has_multiple_line_segments_for_brackets(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._DENDRO)[0]
+        segs = [p for p in placements if p.line_segment is not None]
+        # U字ブラケット(2垂直+1水平)x4結合 = 12本以上 + 軸・目盛り
+        assert len(segs) >= 12
+
+    def test_height_tick_labels_present(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._DENDRO)[0]
+        chars = {p.char for p in placements if p.char}
+        assert {"1", "2", "3", "4"} <= chars
+
+    def test_dendrogram_consumes_rows_and_next_block_follows(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        md = self._DENDRO + "\n続きの文章。"
+        placements = ts.typeset(md)[0]
+        text_chars = [p for p in placements if p.char in ("続", "き")]
+        assert text_chars
+        dendro_min_y = min(p.y for p in placements if p.line_segment is not None)
+        for tc in text_chars:
+            assert tc.y <= dendro_min_y + 1e-6
+
+    def test_dendrogram_fits_in_content_width(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._DENDRO)[0]
+        layout = PageLayout(PageConfig())
+        area = layout.content_area()
+        xs = [seg[0] for p in placements if p.line_segment for seg in [p.line_segment]]
+        xs += [seg[2] for p in placements if p.line_segment for seg in [p.line_segment]]
+        assert xs
+        assert min(xs) >= area.x - 1e-6
+        assert max(xs) <= area.x + area.width + 1e-6
+
+
 class TestArrowHead:
     def test_arrow_head_returns_two_segments_sharing_tip(self):
         from src.layout.typesetter import _arrow_head
