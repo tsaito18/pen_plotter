@@ -1425,14 +1425,18 @@ class Typesetter:
         def y_of(h: float) -> float:
             return axis_bottom_y + h * unit_height
 
-        # 横方向: 軸＋目盛りラベル用に左マージンを確保し、残りへ葉を等間隔配置。
+        # 横方向: 図全体（軸＋目盛りラベル＋葉列）の自然幅を出し、本文幅を超える
+        # なら一様縮小、超えなければ本文幅の中央へ寄せる（表・ブロック図と同じ方針。
+        # 図幅が狭いまま左マージンに固定すると左に偏って見える）。
         tick_label_reserve = fs * 1.8
-        axis_x = area.x + tick_label_reserve
-        leaf_start_x = axis_x + fs * 1.2
+        leaf_offset = fs * 1.2
         desired_gap = fs * 2.2
-        avail_w = max(0.0, area.x + area.width - leaf_start_x)
-        total_desired = max(0, n - 1) * desired_gap
-        scale = min(1.0, avail_w / total_desired) if total_desired > 0 else 1.0
+        natural_w = tick_label_reserve + leaf_offset + max(0, n - 1) * desired_gap
+        scale = min(1.0, area.width / natural_w) if natural_w > 0 else 1.0
+        scaled_w = natural_w * scale
+        left_x = area.x + max(0.0, (area.width - scaled_w) / 2)
+        axis_x = left_x + tick_label_reserve * scale
+        leaf_start_x = axis_x + leaf_offset * scale
         gap = desired_gap * scale
         cell_fs = fs * scale
         leaf_xs = [leaf_start_x + i * gap for i in range(n)]
