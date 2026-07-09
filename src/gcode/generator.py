@@ -118,6 +118,17 @@ class GCodeGenerator:
         現在位置 ``stroke[0]`` から続けて描く（連綿のつなぎ画・その直後の画用）。
         この場合は Z が前画から引き継がれるため、全点で Z を明示して復帰させる。
         """
+        if len(stroke) == 1:
+            # 単一点（中黒・/中点·）はペンを下ろすだけの点。移動→ペンダウン→ペンアップ。
+            x0, y0 = stroke[0]
+            lines = [self.config.pen_up_command]
+            lines.append(
+                f"G0 X{self._format_coord(x0)} Y{self._format_coord(y0)} "
+                f"F{self.config.travel_speed:.0f}"
+            )
+            lines.append(self.config.pen_down_command)
+            lines.append(self.config.pen_up_command)
+            return lines
         if len(stroke) < 2:
             return []
 

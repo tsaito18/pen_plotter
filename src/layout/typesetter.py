@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,13 @@ from src.layout.math_layout import (
     MathParser,
     MathPlacement,
     _CHAR_WIDTH_RATIO,
+)
+from src.layout.diagram_layout import (
+    DendrogramSpec,
+    DiagramNode,
+    DiagramSpec,
+    detect_blockdiagram,
+    detect_dendrogram,
 )
 from src.layout.page_layout import PageConfig, PageLayout
 from src.layout.table_layout import detect_pipe_table
@@ -35,6 +43,25 @@ _KANJI_ADVANCE_SCALE = 1.08
 # 本文字間トラッキング(font_size比)。手書きは字が詰まって見えるため、字種に依らず
 # 本文の字送りへ一律の隙間を加える(乗算でなく加算で全字種に均一な間隔を与える)。
 _LETTER_SPACING_SCALE = 0.05
+
+
+def _arrow_head(
+    x_tip: float, y_tip: float, angle: float, size: float = 1.0
+) -> list[tuple[float, float, float, float]]:
+    """矢じりの2本の線分を返す（ブロック図の接続線の終端用）。
+
+    ``angle`` は矢が指す向き(rad, 0=+x方向)。両線分とも先端 ``(x_tip, y_tip)`` を
+    端点に持ち、そこから ``angle+pi`` 方向へ左右 ``±25°`` 開いた向きに ``size`` だけ
+    伸びる（V字が先端を指す形）。
+    """
+    spread = math.radians(25)
+    segments: list[tuple[float, float, float, float]] = []
+    for sign in (-1, 1):
+        back_angle = angle + math.pi + sign * spread
+        x2 = x_tip + size * math.cos(back_angle)
+        y2 = y_tip + size * math.sin(back_angle)
+        segments.append((x_tip, y_tip, x2, y2))
+    return segments
 
 
 def _is_kanji(ch: str) -> bool:
@@ -60,6 +87,12 @@ _INLINE_MATH_PLACEHOLDER_BASE = 0xE000
 # パイプ表を段落処理前に1段落へ畳むためのプレースホルダ（NULL文字で衝突回避）
 _TABLE_PLACEHOLDER_PREFIX = "\x00TBL\x00"
 _TABLE_PLACEHOLDER_SUFFIX = "\x00TBL\x00"
+# ブロック図（```blockdiagram ... ```）を段落処理前に1段落へ畳むためのプレースホルダ
+_DIAGRAM_PLACEHOLDER_PREFIX = "\x00DIA\x00"
+_DIAGRAM_PLACEHOLDER_SUFFIX = "\x00DIA\x00"
+# デンドログラム（```dendrogram ... ```）を段落処理前に1段落へ畳むためのプレースホルダ
+_DENDROGRAM_PLACEHOLDER_PREFIX = "\x00DEN\x00"
+_DENDROGRAM_PLACEHOLDER_SUFFIX = "\x00DEN\x00"
 
 # 数式内の . , は変換しない（小数点・引数区切りは LaTeX でそのまま使う）
 _MATH_OR_BLOCK_RE = re.compile(r"\$\$.*?\$\$|\$[^$]+?\$", re.DOTALL)
@@ -75,7 +108,9 @@ def _normalize_body_punctuation(text: str) -> str:
 
     def _normalize(seg: str) -> str:
         seg = seg.replace(",", "，").replace("、", "，")
-        return seg.replace(".", "．").replace("。", "．")
+        # URL・小数点・ページ番号等の単語間の . は変換しない（\w の間 or \w の後ろ）
+        seg = re.sub(r"\.(?!\w)", "．", seg).replace("。", "．")
+        return seg
 
     result: list[str] = []
     last_end = 0
@@ -126,6 +161,11 @@ class CharPlacement:
     math_bbox: tuple[float, float, float, float] | None = None  # (x, y, width_mm, height_mm)
     math_skip: bool = False  # True の文字はスキップ（先頭がまとめて描画済み）
     math_align: str = "center"  # "center"=ブロック中央寄せ / "baseline"=インライン本文ベース揃え
+    # True のとき render_math_handwritten（matplotlib 配置＋手書きグリフ差し替え）で描く。
+    # False のとき render_latex_to_strokes（数式画像→skeletonize）。math_source 必須。
+    math_handwrite: bool = False
+    # ブロック数式の罫線揃え（None 以外でレンダラが主分数線をこの罫線 y(mm) に乗せる）。
+    math_fraction_bar_y: float | None = None
 
 
 @dataclass
@@ -144,6 +184,10 @@ class ParsedDocument:
     table_captions: dict[int, str] = field(default_factory=dict)
     # global_line_idx → キャプションを表の上に置くか（True=上, False=下）。
     table_caption_above: dict[int, bool] = field(default_factory=dict)
+    # global_line_idx → パース済みブロック図（```blockdiagram ... ``` ブロックの起点行）。
+    diagram_blocks: dict[int, DiagramSpec] = field(default_factory=dict)
+    # global_line_idx → パース済みデンドログラム（```dendrogram ... ``` ブロックの起点行）。
+    dendrogram_blocks: dict[int, DendrogramSpec] = field(default_factory=dict)
     # 改ページ指示（"-----" 行）の global_line_idx 集合。以降を次ページへ送る。
     page_break_lines: set[int] = field(default_factory=set)
 
@@ -154,11 +198,19 @@ class Typesetter:
         page_config: PageConfig,
         font_size: float | None = None,
         augmenter: HandwritingAugmenter | None = None,
+        handwrite_math: bool = False,
+        page_break_before_h1: bool = False,
     ) -> None:
         self._config = page_config
         self._layout = PageLayout(page_config)
         self.font_size = font_size if font_size is not None else page_config.line_spacing * 0.9
         self._augmenter = augmenter
+        # True のとき構造式（分数/√/添字）も MathLayout 配置を本文と同じ手書き経路で
+        # 描く（matplotlib スケルトンを使わない）。グリフは _direct_stroke/KanjiVG、
+        # 分数線・根号は line_segment ストロークで描画する。
+        self.handwrite_math = handwrite_math
+        # True のとき level-1 見出し（# 章）ごとに改ページする（章を新しいページから開始）。
+        self._page_break_before_h1 = page_break_before_h1
 
     @property
     def augmenter(self) -> HandwritingAugmenter | None:
@@ -174,7 +226,9 @@ class Typesetter:
 
     def _char_advance(self, ch: str, is_heading: bool, line_font_size: float) -> float:
         if is_heading:
-            return line_font_size * effective_char_scale(ch) + line_font_size * _LETTER_SPACING_SCALE
+            return (
+                line_font_size * effective_char_scale(ch) + line_font_size * _LETTER_SPACING_SCALE
+            )
         return self._body_char_advance(ch)
 
     def _line_right_x(self, area: object, is_heading: bool, body_level: int) -> float:
@@ -190,10 +244,21 @@ class Typesetter:
         拡大され「でかすぎ」になる。インクの em 比で縮め本文 em と縮尺を揃える。
         幅 = 高 * aspect。層の逆依存（layout → ui）を避け遅延 import。
         """
-        from src.ui.math_skeletonize import formula_aspect, formula_ink_em
+        from src.ui.math_skeletonize import (
+            formula_aspect,
+            formula_ink_em,
+            handwrite_draw_width_mm,
+        )
 
         body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src)
         h_mm = formula_ink_em(body_src) * self.font_size
+        # 幅: 手書き経路(render_math_handwritten)は cap 基準 advance 幅で描くため、その実幅を
+        # 予約する（aspect×ink高だと上付き・分数で実幅より ~17% 狭く見積もり、表セル等から
+        # はみ出す）。手書き無効 or 抽出不可時は aspect 基準（skeletonize 経路の実幅）。
+        if self.handwrite_math:
+            hw = handwrite_draw_width_mm(body_src, self.font_size)
+            if hw is not None and hw > 0:
+                return hw, h_mm
         draw_w = h_mm * formula_aspect(body_src)
         return draw_w, h_mm
 
@@ -206,11 +271,45 @@ class Typesetter:
         elements = [e for e in elements if e.type != "tag"]
         if self._is_plain_math(elements):
             return sum(self._body_char_advance(ch) for ch in self._plain_math_text(elements))
+        # handwrite / skeletonize とも matplotlib 実描画幅（draw_w=h_mm*aspect）で予約する。
+        # 構造式は matplotlib の正しい配置に従って描くため、論理幅(_CHAR_WIDTH_RATIO 等幅)では
+        # 添字・上付き・分数の実幅とずれる。draw_w<=0（墨なし等）は論理幅へフォールバック。
         draw_w, _ = self._inline_math_draw_size(math_src)
         if draw_w > 0:
             return draw_w
         box = MathLayoutEngine.layout(elements, x=0.0, y=0.0, font_size=self.font_size)
         return box.width
+
+    @contextmanager
+    def _with_font_size(self, font_size: float):
+        """``self.font_size`` を一時的に差し替えて元に戻すコンテキスト。
+
+        ``_place_math`` / ``_inline_math_width`` 等は数式サイズを ``self.font_size`` に
+        紐づけて測る・描くため、表セル(font_size*scale)で同経路を流用する際に使う。
+        例外時も finally で必ず復元する。
+        """
+        saved = self.font_size
+        self.font_size = font_size
+        try:
+            yield
+        finally:
+            self.font_size = saved
+
+    def _cell_content_width(self, cell: str) -> float:
+        """表セルの実描画幅(mm)を ``self.font_size`` 基準で求める。
+
+        テキストは ``_body_char_advance`` の合計、インライン数式 ``$...$`` は
+        ``_inline_math_width`` で見積もり合算する。生 LaTeX 文字数で測ると数式入りセルが
+        縦罫線を越える/詰まるため、本文と同じ実描画幅で測る。列幅は呼び出し側で scale 後に
+        セル描画と同じ ``cell_fs`` へ縮むため、ここでは未スケールの ``self.font_size`` で測る。
+        """
+        total = 0.0
+        for seg_type, seg_content in _split_segments(cell):
+            if seg_type == "math":
+                total += self._inline_math_width(seg_content)
+                continue
+            total += sum(self._body_char_advance(ch) for ch in seg_content)
+        return total
 
     def _line_neutral_width(
         self,
@@ -328,6 +427,42 @@ class Typesetter:
                 line_idx += consumed
                 continue
 
+            if global_line_idx in doc.diagram_blocks:
+                spec = doc.diagram_blocks[global_line_idx]
+                consumed = self._place_diagram(
+                    spec, line_idx, line_positions, area, page_idx, current_page
+                )
+                if consumed == -1:
+                    pages.append(current_page)
+                    current_page = []
+                    page_idx += 1
+                    line_idx = 0
+                    consumed = self._place_diagram(
+                        spec, 0, line_positions, area, page_idx, current_page
+                    )
+                    if consumed == -1:
+                        consumed = 1  # 1ページに収まらない巨大図は無限ループ回避
+                line_idx += consumed
+                continue
+
+            if global_line_idx in doc.dendrogram_blocks:
+                spec = doc.dendrogram_blocks[global_line_idx]
+                consumed = self._place_dendrogram(
+                    spec, line_idx, line_positions, area, page_idx, current_page
+                )
+                if consumed == -1:
+                    pages.append(current_page)
+                    current_page = []
+                    page_idx += 1
+                    line_idx = 0
+                    consumed = self._place_dendrogram(
+                        spec, 0, line_positions, area, page_idx, current_page
+                    )
+                    if consumed == -1:
+                        consumed = 1  # 1ページに収まらない巨大図は無限ループ回避
+                line_idx += consumed
+                continue
+
             is_heading = global_line_idx in doc.heading_lines
             h_level = doc.heading_lines.get(global_line_idx, 0)
             body_level = doc.line_body_level.get(global_line_idx, 0)
@@ -402,6 +537,8 @@ class Typesetter:
         # パイプ表を検出して 1 プレースホルダ段落へ畳む（複数行表を後段で一括配置）。
         # キャプション "「: タイトル」行" は表の直前なら上、直後なら下に中央寄せする。
         stashed_tables: list[tuple[list[list[str]], str, bool]] = []
+        stashed_diagrams: list[DiagramSpec] = []
+        stashed_dendrograms: list[DendrogramSpec] = []
         collapsed: list[str] = []
 
         def _caption_text(s: str) -> str | None:
@@ -410,11 +547,18 @@ class Typesetter:
 
         ti = 0
         while ti < len(paragraphs):
-            # 上キャプション: 「: タイトル」行の直後が表
+            # 上キャプション: 「: タイトル」行の後（空行を挟んでも）が表
             cap_above = _caption_text(paragraphs[ti])
-            if cap_above is not None and detect_pipe_table(paragraphs, ti + 1) is not None:
-                rows, consumed = detect_pipe_table(paragraphs, ti + 1)
-                ti += 1 + consumed
+            if cap_above is not None:
+                cap_lookahead = ti + 1
+                while cap_lookahead < len(paragraphs) and paragraphs[cap_lookahead].strip() == "":
+                    cap_lookahead += 1
+                upper_tbl = detect_pipe_table(paragraphs, cap_lookahead)
+            else:
+                upper_tbl = None
+            if cap_above is not None and upper_tbl is not None:
+                rows, consumed = upper_tbl
+                ti = cap_lookahead + consumed
                 stashed_tables.append((rows, cap_above, True))
                 collapsed.append(
                     _TABLE_PLACEHOLDER_PREFIX
@@ -428,23 +572,65 @@ class Typesetter:
                 rows, consumed = tbl
                 ti += consumed
                 caption = ""
-                if ti < len(paragraphs):
-                    cap_below = _caption_text(paragraphs[ti])
+                # 表の後の空行を skip して下キャプション "（: タイトル）" を探す。
+                # paragraphs は 1 行ごとに分割されているため、空行が混在する。
+                lookahead = ti
+                while lookahead < len(paragraphs) and paragraphs[lookahead].strip() == "":
+                    lookahead += 1
+                if lookahead < len(paragraphs):
+                    cap_below = _caption_text(paragraphs[lookahead])
                     if cap_below is not None:
                         caption = cap_below
-                        ti += 1  # 下キャプション行も消費
-                stashed_tables.append((rows, caption, False))
+                        ti = lookahead + 1  # 空行＋下キャプション行をまとめて消費
+                # 学術慣例では表のタイトルは表の上に置く。`: タイトル` を表の前後
+                # どちらに書いても表キャプションは常に上へ配置する（図は下）。
+                stashed_tables.append((rows, caption, True))
                 collapsed.append(
                     _TABLE_PLACEHOLDER_PREFIX
                     + str(len(stashed_tables) - 1)
                     + _TABLE_PLACEHOLDER_SUFFIX
                 )
-            else:
-                collapsed.append(paragraphs[ti])
-                ti += 1
+                continue
+
+            dia = detect_blockdiagram(paragraphs, ti)
+            if dia is not None:
+                spec, consumed = dia
+                ti += consumed
+                stashed_diagrams.append(spec)
+                collapsed.append(
+                    _DIAGRAM_PLACEHOLDER_PREFIX
+                    + str(len(stashed_diagrams) - 1)
+                    + _DIAGRAM_PLACEHOLDER_SUFFIX
+                )
+                continue
+
+            dendro = detect_dendrogram(paragraphs, ti)
+            if dendro is not None:
+                dendro_spec, consumed = dendro
+                ti += consumed
+                stashed_dendrograms.append(dendro_spec)
+                collapsed.append(
+                    _DENDROGRAM_PLACEHOLDER_PREFIX
+                    + str(len(stashed_dendrograms) - 1)
+                    + _DENDROGRAM_PLACEHOLDER_SUFFIX
+                )
+                continue
+
+            collapsed.append(paragraphs[ti])
+            ti += 1
         paragraphs = collapsed
         table_placeholder_re = re.compile(
             re.escape(_TABLE_PLACEHOLDER_PREFIX) + r"(\d+)" + re.escape(_TABLE_PLACEHOLDER_SUFFIX)
+        )
+        diagram_placeholder_re = re.compile(
+            re.escape(_DIAGRAM_PLACEHOLDER_PREFIX)
+            + r"(\d+)"
+            + re.escape(_DIAGRAM_PLACEHOLDER_SUFFIX)
+        )
+        dendrogram_placeholder_re = re.compile(
+            re.escape(_DENDROGRAM_PLACEHOLDER_PREFIX)
+            + r"(\d+)"
+            + re.escape(_DENDROGRAM_PLACEHOLDER_SUFFIX)
         )
 
         lines: list[str] = []
@@ -454,6 +640,8 @@ class Typesetter:
         table_blocks: dict[int, list[list[str]]] = {}
         table_captions: dict[int, str] = {}
         table_caption_above: dict[int, bool] = {}
+        diagram_blocks: dict[int, DiagramSpec] = {}
+        dendrogram_blocks: dict[int, DendrogramSpec] = {}
         page_break_lines: set[int] = set()
         heading_lines: dict[int, int] = {}
         line_body_level: dict[int, int] = {}
@@ -479,6 +667,26 @@ class Typesetter:
                 lines.append("")
                 continue
 
+            # ブロック図プレースホルダ: 図ブロック起点行として登録
+            diagram_match = diagram_placeholder_re.fullmatch(para.strip())
+            if diagram_match is not None:
+                spec = stashed_diagrams[int(diagram_match.group(1))]
+                para_start_indices.add(len(lines))
+                diagram_blocks[len(lines)] = spec
+                line_body_level[len(lines)] = current_body_level
+                lines.append("")
+                continue
+
+            # デンドログラムプレースホルダ: 図ブロック起点行として登録
+            dendrogram_match = dendrogram_placeholder_re.fullmatch(para.strip())
+            if dendrogram_match is not None:
+                dendro_spec = stashed_dendrograms[int(dendrogram_match.group(1))]
+                para_start_indices.add(len(lines))
+                dendrogram_blocks[len(lines)] = dendro_spec
+                line_body_level[len(lines)] = current_body_level
+                lines.append("")
+                continue
+
             # プレースホルダ単独段落を先に処理: ブロック数式行として登録
             placeholder_match = placeholder_re.fullmatch(para.strip())
             if placeholder_match is not None:
@@ -488,6 +696,12 @@ class Typesetter:
                     block_math_lines[len(lines)] = math_src
                     line_body_level[len(lines)] = current_body_level
                     lines.append("")
+                continue
+
+            # markdown 段落区切りの空行は出力の空行（罫線1本）を消費しない。段落の切れ目は
+            # 次段落の字下げ(　)で示す日本語組版の流儀に従い、「意味のない改行」を排除する。
+            # 見出し前の余白は下の heading 分岐が1行だけ確保する（---/表/数式は上で処理済み）。
+            if para.strip() == "":
                 continue
 
             heading_level = 0
@@ -508,7 +722,16 @@ class Typesetter:
                 display_para = display_para[len(r"\noindent") + 1 :]
 
             if heading_level > 0:
-                if len(lines) > 0 and lines != [""]:
+                if (
+                    heading_level == 1
+                    and self._page_break_before_h1
+                    and len(lines) > 0
+                    and lines != [""]
+                ):
+                    # 章(level-1 見出し)ごとに改ページ。見出しを次ページ先頭へ送る。
+                    page_break_lines.add(len(lines))
+                    lines.append("")
+                elif len(lines) > 0 and lines != [""]:
                     lines.append("")
                 heading_lines[len(lines)] = heading_level
                 current_body_level = heading_level
@@ -569,6 +792,8 @@ class Typesetter:
             table_blocks=table_blocks,
             table_captions=table_captions,
             table_caption_above=table_caption_above,
+            diagram_blocks=diagram_blocks,
+            dendrogram_blocks=dendrogram_blocks,
             page_break_lines=page_break_lines,
         )
 
@@ -779,23 +1004,48 @@ class Typesetter:
         if n_rows == 0:
             return 1
         n_cols = max(len(r) for r in rows)
-        cap_rows = 1 if caption else 0
+        # キャプションが本文幅を超える場合は文字単位で折り返す（長文タイトルが
+        # 罫線をはみ出して読めなくなるのを防ぐ）。
+        cap_lines: list[str] = []
+        if caption:
+            cur = ""
+            cur_w = 0.0
+            for ch in caption:
+                ch_w = self._body_char_advance(ch)
+                if cur and cur_w + ch_w > area.width:
+                    cap_lines.append(cur)
+                    cur = ch
+                    cur_w = ch_w
+                else:
+                    cur += ch
+                    cur_w += ch_w
+            if cur:
+                cap_lines.append(cur)
+        cap_rows = len(cap_lines)
+        # 表の上下に1行ずつ空きを入れて窮屈感を解消（前テキスト/前表との詰まり、
+        # 次キャプション/次表との詰まりを防ぐ）。page 先頭は上余白なし。
+        margin_top = 0 if line_idx == 0 else 1
+        margin_bottom = 1
+        # 上キャプション時は追加で1行確保する。表の最上罫線は tbl_idx より 1 行上
+        # (line_positions[tbl_idx]+row_h) に描かれるため、キャプションと重ならせない。
+        extra_above = 1 if (caption_above and cap_rows > 0) else 0
         remaining = len(line_positions) - line_idx
-        if remaining < n_rows + cap_rows:
+        if remaining < margin_top + n_rows + cap_rows + extra_above + margin_bottom:
             return -1
 
-        # キャプションが上なら表は1行下から始まる
-        tbl_idx = line_idx + (1 if (caption and caption_above) else 0)
+        # キャプションが上なら表は cap_rows(+1) 行下から始まる
+        tbl_idx = line_idx + margin_top + (cap_rows + extra_above if caption_above else 0)
 
         fs = self.font_size
         pad = fs * 0.3
-        # 列幅: 各列セルの実文字送り(_body_char_advance)の最大 + 左右パディング。
-        # 文字数×fs だと半角(0.55倍)を過大・漢字(1.08倍)を過小に見積もり、配置(実送り)と
-        # ずれてセルが縦罫線を越える/過大空白になるため、配置と同じ実幅で算出する。
+        # 列幅: 各列セルの実描画幅（テキストは _body_char_advance の合計、インライン数式
+        # $...$ は _inline_math_width）の最大 + 左右パディング。文字数×fs だと半角(0.55倍)を
+        # 過大・漢字(1.08倍)を過小に見積もり、配置(実送り)とずれてセルが縦罫線を越える/過大
+        # 空白になるため、配置と同じ実幅で算出する。数式は生 LaTeX 文字数でなく実描画幅で測る。
         col_w: list[float] = []
         for c in range(n_cols):
             cell_adv = (
-                max(sum(self._body_char_advance(ch) for ch in rows[r][c]) for r in range(n_rows))
+                max(self._cell_content_width(rows[r][c]) for r in range(n_rows))
                 if n_rows > 0
                 else fs
             )
@@ -842,36 +1092,416 @@ class Typesetter:
             )
         # セル文字（左寄せ）。ベースライン=下罫線。_position_strokes が placement.y を
         # 帯下端として line_spacing 帯の中央へ glyph を置くため、セル帯の中央に収まる。
+        # セルは本文と同じ _split_segments でテキスト/インライン数式に分割し、数式は
+        # _place_math（handwrite_math に従い手書き差し替え/skeletonize）で描く。数式の
+        # サイズは self.font_size に紐づくため、セル描画中だけ font_size を cell_fs に
+        # 退避して描き、終了後に必ず復元する（_with_font_size 内で finally）。
         cell_fs = fs * scale
-        for r in range(n_rows):
-            baseline = line_positions[tbl_idx + r]
-            for c in range(n_cols):
-                text = rows[r][c]
-                cx = xs[c] + pad * scale
-                for ch in text:
+        with self._with_font_size(cell_fs):
+            for r in range(n_rows):
+                baseline = line_positions[tbl_idx + r]
+                for c in range(n_cols):
+                    cx = xs[c] + pad * scale
+                    for seg_type, seg_content in _split_segments(rows[r][c]):
+                        if seg_type == "math":
+                            cx = self._place_math(seg_content, cx, baseline, page_idx, output)
+                            continue
+                        for ch in seg_content:
+                            if ch != " ":
+                                output.append(
+                                    CharPlacement(
+                                        char=ch,
+                                        x=cx,
+                                        y=baseline,
+                                        font_size=cell_fs * effective_char_scale(ch),
+                                        page=page_idx,
+                                    )
+                                )
+                            cx += self._body_char_advance(ch)
+
+        # キャプション: 上(line_idx + margin_top)または下(表の次行)に表幅中央で配置。
+        # 折返した複数行は順に下へ並べる。
+        if cap_lines:
+            cap_start_idx = (line_idx + margin_top) if caption_above else tbl_idx + n_rows
+            table_center = (xs[0] + xs[-1]) / 2
+            for line_offset, line_text in enumerate(cap_lines):
+                cap_baseline = line_positions[cap_start_idx + line_offset]
+                line_w = sum(self._body_char_advance(ch) for ch in line_text)
+                cx = table_center - line_w / 2
+                for ch in line_text:
                     if ch != " ":
                         output.append(
                             CharPlacement(
-                                char=ch, x=cx, y=baseline, font_size=cell_fs, page=page_idx
+                                char=ch,
+                                x=cx,
+                                y=cap_baseline,
+                                font_size=fs * effective_char_scale(ch),
+                                page=page_idx,
                             )
                         )
-                    cx += self._body_char_advance(ch) * scale
+                    cx += self._body_char_advance(ch)
 
-        # キャプション: 上(line_idx)または下(表の次行)に表幅中央で配置
-        if caption:
-            cap_idx = line_idx if caption_above else tbl_idx + n_rows
-            cap_baseline = line_positions[cap_idx]
-            cap_w = sum(self._body_char_advance(ch) for ch in caption)
-            table_center = (xs[0] + xs[-1]) / 2
-            cx = table_center - cap_w / 2
-            for ch in caption:
+        return margin_top + n_rows + cap_rows + extra_above + margin_bottom
+
+    def _diagram_node_width(self, node: DiagramNode) -> float:
+        """ノード1つの未スケール幅(mm)。箱=ラベル幅+パディング、円=固定径、信号=ラベル幅。"""
+        row_h = self._config.line_spacing
+        if node.kind == "signal":
+            w = sum(self._body_char_advance(ch) for ch in node.label)
+            return max(self.font_size * 0.9, w)
+        if node.kind == "circle":
+            return row_h * 0.65
+        pad = self.font_size * 0.3
+        label_w = sum(self._body_char_advance(ch) for ch in node.label)
+        return max(row_h * 0.75, label_w + 2 * pad)
+
+    def _diagram_draw_label(
+        self,
+        label: str,
+        center_x: float,
+        baseline_y: float,
+        font_size: float,
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> None:
+        """ラベルをそのセルの中心 ``center_x`` を基準に左寄せ配置で描く（等幅近似の中央寄せ）。"""
+        with self._with_font_size(font_size):
+            total_w = sum(self._body_char_advance(ch) for ch in label)
+            cx = center_x - total_w / 2
+            for ch in label:
                 if ch != " ":
                     output.append(
-                        CharPlacement(char=ch, x=cx, y=cap_baseline, font_size=fs, page=page_idx)
+                        CharPlacement(
+                            char=ch,
+                            x=cx,
+                            y=baseline_y,
+                            font_size=self.font_size * effective_char_scale(ch),
+                            page=page_idx,
+                        )
                     )
                 cx += self._body_char_advance(ch)
 
-        return n_rows + cap_rows
+    def _place_diagram(
+        self,
+        spec: DiagramSpec,
+        line_idx: int,
+        line_positions: list[float],
+        area: object,
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> int:
+        """ブロック図（箱・円・信号ラベル＋矢印付き接続線）を配置する。
+
+        メインチェーンは1行帯に左→右で配置。帰還経路があれば下側に2行分の帯を
+        確保し、出力から下へ→左へ（帰還箱を通す）→Σ（自動挿入）の下入力へ戻す。
+        図が本文幅を超える場合は全体を一律縮小して収める（表と同じ方針）。残り行が
+        足りなければ -1（呼び出し側で次ページ送り）。
+
+        Returns:
+            消費した行数。残り行不足なら -1。
+        """
+        nodes = list(spec.nodes)
+        if not nodes:
+            return 1
+
+        has_feedback = spec.is_closed_loop
+        if has_feedback:
+            already_sum = len(nodes) >= 2 and nodes[1].kind == "circle" and nodes[1].is_sum
+            if not already_sum:
+                nodes = [nodes[0], DiagramNode(kind="circle", label="Σ", is_sum=True)] + nodes[1:]
+
+        fs = self.font_size
+        row_h = self._config.line_spacing
+        gap = fs * 1.0
+
+        widths = [self._diagram_node_width(n) for n in nodes]
+        n = len(nodes)
+        total_w = sum(widths) + max(0, n - 1) * gap
+        scale = min(1.0, area.width / total_w) if total_w > 0 else 1.0
+        widths = [w * scale for w in widths]
+        gap *= scale
+        cell_fs = fs * scale
+        box_h = row_h * 0.75
+        circle_d = row_h * 0.65
+
+        margin_top = 0 if line_idx == 0 else 1
+        feedback_rows = 2 if has_feedback else 0
+        margin_bottom = 1
+        required_rows = margin_top + 1 + feedback_rows + margin_bottom
+        remaining = len(line_positions) - line_idx
+        if remaining < required_rows:
+            return -1
+
+        chain_row = line_idx + margin_top
+        baseline_y = line_positions[chain_row]
+        chain_center_y = baseline_y + row_h / 2
+        box_y0 = baseline_y + (row_h - box_h) / 2
+        box_y1 = box_y0 + box_h
+
+        total_w_final = sum(widths) + max(0, n - 1) * gap
+        x0 = area.x + max(0.0, (area.width - total_w_final) / 2)
+
+        xs_left: list[float] = []
+        xs_right: list[float] = []
+        x = x0
+        for w in widths:
+            xs_left.append(x)
+            xs_right.append(x + w)
+            x += w + gap
+
+        def add_seg(seg: tuple[float, float, float, float]) -> None:
+            output.append(
+                CharPlacement(
+                    char="",
+                    x=seg[0],
+                    y=seg[1],
+                    font_size=cell_fs,
+                    page=page_idx,
+                    line_segment=seg,
+                )
+            )
+
+        def draw_arrow(x_tip: float, y_tip: float, angle: float) -> None:
+            for seg in _arrow_head(x_tip, y_tip, angle, size=cell_fs * 0.3):
+                add_seg(seg)
+
+        def draw_rect(x0_: float, y0_: float, x1_: float, y1_: float) -> None:
+            for seg in (
+                (x0_, y0_, x1_, y0_),
+                (x1_, y0_, x1_, y1_),
+                (x1_, y1_, x0_, y1_),
+                (x0_, y1_, x0_, y0_),
+            ):
+                add_seg(seg)
+
+        def draw_circle(cx: float, cy: float, d: float) -> None:
+            r = d / 2
+            n_sides = 16
+            pts = [
+                (
+                    cx + r * math.cos(2 * math.pi * i / n_sides),
+                    cy + r * math.sin(2 * math.pi * i / n_sides),
+                )
+                for i in range(n_sides)
+            ]
+            for i in range(n_sides):
+                px, py = pts[i]
+                qx, qy = pts[(i + 1) % n_sides]
+                add_seg((px, py, qx, qy))
+
+        sigma_idx: int | None = None
+        for i, node in enumerate(nodes):
+            cx = (xs_left[i] + xs_right[i]) / 2
+            if node.kind == "box":
+                draw_rect(xs_left[i], box_y0, xs_right[i], box_y1)
+            elif node.kind == "circle":
+                draw_circle(cx, chain_center_y, circle_d)
+                if node.is_sum:
+                    sigma_idx = i
+            self._diagram_draw_label(node.label, cx, baseline_y, cell_fs, page_idx, output)
+
+        for i in range(n - 1):
+            x_from, x_to = xs_right[i], xs_left[i + 1]
+            add_seg((x_from, chain_center_y, x_to, chain_center_y))
+            draw_arrow(x_to, chain_center_y, 0.0)
+
+        if has_feedback and sigma_idx is not None:
+            sigma_cx = (xs_left[sigma_idx] + xs_right[sigma_idx]) / 2
+            tap_x = xs_left[-1]
+            feedback_row = chain_row + 2
+            feedback_baseline_y = line_positions[feedback_row]
+            feedback_center_y = feedback_baseline_y + row_h / 2
+
+            fb_nodes = spec.feedback
+            fb_widths = [self._diagram_node_width(fn) * scale for fn in fb_nodes]
+            fb_gap = gap
+            span = tap_x - sigma_cx
+            n_fb = len(fb_nodes)
+            fb_total = sum(fb_widths) + max(0, n_fb - 1) * fb_gap
+            fb_centers: list[float] = []
+            if n_fb > 0:
+                start_x = tap_x - max(0.0, (span - fb_total) / 2)
+                x = start_x
+                for w in fb_widths:
+                    x -= w
+                    fb_centers.append(x + w / 2)
+                    x -= fb_gap
+
+            # 出力から分岐して下へ
+            add_seg((tap_x, chain_center_y, tap_x, feedback_center_y))
+
+            # 帰還箱を右→左へ順に配置し、間を接続線でつなぐ
+            prev_x = tap_x
+            for fn, fw, fcx in zip(fb_nodes, fb_widths, fb_centers):
+                add_seg((prev_x, feedback_center_y, fcx + fw / 2, feedback_center_y))
+                draw_arrow(fcx + fw / 2, feedback_center_y, math.pi)
+                fb_y0 = feedback_baseline_y + (row_h - box_h) / 2
+                fb_y1 = fb_y0 + box_h
+                draw_rect(fcx - fw / 2, fb_y0, fcx + fw / 2, fb_y1)
+                self._diagram_draw_label(
+                    fn.label, fcx, feedback_baseline_y, cell_fs, page_idx, output
+                )
+                prev_x = fcx - fw / 2
+
+            # 最後の帰還箱（または分岐点、箱が無ければ直接）からΣ列まで左へ
+            add_seg((prev_x, feedback_center_y, sigma_cx, feedback_center_y))
+
+            # Σの下入力へ立ち上がる
+            sigma_bottom_y = chain_center_y - circle_d / 2
+            add_seg((sigma_cx, feedback_center_y, sigma_cx, sigma_bottom_y))
+            draw_arrow(sigma_cx, sigma_bottom_y, math.pi / 2)
+
+            # 符号表示: Σ の左に "+"（Rからの入力）、下に "-"（帰還入力）
+            sign_fs = cell_fs * 0.7
+            output.append(
+                CharPlacement(
+                    char="+",
+                    x=xs_left[sigma_idx] - sign_fs * 0.9,
+                    y=chain_center_y + circle_d * 0.15,
+                    font_size=sign_fs,
+                    page=page_idx,
+                )
+            )
+            output.append(
+                CharPlacement(
+                    char="-",
+                    x=sigma_cx - sign_fs * 0.3,
+                    y=sigma_bottom_y - sign_fs * 2.2,
+                    font_size=sign_fs,
+                    page=page_idx,
+                )
+            )
+
+        return required_rows
+
+    @staticmethod
+    def _format_height(h: float) -> str:
+        """結合高さの目盛りラベル文字列（整数はそのまま、小数は末尾0を落とす）。"""
+        if h == int(h):
+            return str(int(h))
+        return f"{h:.2f}".rstrip("0").rstrip(".")
+
+    def _place_dendrogram(
+        self,
+        spec: DendrogramSpec,
+        line_idx: int,
+        line_positions: list[float],
+        area: object,
+        page_idx: int,
+        output: list[CharPlacement],
+    ) -> int:
+        """デンドログラム（葉ラベル＋U字ブラケット＋高さ軸）を配置する。
+
+        葉を x 軸上に ``order`` の順で等間隔配置し、各結合を子2つの x 位置から
+        高さ h まで垂直線を立ち上げてその上端を水平線で結ぶ U 字ブラケットで描く。
+        結合後クラスタの x は2子の中点。左側に高さ軸と目盛りラベルを置く。
+        図が本文幅を超える場合は葉の間隔を縮小して収める（ブロック図と同じ方針）。
+        残り行が足りなければ -1（呼び出し側で次ページ送り）。
+
+        Returns:
+            消費した行数。残り行不足なら -1。
+        """
+        order = list(spec.order)
+        if not order or not spec.merges:
+            return 1
+
+        fs = self.font_size
+        row_h = self._config.line_spacing
+        n = len(order)
+
+        # 縦方向: 高さ軸に body_rows 分、葉ラベルに1行を確保する。
+        body_rows = 4
+        margin_top = 0 if line_idx == 0 else 1
+        margin_bottom = 1
+        required_rows = margin_top + body_rows + 1 + margin_bottom
+        remaining = len(line_positions) - line_idx
+        if remaining < required_rows:
+            return -1
+
+        body_top_row = line_idx + margin_top
+        label_row = body_top_row + body_rows
+        label_baseline_y = line_positions[label_row]
+        axis_bottom_y = label_baseline_y + row_h * 0.5
+        axis_top_y = line_positions[body_top_row] + row_h
+
+        max_h = max(m.height for m in spec.merges)
+        unit_height = (axis_top_y - axis_bottom_y) / max_h if max_h > 0 else 1.0
+
+        def y_of(h: float) -> float:
+            return axis_bottom_y + h * unit_height
+
+        # 横方向: 図全体（軸＋目盛りラベル＋葉列）の自然幅を出し、本文幅を超える
+        # なら一様縮小、超えなければ本文幅の中央へ寄せる（表・ブロック図と同じ方針。
+        # 図幅が狭いまま左マージンに固定すると左に偏って見える）。
+        tick_label_reserve = fs * 1.8
+        leaf_offset = fs * 1.2
+        desired_gap = fs * 2.2
+        natural_w = tick_label_reserve + leaf_offset + max(0, n - 1) * desired_gap
+        scale = min(1.0, area.width / natural_w) if natural_w > 0 else 1.0
+        scaled_w = natural_w * scale
+        left_x = area.x + max(0.0, (area.width - scaled_w) / 2)
+        axis_x = left_x + tick_label_reserve * scale
+        leaf_start_x = axis_x + leaf_offset * scale
+        gap = desired_gap * scale
+        cell_fs = fs * scale
+        leaf_xs = [leaf_start_x + i * gap for i in range(n)]
+
+        def add_seg(seg: tuple[float, float, float, float]) -> None:
+            output.append(
+                CharPlacement(
+                    char="",
+                    x=seg[0],
+                    y=seg[1],
+                    font_size=cell_fs,
+                    page=page_idx,
+                    line_segment=seg,
+                )
+            )
+
+        # 葉ラベル配置＋クラスタの初期位置/高さ登録
+        cluster_x: dict[frozenset[str], float] = {}
+        cluster_h: dict[frozenset[str], float] = {}
+        for tok, x in zip(order, leaf_xs):
+            key = frozenset(tok)
+            cluster_x[key] = x
+            cluster_h[key] = 0.0
+            self._diagram_draw_label(tok, x, label_baseline_y, cell_fs, page_idx, output)
+
+        # 結合を順に処理し、U字ブラケットを描画
+        for merge in spec.merges:
+            x_left = cluster_x.get(merge.left)
+            x_right = cluster_x.get(merge.right)
+            if x_left is None or x_right is None:
+                continue
+            y_left = y_of(cluster_h.get(merge.left, 0.0))
+            y_right = y_of(cluster_h.get(merge.right, 0.0))
+            y_top = y_of(merge.height)
+            add_seg((x_left, y_left, x_left, y_top))
+            add_seg((x_right, y_right, x_right, y_top))
+            add_seg((x_left, y_top, x_right, y_top))
+            merged_key = merge.left | merge.right
+            cluster_x[merged_key] = (x_left + x_right) / 2
+            cluster_h[merged_key] = merge.height
+
+        # 高さ軸＋目盛り
+        add_seg((axis_x, axis_bottom_y, axis_x, axis_top_y))
+        tick_heights = sorted({0.0} | {m.height for m in spec.merges})
+        tick_len = fs * 0.4
+        tick_fs = cell_fs * 0.7
+        for h in tick_heights:
+            y = y_of(h)
+            add_seg((axis_x - tick_len, y, axis_x, y))
+            label = self._format_height(h)
+            self._diagram_draw_label(
+                label,
+                axis_x - tick_len - fs * 0.7,
+                y - tick_fs * 0.3,
+                tick_fs,
+                page_idx,
+                output,
+            )
+
+        return required_rows
 
     def _place_block_math(
         self,
@@ -891,7 +1521,16 @@ class Typesetter:
             消費した行数（>=2）。残り行数が足りない場合は -1（呼び出し側で次ページ送り）。
         """
         # 層の逆依存を避けるため遅延 import（layout → ui）
-        from src.ui.math_skeletonize import formula_draw_width_mm
+        from src.ui.math_skeletonize import (
+            MATH_BLOCK_CAP_RATIO,
+            detect_top_level_fraction_bar,
+            extract_math_layout,
+            formula_draw_width_mm,
+            handwrite_draw_width_mm,
+            promote_top_level_frac_to_dfrac,
+            ref_cap_height_pt,
+            split_math_for_width,
+        )
 
         elements = MathParser.parse(math_src)
         # 本体中心位置を tag 幅から独立させるため、tag と tag 周辺の空白テキストを除外する
@@ -899,9 +1538,77 @@ class Typesetter:
         body_elements = self._strip_tag_and_adjacent_spaces(elements)
         # 画像レンダラに渡すソースから \tag{} を除去（matplotlib は \tag 非対応）
         body_src = re.sub(r"\\tag\{[^}]*\}", "", math_src).strip()
+        # 手書き経路: トップレベル \frac を \dfrac に昇格。matplotlib mathtext は
+        # \frac を script style (≈0.7em) で描くため、横並び分数で文字が小さく見える
+        # (式(4)等)。\dfrac は display style で本文 em のまま描画するため subsize
+        # 累積が消える。入れ子 \frac (\sqrt 内等、深さ>0) はそのまま (\dfrac 化すると
+        # √屋根を突き抜ける)。
+        if self.handwrite_math:
+            body_src = promote_top_level_frac_to_dfrac(body_src)
+            # 隣接する分数（\frac{l}{d}\frac{v^2}{2g} 等）は間隔ゼロで並び
+            # 1つの分数に見えるため、間に thick space を挿入して分離する。
+            body_src = re.sub(r"\}\s*\\dfrac", r"}\\;\\dfrac", body_src)
 
         # \\ 改行でグループ分割。linebreak が無いときは 1 グループ＝従来挙動。
         groups = self._split_by_linebreak(body_elements)
+
+        # \dfrac 化しても本文幅を超える長い式は関係演算子・加減で分割（後方互換）。
+        # \\ 改行で既に多段の式は対象外（ユーザー意図の改行を尊重）。
+        if self.handwrite_math and len(groups) == 1 and (tag_elem is None or tag_elem.content):
+            segments = split_math_for_width(
+                body_src,
+                self.font_size,
+                area.width,
+                cap_ratio=MATH_BLOCK_CAP_RATIO,
+                force_split_multiple_fractions=False,
+            )
+            if len(segments) > 1:
+                # 各セグメントの required_rows を事前見積もりし、全部入らないなら
+                # 最初から次ページに送る（式が p3末尾と p4先頭に分かれるのを防ぐ）。
+                line_spacing_local = self._config.line_spacing
+                s_local = (self.font_size * MATH_BLOCK_CAP_RATIO) / ref_cap_height_pt()
+                total_rows = 0
+                for seg in segments:
+                    seg_layout = extract_math_layout(seg)
+                    if seg_layout is None:
+                        total_rows += 2
+                        continue
+                    bar_cy = detect_top_level_fraction_bar(seg_layout)
+                    if bar_cy is not None:
+                        num_h = (seg_layout.height - bar_cy) * s_local
+                        den_h = (bar_cy + seg_layout.depth) * s_local
+                        rows_above = max(1, math.ceil(num_h / line_spacing_local))
+                        rows_below = max(1, math.ceil(den_h / line_spacing_local))
+                        total_rows += rows_above + rows_below
+                    else:
+                        actual_h = (seg_layout.height + seg_layout.depth) * s_local
+                        total_rows += max(2, math.ceil(actual_h / line_spacing_local))
+                if total_rows > (len(line_positions) - line_idx):
+                    return -1
+
+                tag_suffix = f" \\tag{{{tag_elem.content.strip('()')}}}" if tag_elem else ""
+                consumed_total = 0
+                cur_line = line_idx
+                for i, seg in enumerate(segments):
+                    seg_src = seg + (tag_suffix if i == len(segments) - 1 else "")
+                    remaining = len(line_positions) - cur_line
+                    if remaining <= 0:
+                        return -1
+                    seg_consumed = self._place_block_math(
+                        seg_src, cur_line, line_positions, area, page_idx, output
+                    )
+                    if seg_consumed < 0:
+                        return -1
+                    consumed_total += seg_consumed
+                    cur_line += seg_consumed
+                return consumed_total
+
+        # グループごとの body_src: \\ で物理行に分割。matplotlib は \\ を解しないため
+        # 各グループの描画には対応する行のソースのみを渡す。
+        _body_lines = [s.strip() for s in re.split(r"\\\\", body_src)]
+        group_srcs = [
+            _body_lines[i] if i < len(_body_lines) else body_src for i in range(len(groups))
+        ]
 
         line_spacing = self._config.line_spacing
 
@@ -910,27 +1617,72 @@ class Typesetter:
             MathLayoutEngine.layout(g, x=0.0, y=0.0, font_size=self.font_size) for g in groups
         ]
 
-        if group_boxes:
-            # 多段時はグループ間隔として line_spacing を使う（ベースライン間隔）。
-            # 全体高さ = 先頭グループ ascent + 末尾グループ descent + (n-1)*line_spacing
-            total_height = (
-                group_boxes[0].ascent
-                + group_boxes[-1].descent
-                + line_spacing * (len(group_boxes) - 1)
-            )
+        # 手書きブロック数式は cap 比 MATH_BLOCK_CAP_RATIO で一回り大きく描く。レンダラと同一
+        # 縮尺 s_block で実描画高・実描画幅・主分数線位置を見積もり、確保行数と幅を一致させる。
+        # 罫線揃え（ruling_bar_y）はトップレベル分数を持つ単一グループ式のみ。
+        block_layout = None
+        s_block = 0.0
+        ruling_bar_y: float | None = None
+        if self.handwrite_math and len(groups) == 1:
+            block_layout = extract_math_layout(body_src)
+        if block_layout is not None and block_layout.width > 0:
+            s_block = (self.font_size * MATH_BLOCK_CAP_RATIO) / ref_cap_height_pt()
+            bar_cy_pt = detect_top_level_fraction_bar(block_layout)
+            if bar_cy_pt is not None:
+                # 罫線揃え: 分子=主分数線より上、分母=下。各帯を実高から行数で確保。
+                num_h = (block_layout.height - bar_cy_pt) * s_block
+                den_h = (bar_cy_pt + block_layout.depth) * s_block
+                rows_above = max(1, math.ceil(num_h / line_spacing))
+                rows_below = max(1, math.ceil(den_h / line_spacing))
+                required_rows = rows_above + rows_below
+                remaining = len(line_positions) - line_idx
+                if remaining < required_rows:
+                    return -1
+                # 分数線を「分子が前テキストの直下行に収まる」罫線に置く。rows_above 行ぶんの
+                # 分子は最上段(line_idx)の帯から始まるので、その下端罫線=line_idx+rows_above-1。
+                # （line_idx+rows_above にすると分子の上に1行空き、式が1行下がって見える）。
+                ruling_bar_y = line_positions[line_idx + rows_above - 1]
+                # 次行が分母に食い込まないようクリアランス確保。次行本文は罫線帯の中央に
+                # 置かれグリフ上端が直上の罫線付近まで立ち上がるため、次行帯の上端
+                # (= line_positions[line_idx+required_rows-1]) が分母下端(ruling_bar_y-den_h)
+                # 以下になるまで行を足す（remaining を超えるなら次行は次ページ送り＝衝突なし）。
+                den_bottom = ruling_bar_y - den_h
+                while required_rows < remaining and (
+                    line_positions[line_idx + required_rows - 1] > den_bottom + 1e-6
+                ):
+                    required_rows += 1
+            else:
+                # 分数なし/横並び等: 罫線揃えはせず、拡大サイズの実高から中央配置で確保。
+                # ceil ではなく round を使い「式が前ページに収まりそうなら 1 ページに収める」
+                # （1ページに式しか乗らない孤立配置を避ける。実高が罫線高の半分以下なら 1
+                # 行少なくしても式は中央に収まる）。
+                actual_h = (block_layout.height + block_layout.depth) * s_block
+                required_rows = max(2, round(actual_h / line_spacing))
+                remaining = len(line_positions) - line_idx
+                if remaining < required_rows:
+                    return -1
         else:
-            total_height = self.font_size
+            if group_boxes:
+                # 多段時はグループ間隔として line_spacing を使う（ベースライン間隔）。
+                # 全体高さ = 先頭グループ ascent + 末尾グループ descent + (n-1)*line_spacing
+                total_height = (
+                    group_boxes[0].ascent
+                    + group_boxes[-1].descent
+                    + line_spacing * (len(group_boxes) - 1)
+                )
+            else:
+                total_height = self.font_size
+            # 最低2行、それを超える高さなら必要な行数を ceil で確保
+            required_rows = max(2, math.ceil(total_height / line_spacing))
+            remaining = len(line_positions) - line_idx
+            if remaining < required_rows:
+                return -1
 
-        # 最低2行、それを超える高さなら必要な行数を ceil で確保
-        required_rows = max(2, math.ceil(total_height / line_spacing))
-
-        # ページ末尾チェック: 残り行数が足りなければ次ページ送りシグナル
-        remaining = len(line_positions) - line_idx
-        if remaining < required_rows:
-            return -1
-
-        # 確保した行範囲の垂直中央にグループ列の中心を置く
-        top_y = line_positions[line_idx]
+        # 確保した行範囲の垂直中央にグループ列の中心を置く。
+        # line_positions[i] は罫線 y ＝行 i の「下端」。帯の上端は先頭行の上の罫線
+        # (line_positions[line_idx] + line_spacing) なので、それを使わないと中心が
+        # 半行低くなる（小さい式が帯の下に張り付いて見える）。
+        top_y = line_positions[line_idx] + line_spacing
         bottom_y = line_positions[line_idx + required_rows - 1]
         center_y = (top_y + bottom_y) / 2
 
@@ -943,31 +1695,64 @@ class Typesetter:
             offset = (group_count - 1) / 2 * line_spacing - i * line_spacing
             baseline_y = center_y + offset
             last_baseline_y = baseline_y
-            # 中央寄せ・式番号位置は実描画幅(draw_w=g_h*aspect)基準にする。論理幅(g_box.width)
-            # では上付き等で実描画が右へずれ、中央からはみ出す。本文幅を超える長い式は縮小して収める。
+            # 中央寄せ・式番号位置は実描画幅(draw_w)基準にする。論理幅(g_box.width)では
+            # 上付き等で実描画が右へずれ中央からはみ出す。本文幅を超える長い式は縮小して収める。
+            # handwrite は cap 比 MATH_BLOCK_CAP_RATIO の実幅、skeletonize は aspect×g_h。
+            g_src = group_srcs[i]  # このグループだけの LaTeX（\\ 改行を含まない）
             g_h = g_box.ascent + g_box.descent
-            draw_w = formula_draw_width_mm(body_src, g_h)
+            if block_layout is not None and s_block > 0:
+                draw_w = handwrite_draw_width_mm(
+                    g_src, self.font_size, cap_ratio=MATH_BLOCK_CAP_RATIO
+                ) or formula_draw_width_mm(g_src, g_h)
+                g_h = (block_layout.height + block_layout.depth) * s_block
+            else:
+                draw_w = formula_draw_width_mm(g_src, g_h)
+            # ブロック数式は用紙全幅（-5mm余白）まで使えるよう拡張。本文幅(area.width)より
+            # 広い式も縮小せず、用紙中央に配置する。
+            paper_w = self._config.paper_size[0]
+            math_max_w = paper_w - 10.0  # 左右各5mmセーフティ
             scale = 1.0
-            if draw_w > area.width and draw_w > 0:
-                scale = area.width / draw_w
+            if draw_w > math_max_w and draw_w > 0:
+                scale = math_max_w / draw_w
                 g_h *= scale
-                draw_w = area.width
-            center_x = area.x + (area.width - draw_w) / 2
+                draw_w = math_max_w
+            # 用紙中央寄せ（本文幅を超えた場合も用紙基準で中央に置く）
+            center_x = (paper_w - draw_w) / 2
             placed = MathLayoutEngine.layout(
                 g_elems, x=center_x, y=baseline_y, font_size=self.font_size
             )
-            # render center 経路は bbox の (x0, w_mm, h_mm) を使う（w_mm を無視せず実描画幅で描く）
+            # render center 経路は bbox の (x0, w_mm, h_mm) を使う（w_mm を無視せず実描画幅で描く）。
+            # y0 は「実描画高 g_h を baseline_y 中心に置く」下端。renderer は bbox 中央へ
+            # 墨域を中央化するので、これで式の視覚中心が帯中央(baseline_y=center_y)に一致する。
             g_bbox = (
                 center_x,
-                baseline_y - placed.descent * scale,
+                baseline_y - g_h / 2,
                 draw_w,
                 g_h,
             )
-            self._convert_math_placements(placed.placements, page_idx, output, body_src, g_bbox)
+            self._convert_math_placements(
+                placed.placements,
+                page_idx,
+                output,
+                g_src,
+                g_bbox,
+                math_handwrite=self.handwrite_math,
+                math_fraction_bar_y=ruling_bar_y,
+            )
             last_body_right = center_x + draw_w
 
         if tag_elem is not None:
-            tag_y = last_baseline_y if group_boxes else center_y
+            # 罫線揃え時は式番号を分数線の高さ（式の視覚中心）に置く。
+            tag_y = ruling_bar_y if ruling_bar_y is not None else last_baseline_y
+            if not group_boxes:
+                tag_y = center_y
+            # tag_y は baseline でグリフはその上に立ち上がるため、そのままだと
+            # 式番号が式の視覚中心より半文字上に浮く。グリフ高の半分だけ下げて
+            # 番号の縦中心を式中心（罫線揃え時は分数線）に合わせる。
+            # 多段式（\\）はグループ自体がベースライン基準で並ぶため補正しない
+            # （最終行のベースラインに tag を揃える従来挙動を維持）。
+            if ruling_bar_y is not None or (block_layout is not None and group_count == 1):
+                tag_y -= self.font_size * 0.5
             tag_temp = MathLayoutEngine.layout([tag_elem], x=0, y=tag_y, font_size=self.font_size)
             # 式番号は数式本体の直後（1文字分あけて）に置く。紙右端を超える場合のみ右端へ。
             tag_x = last_body_right + self.font_size
@@ -1013,23 +1798,41 @@ class Typesetter:
         # 単純な変数列は本文と同じ手書き経路で描く（書体を本文に統一）。
         if self._is_plain_math(elements):
             cursor = x
-            # 本文文字と同様、空白も placement 化（描画なし）して文字列順を保つ。
+            # LaTeX math mode はスペースを無視する。本文経路でも空白は除外する。
+            # font_size は本文と同じく字種スケール（半角 0.74 等）を掛ける。掛けないと
+            # 数式中の数字・英字だけ em フルサイズで描かれ本文より大きく浮く。
             for ch in self._plain_math_text(elements):
+                if ch == " ":
+                    continue  # LaTeX math mode ignores spaces
                 output.append(
-                    CharPlacement(char=ch, x=cursor, y=y, font_size=self.font_size, page=page_idx)
+                    CharPlacement(
+                        char=ch,
+                        x=cursor,
+                        y=y,
+                        font_size=self.font_size * effective_char_scale(ch),
+                        page=page_idx,
+                    )
                 )
                 cursor += self._body_char_advance(ch)
             return cursor
-        box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
         # インライン: bbox[1] に本文ベースライン y を渡し、math_align="baseline" で
         # 数式のベースラインを本文行に揃える（中心配置のズレを根本解消）。
         # 高さ h_mm = ink_em*font_size（墨の em 比で本文と同縮尺。論理高だと小文字が
         # でかすぎる）。幅 draw_w = h_mm*aspect。カーソル前進・折り返し予約(_inline_math_width)
         # とも一致し、数式画像が予約枠からはみ出して右隣文字に重なるのを防ぐ。
+        # handwrite_math でも skeletonize でも同じ bbox/math_source 経路に乗せ、レンダラ側で
+        # math_handwrite フラグにより描画方式（手書き差し替え / 画像 skeleton）を切り替える。
         draw_w, h_mm = self._inline_math_draw_size(math_src)
         math_bbox = (x, y, draw_w, h_mm)
+        box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
         self._convert_math_placements(
-            box.placements, page_idx, output, math_src, math_bbox, math_align="baseline"
+            box.placements,
+            page_idx,
+            output,
+            math_src,
+            math_bbox,
+            math_align="baseline",
+            math_handwrite=self.handwrite_math,
         )
         # カーソル前進は実描画幅（_inline_math_width）に揃える。box.width(論理幅)では
         # 上付き等で実描画が右隣へ食い込む。bbox 幅も同じ draw_w にして三者を一致させる。
@@ -1043,11 +1846,16 @@ class Typesetter:
         math_source: str | None = None,
         math_bbox: tuple[float, float, float, float] | None = None,
         math_align: str = "center",
+        math_handwrite: bool = False,
+        math_fraction_bar_y: float | None = None,
     ) -> None:
         """MathPlacement リストを CharPlacement に変換して output に追加。
 
         math_source/math_bbox が指定されたとき、先頭の文字配置にセットし残りを
-        math_skip=True でマークする（skeletonize レンダラが一括描画するため）。
+        math_skip=True でマークする（レンダラが先頭 placement で式全体を一括描画する）。
+        math_handwrite=True のとき先頭 placement に同フラグを立て、レンダラは matplotlib
+        配置＋手書きグリフ差し替えで描く（False は数式画像→skeletonize）。
+        math_fraction_bar_y は罫線揃え（主分数線を乗せる罫線 y, mm）。先頭 placement に載せる。
         """
         first_placed = False
 
@@ -1059,6 +1867,8 @@ class Typesetter:
                     math_source=math_source,
                     math_bbox=math_bbox,
                     math_align=math_align,
+                    math_handwrite=math_handwrite,
+                    math_fraction_bar_y=math_fraction_bar_y,
                     **kwargs,  # type: ignore[arg-type]
                 )
             if math_source is not None:
@@ -1078,7 +1888,10 @@ class Typesetter:
                         line_segment=mp.line_segment,
                     )
                 )
-            elif len(mp.text) == 1 or mp.role == "operator":
+            elif len(mp.text) == 1 or (math_source is not None and mp.role == "operator"):
+                # 1文字、または skeletonize 経路の演算子(cos等)は1語placementのまま。
+                # 手書き経路(math_source is None)では複数文字演算子も下の else で
+                # 1文字ずつ分割しないとレンダラが多文字を1グリフ扱いして消える。
                 output.append(
                     make_cp(
                         char=mp.text,

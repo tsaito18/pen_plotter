@@ -280,8 +280,8 @@ class TestMathLineSegments:
         # 分数全体の幅とほぼ一致する水平線
         assert y1 == y2
         assert x2 > x1
-        # ベースライン y=20 に水平線が引かれる
-        assert abs(y1 - 20.0) < 0.5
+        # 分数線は数式軸(ベースライン y=20 のやや上 = y + font_size*0.32)に引かれる
+        assert abs(y1 - (20.0 + 8.0 * 0.32)) < 0.5
 
     def test_sqrt_emits_radical_segments(self):
         elements = MathParser.parse(r"\sqrt{x}")

@@ -11,6 +11,8 @@ from src.collector.data_format import StrokePoint, StrokeSample
 from src.collector.ipad_sync import (
     GUIDED_CHARS,
     StrokeCollectorApp,
+    _REPEAT_HEAVY_CHARS,
+    _REPEAT_HEAVY_TARGET,
     _TIER1_CHARS,
     select_next_char,
 )
@@ -119,8 +121,8 @@ class TestGuidedCollection:
         progress = app.get_progress()
         assert progress["total"] == len(GUIDED_CHARS)
         assert progress["completed"] == 0
-        # Tier1の0サンプル文字が最優先で選ばれる
-        assert progress["current_char"] in _TIER1_CHARS
+        # _REPEAT_HEAVY (分秒数字) の 0 サンプル文字が最優先で選ばれる
+        assert progress["current_char"] in _REPEAT_HEAVY_CHARS
         assert progress["samples_for_current"] == 0
         assert progress["target_samples"] == 3
         assert "tier" in progress
@@ -163,7 +165,7 @@ class TestGuidedCollection:
         assert "current_index" in data
         assert "samples_for_current" in data
         assert "target_samples" in data
-        assert data["current_char"] in _TIER1_CHARS
+        assert data["current_char"] in _REPEAT_HEAVY_CHARS
 
 
 class TestManagementAPI:
@@ -482,17 +484,25 @@ class TestManagementAPI:
 class TestSelectNextChar:
     """select_next_char の優先度ロジックテスト"""
 
-    def test_empty_counts_returns_tier1(self):
-        """サンプルなしではTier1文字が選ばれる"""
+    def test_empty_counts_returns_repeat_heavy(self):
+        """サンプルなしでは _REPEAT_HEAVY 文字（分秒数字）が最優先で選ばれる。"""
         result = select_next_char({}, target_samples=3, seed=42)
-        assert result in _TIER1_CHARS
+        assert result in _REPEAT_HEAVY_CHARS
+
+    def test_repeat_heavy_before_tier1(self):
+        """_REPEAT_HEAVY は Tier1 より優先される（表で同字反復の機械感を回避するため）。"""
+        # _REPEAT_HEAVY を全て1サンプルにし、Tier1 を0サンプルにする
+        counts = {c: 1 for c in GUIDED_CHARS if c in _REPEAT_HEAVY_CHARS}
+        result = select_next_char(counts, target_samples=3, seed=42)
+        # _REPEAT_HEAVY の1サンプル文字が、Tier1 の0サンプル文字より優先される
+        assert result in _REPEAT_HEAVY_CHARS
 
     def test_tier1_before_tier2(self):
-        """Tier1がTier2より優先される（サンプル数が多くても）"""
-        # Tier1文字を全て1サンプルにし、Tier2/3を0サンプルにする
-        counts = {c: 1 for c in GUIDED_CHARS if c in _TIER1_CHARS}
+        """Tier1がTier2より優先される（_REPEAT_HEAVY 達成済みのとき）"""
+        # _REPEAT_HEAVY を target 達成、Tier1 を 1 サンプル、Tier2/3 を 0 サンプル
+        counts = {c: _REPEAT_HEAVY_TARGET for c in _REPEAT_HEAVY_CHARS}
+        counts.update({c: 1 for c in GUIDED_CHARS if c in _TIER1_CHARS})
         result = select_next_char(counts, target_samples=3, seed=42)
-        # Tier1の1サンプル文字が、Tier2/3の0サンプル文字より優先される
         assert result in _TIER1_CHARS
 
     def test_zero_samples_before_one_sample(self):
@@ -504,10 +514,20 @@ class TestSelectNextChar:
         assert counts.get(result, 0) == 0
 
     def test_all_completed_returns_none(self):
-        """全文字が目標サンプル数に達したらNone"""
-        counts = {c: 3 for c in GUIDED_CHARS}
+        """全文字が目標サンプル数に達したらNone。_REPEAT_HEAVY は _REPEAT_HEAVY_TARGET。"""
+        counts = {
+            c: (_REPEAT_HEAVY_TARGET if c in _REPEAT_HEAVY_CHARS else 3) for c in GUIDED_CHARS
+        }
         result = select_next_char(counts, target_samples=3)
         assert result is None
+
+    def test_repeat_heavy_target_exceeds_base(self):
+        """_REPEAT_HEAVY 文字は base_target=3 でも _REPEAT_HEAVY_TARGET まで集めるので
+        3 サンプルだとまだ収集対象（None にならない）。"""
+        counts = {c: 3 for c in GUIDED_CHARS}
+        result = select_next_char(counts, target_samples=3)
+        assert result is not None
+        assert result in _REPEAT_HEAVY_CHARS
 
     def test_deterministic_with_seed(self):
         """同じseedで同じ結果"""

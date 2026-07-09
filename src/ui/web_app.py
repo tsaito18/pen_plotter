@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
+import os
 from collections.abc import Callable
+from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -68,6 +71,7 @@ class PlotterPipeline:
         skip_non_japanese: bool = False,
         seed: int | None = None,
         plot_page_numbers: bool = True,
+        page_break_before_h1: bool = False,
     ) -> None:
         self._connection_strength = connection_strength
         self._plot_page_numbers = bool(plot_page_numbers)
@@ -93,6 +97,10 @@ class PlotterPipeline:
             # seed 指定時は augmenter の乱数を固定し、同一テキストで再現可能な
             # レイアウト揺らぎを得る（A/B目視比較の定点観測用）
             augmenter=HandwritingAugmenter(_scaled_augment_config(messiness), seed=seed),
+            page_break_before_h1=page_break_before_h1,
+            # 添字・分数・√ を含む数式もユーザー筆跡グリフで描く（印刷体の混在防止）。
+            # 字形が無い記号は renderer 側で matplotlib skeleton にフォールバックする。
+            handwrite_math=True,
         )
         self._generator = GCodeGenerator(self._plotter_config)
 
@@ -179,9 +187,6 @@ class PlotterPipeline:
 
     def _apply_stroke_variation(self, strokes: list[Stroke]) -> list[Stroke]:
         return self._stroke_renderer._apply_stroke_variation(strokes)
-
-    def _math_symbol_strokes(self, char: str) -> list[Stroke] | None:
-        return self._stroke_renderer._math_symbol_strokes(char)
 
     def _simple_punct_strokes(self, char: str) -> list[Stroke] | None:
         return self._stroke_renderer._simple_punct_strokes(char)
@@ -484,7 +489,14 @@ class PlotterPipeline:
         text: str,
         save_path: str | Path,
         progress_callback: Callable[[float, str], None] | None = None,
+        only_pages: set[int] | None = None,
     ) -> list[Path]:
+        """\u30c6\u30ad\u30b9\u30c8\u3092\u30d7\u30ec\u30d3\u30e5\u30fc PNG \u306b\u30ec\u30f3\u30c0\u3059\u308b\u3002
+
+        only_pages \u6307\u5b9a\u6642\u306f\u305d\u306e\u30da\u30fc\u30b8\u756a\u53f7\uff081\u59cb\u307e\u308a\uff09\u3060\u3051\u3092\u63cf\u753b\u3057\u3001\u4ed6\u30da\u30fc\u30b8\u306e
+        \u30b9\u30c8\u30ed\u30fc\u30af\u751f\u6210\u30fb\u63cf\u753b\u3092\u30b9\u30ad\u30c3\u30d7\u3059\u308b\uff08MCP \u306a\u3069\u4e00\u90e8\u30da\u30fc\u30b8\u3060\u3051\u6b32\u3057\u3044\u547c\u3073\u51fa\u3057\u3067
+        \u5168\u30da\u30fc\u30b8\u63cf\u753b\u306b\u3088\u308b\u30bf\u30a4\u30e0\u30a2\u30a6\u30c8\u3092\u907f\u3051\u308b\uff09\u3002\u7d44\u7248\uff08\u30da\u30fc\u30b8\u5206\u5272\uff09\u306f\u5168\u4f53\u3092\u884c\u3046\u3002
+        """
         save_path = Path(save_path)
 
         if progress_callback:
@@ -506,43 +518,85 @@ class PlotterPipeline:
         stem = save_path.stem
         suffix = save_path.suffix
         parent = save_path.parent
-        result: list[Path] = []
+        all_paths: list[Path] = [
+            save_path if n_pages == 1 else parent / f"{stem}_p{i}{suffix}"
+            for i in range(1, n_pages + 1)
+        ]
+        # only_pages 指定時は該当ページのみ描画（他はスキップ）。返すのも描画分のみ。
+        render_set = (
+            {i for i in only_pages if 1 <= i <= n_pages} if only_pages is not None else None
+        )
+        if render_set is not None and not render_set:
+            # 範囲外指定のみ → 描くものなし
+            if progress_callback:
+                progress_callback(1.0, "完了")
+            return []
+        result: list[Path] = [
+            all_paths[i - 1] for i in range(1, n_pages + 1) if render_set is None or i in render_set
+        ]
 
-        for i, page_placements in enumerate(pages, start=1):
-            page_base = (i - 1) / n_pages
-            page_span = 1.0 / n_pages
+        from src.ui.preview_renderer import render_page_worker
 
-            def _page_stroke_progress(
-                frac: float, desc: str, _base=page_base, _span=page_span
-            ) -> None:
+        report_bg_path = self._REPORT_PAPER_BG or self._preview_renderer._report_bg_path
+        max_render_workers = min(4, os.cpu_count() or 1)
+
+        # 描画（matplotlib）はGILバウンドでスレッド並列の恩恵が薄いためプロセス並列にし、
+        # 親プロセス（ストローク生成: ML/CUDA・numpy後処理）とは別プロセスで実行する。
+        # start method は "fork" を明示指定（Python 3.14 のデフォルト "forkserver" は
+        # このサンドボックス環境で forkserver プロセスとの接続に失敗するため）。
+        mp_context = multiprocessing.get_context("fork")
+        with ProcessPoolExecutor(
+            max_workers=max_render_workers, mp_context=mp_context
+        ) as render_executor:
+            render_futures: list[Future[None]] = []
+
+            for i, page_placements in enumerate(pages, start=1):
+                if render_set is not None and i not in render_set:
+                    continue  # 要求外ページはストローク生成・描画ともスキップ
+                page_base = (i - 1) / n_pages
+                page_span = 1.0 / n_pages
+
+                def _page_stroke_progress(
+                    frac: float, desc: str, _base=page_base, _span=page_span
+                ) -> None:
+                    if progress_callback:
+                        progress_callback(_base + frac * _span * 0.8, desc)
+
+                page_path = all_paths[i - 1]
+                strokes, finishes = self.placements_to_strokes_with_finishes(
+                    page_placements, progress_callback=_page_stroke_progress
+                )
                 if progress_callback:
-                    progress_callback(_base + frac * _span * 0.8, desc)
+                    progress_callback(
+                        page_base + page_span * 0.85,
+                        f"ストローク最適化中 ({i}/{n_pages})...",
+                    )
+                optimized, optimized_finishes = optimize_stroke_order_with_finishes(
+                    strokes, finishes
+                )
+                page_num_strokes = self._page_number_strokes_for(i)
+                render_futures.append(
+                    render_executor.submit(
+                        render_page_worker,
+                        optimized,
+                        optimized_finishes,
+                        ruled_lines,
+                        page_path,
+                        i,
+                        page_num_strokes,
+                        self._plotter_config,
+                        self._page_config,
+                        report_bg_path,
+                    )
+                )
+                if progress_callback:
+                    progress_callback(
+                        page_base + page_span,
+                        f"プレビュー描画中 ({i}/{n_pages})...",
+                    )
 
-            page_path = save_path if n_pages == 1 else parent / f"{stem}_p{i}{suffix}"
-            strokes, finishes = self.placements_to_strokes_with_finishes(
-                page_placements, progress_callback=_page_stroke_progress
-            )
-            if progress_callback:
-                progress_callback(
-                    page_base + page_span * 0.85,
-                    f"ストローク最適化中 ({i}/{n_pages})...",
-                )
-            optimized, optimized_finishes = optimize_stroke_order_with_finishes(strokes, finishes)
-            if progress_callback:
-                progress_callback(
-                    page_base + page_span * 0.9,
-                    f"プレビュー描画中 ({i}/{n_pages})...",
-                )
-            page_num_strokes = self._page_number_strokes_for(i)
-            self._preview_with_ruled_lines(
-                optimized,
-                ruled_lines,
-                page_path,
-                page_number=i,
-                page_number_strokes=page_num_strokes,
-                finishes=optimized_finishes,
-            )
-            result.append(page_path)
+            for future in render_futures:
+                future.result()
 
         if progress_callback:
             progress_callback(1.0, "完了")
@@ -699,5 +753,6 @@ def build_pipeline(
             page_config,
             font_size=settings.font_size,
             augmenter=pipeline._typesetter.augmenter,
+            handwrite_math=True,
         )
     return pipeline

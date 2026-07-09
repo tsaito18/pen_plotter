@@ -656,6 +656,28 @@ class DeformationFinetuner(BaseFinetuner):
                 hidden_dim=cfg.get("hidden_dim", 64),
                 dropout=cfg.get("dropout", 0.0),
             )
+        elif self.deformer_type == "transformer":
+            from src.model.stroke_deformer import TransformerDeformer
+
+            self.deformer = TransformerDeformer(
+                style_dim=cfg.get("style_dim", 128),
+                d_model=cfg.get("d_model", 64),
+                nhead=cfg.get("nhead", 4),
+                num_self_attn_layers=cfg.get("num_self_attn_layers", 2),
+                ff_dim=cfg.get("ff_dim", 128),
+                dropout=cfg.get("dropout", 0.0),
+            )
+        elif self.deformer_type == "twostage":
+            from src.model.stroke_deformer import TwoStageDeformer
+
+            self.deformer = TwoStageDeformer(
+                style_dim=cfg.get("style_dim", 128),
+                d_model=cfg.get("d_model", 64),
+                nhead=cfg.get("nhead", 4),
+                num_self_attn_layers=cfg.get("num_self_attn_layers", 2),
+                ff_dim=cfg.get("ff_dim", 128),
+                dropout=cfg.get("dropout", 0.0),
+            )
         else:
             self.deformer = StrokeDeformer(
                 style_dim=cfg.get("style_dim", 128),

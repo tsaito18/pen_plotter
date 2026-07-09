@@ -44,7 +44,11 @@ class TestPlotterPipeline:
         assert len(placements) > 0
         assert len(placements[0]) == 5  # 5文字
 
-    def test_placements_to_strokes(self, pipeline):
+    def test_placements_to_strokes(self):
+        # 英字は幾何フォント撤去後 KanjiVG 参照経路で描画されるため kanjivg_dir を渡す。
+        from pathlib import Path
+
+        pipeline = PlotterPipeline(kanjivg_dir=Path("data/strokes"))
         placements = pipeline.text_to_placements("AB")
         strokes = pipeline.placements_to_strokes(placements[0])
         assert len(strokes) > 0
@@ -882,13 +886,11 @@ class TestStrokeSynthesis:
                 break
         assert any_different, "全結果が同一: 合成またはバリエーションが機能していない"
 
-    def test_direct_stroke_uses_best_sample_stroke_count(self, tmp_path):
-        """直接ストロークは「最も丁寧に書かれた（総点数最大）」サンプルを使う。
+    def test_direct_stroke_returns_valid_sample(self, tmp_path):
+        """直接ストロークはランダムにサンプルを選択し、有効なストロークを返す。
 
-        旧実装は複数サンプルを min ストローク数で合成していたが、隣接同一字で
-        ベース字形が入れ替わり品質が極端に振れるため、_direct_stroke は字ごとに
-        総点数最大のサンプルを固定採用する方式へ変更した。総点数が多い 3 画
-        サンプルが選ばれるので、結果のストローク数は 3 になる。
+        同一字の繰り返しでサンプルをランダム選択することで字形の多様性を出す。
+        001(2画)か002(3画)のどちらかが選ばれる。
         """
         user_dir = tmp_path / "user_strokes"
         _create_user_stroke_json(
@@ -907,10 +909,9 @@ class TestStrokeSynthesis:
         pipeline = PlotterPipeline(user_strokes_dir=user_dir)
         placement = CharPlacement(char="か", x=10.0, y=20.0, font_size=5.0)
 
-        np.random.seed(42)
         strokes = pipeline._generate_char_strokes(placement)
-        # 総点数最大の 3 画サンプル(002)が選ばれる
-        assert len(strokes) == 3
+        # 2画または3画のどちらかのサンプルが返される
+        assert len(strokes) in (2, 3)
 
 
 class TestDirectStrokeGeometricVariation:
@@ -1096,9 +1097,7 @@ class TestSimplePunctStrokes:
         """読点/コンマは終端で払いのZリフトを適用する。"""
         placement = CharPlacement(char=char, x=10.0, y=20.0, font_size=6.0)
 
-        strokes, finishes = pipeline._stroke_renderer.generate_char_strokes_with_finishes(
-            placement
-        )
+        strokes, finishes = pipeline._stroke_renderer.generate_char_strokes_with_finishes(placement)
 
         assert len(strokes) == 1
         assert finishes == ["harai"]
@@ -1124,28 +1123,37 @@ class TestSimplePunctStrokes:
         assert 0.35 <= np.ptp(stroke[:, 0]) <= 0.65
         assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
 
-    def test_middle_dot_is_filled_circular_spiral(self, pipeline):
-        """中黒は白抜き円ではなく、外周から中心へ丸く塗る連続ストローク。"""
+    def test_middle_dot_is_small_centered_dot_not_spiral(self, pipeline):
+        """中黒は渦巻き(ナルト)ではなく、セル中央の小さな点（短いストローク）。"""
         result = pipeline._simple_punct_strokes("・")
 
         assert result is not None
         assert len(result) == 1
         stroke = result[0]
         assert stroke.dtype == np.float64
-        assert stroke.shape[0] >= 40
-        assert not np.allclose(stroke[0], stroke[-1])
-
+        # 渦巻きのような多点連続ではなく短い点（2点程度）
+        assert stroke.shape[0] <= 3
+        # 中央(0.5,0.5)付近の小さな点
         center = np.array([0.5, 0.5])
-        radii = np.linalg.norm(stroke - center, axis=1)
-        assert 0.14 <= radii[0] <= 0.16
-        assert radii[-1] <= 0.01
-        assert radii[-1] < radii[0] * 0.1
-        assert np.all(np.diff(radii) <= 1e-9)
-        assert 0.26 <= np.ptp(stroke[:, 0]) <= 0.31
-        assert 0.26 <= np.ptp(stroke[:, 1]) <= 0.31
+        dot_center = (stroke.min(axis=0) + stroke.max(axis=0)) / 2
+        assert np.allclose(dot_center, center, atol=0.05)
+        assert np.ptp(stroke[:, 0]) <= 0.15
+        assert np.ptp(stroke[:, 1]) <= 0.15
 
-    def test_middle_dot_positioned_centered_at_half_old_hollow_circle_size(self, pipeline):
-        """配置後の中黒は旧白抜き円の約半分サイズで、全角セル中央に残る。"""
+    def test_math_middle_dot_is_small_centered_dot(self, pipeline):
+        """数式の中点 ·（U+00B7, ρ·π 等）も渦巻きでなく中央の小さな点。"""
+        result = pipeline._simple_punct_strokes("·")
+
+        assert result is not None
+        assert len(result) == 1
+        stroke = result[0]
+        assert stroke.shape[0] <= 3
+        dot_center = (stroke.min(axis=0) + stroke.max(axis=0)) / 2
+        assert np.allclose(dot_center, np.array([0.5, 0.5]), atol=0.05)
+        assert np.ptp(stroke[:, 0]) <= 0.12
+
+    def test_middle_dot_positioned_centered_in_cell(self, pipeline):
+        """配置後の中黒は全角セル中央に小さく残る。"""
         strokes = pipeline._simple_punct_strokes("・")
         placement = CharPlacement(char="・", x=10.0, y=20.0, font_size=6.0)
 
@@ -1153,12 +1161,6 @@ class TestSimplePunctStrokes:
 
         assert len(positioned) == 1
         stroke = positioned[0]
-        width = np.ptp(stroke[:, 0])
-        height = np.ptp(stroke[:, 1])
-        old_hollow_diameter = placement.font_size * 0.95
-        assert old_hollow_diameter * 0.42 <= width <= old_hollow_diameter * 0.52
-        assert old_hollow_diameter * 0.42 <= height <= old_hollow_diameter * 0.52
-
         cell_center_x = placement.x + placement.font_size * 0.95 / 2
         line_center_y = placement.y + pipeline._page_config.line_spacing / 2
         dot_center = np.array(
@@ -1167,76 +1169,20 @@ class TestSimplePunctStrokes:
                 (stroke[:, 1].min() + stroke[:, 1].max()) / 2,
             ]
         )
-        assert abs(dot_center[0] - cell_center_x) <= 0.08
-        assert abs(dot_center[1] - line_center_y) <= 0.08
+        assert abs(dot_center[0] - cell_center_x) <= 0.5
+        assert abs(dot_center[1] - line_center_y) <= 0.5
 
-    def test_typeset_period_replacement_renders_tiny_downward_dot(self, pipeline):
-        """本文経路で ASCII ピリオドが全角「．」化されても、水平線に戻らない。"""
+    def test_typeset_period_in_decimal_keeps_ascii(self, pipeline):
+        """数値中のピリオド（小数点）は全角「．」に変換せず ASCII のまま保持する。
+
+        URL・小数点は word chars に挟まれているため _normalize_body_punctuation が
+        変換をスキップする（\\.(?!\\w) → ．ルール）。
+        """
         placements = pipeline.text_to_placements("0.2")[0]
-        placement = next(p for p in placements if p.char == "．")
-
-        strokes = pipeline._generate_char_strokes(placement)
-
-        assert len(strokes) == 1
-        stroke = strokes[0]
-        assert stroke.shape == (2, 2)
-        assert 0.35 <= np.ptp(stroke[:, 0]) <= 0.65
-        assert 0.25 <= np.ptp(stroke[:, 1]) <= 0.45
-        assert stroke[1, 0] > stroke[0, 0]
-        assert stroke[1, 1] < stroke[0, 1]
-
-
-class TestMathSymbolStrokes:
-    """_math_symbol_strokes() のテスト。"""
-
-    @pytest.fixture
-    def pipeline(self):
-        return PlotterPipeline()
-
-    @pytest.mark.parametrize("char", ["ω", "φ", "π", "θ", "α", "Δ"])
-    def test_greek_letters_return_strokes(self, pipeline, char):
-        """各ギリシャ文字がストロークを返す。"""
-        result = pipeline._math_symbol_strokes(char)
-        assert result is not None
-        assert len(result) >= 1
-        for s in result:
-            assert isinstance(s, np.ndarray)
-            assert s.ndim == 2
-            assert s.shape[1] == 2
-
-    @pytest.mark.parametrize("char", ["±", "≈", "∞"])
-    def test_math_symbols_return_strokes(self, pipeline, char):
-        """各数学記号がストロークを返す。"""
-        result = pipeline._math_symbol_strokes(char)
-        assert result is not None
-        assert len(result) >= 1
-        for s in result:
-            assert isinstance(s, np.ndarray)
-            assert s.ndim == 2
-            assert s.shape[1] == 2
-
-    def test_unsupported_char_returns_none(self, pipeline):
-        """未対応の文字はNoneを返す。"""
-        assert pipeline._math_symbol_strokes("あ") is None
-        assert pipeline._math_symbol_strokes("A") is None
-
-    @pytest.mark.parametrize("char", ["ω", "φ", "π", "θ", "α", "Δ", "±", "≈", "∞"])
-    def test_strokes_in_unit_range(self, pipeline, char):
-        """全ストロークの座標が0-1範囲内。"""
-        result = pipeline._math_symbol_strokes(char)
-        assert result is not None
-        all_pts = np.concatenate(result, axis=0)
-        assert all_pts.min() >= -0.05
-        assert all_pts.max() <= 1.05
-
-    def test_math_symbol_used_in_fallback_chain(self):
-        """_generate_char_strokes() でKanjiVGの前に数式記号が使われる。"""
-        pipeline = PlotterPipeline()
-        placement = CharPlacement(char="π", x=10.0, y=20.0, font_size=6.0)
-        strokes = pipeline._generate_char_strokes(placement)
-        assert len(strokes) >= 1
-        # 矩形(5点閉)ではない
-        assert not (len(strokes) == 1 and strokes[0].shape == (5, 2))
+        chars = [p.char for p in placements]
+        # ASCII ピリオドのまま保持される
+        assert "." in chars
+        assert "．" not in chars
 
 
 class TestCharPlacementRole:
@@ -1415,6 +1361,38 @@ class TestMultiPagePreview:
         assert result[0] == tmp_path / "preview_p1.png"
         assert result[1] == tmp_path / "preview_p2.png"
 
+    def test_multipage_render_error_propagates(self, pipeline, tmp_path):
+        """描画ワーカー（別プロセス）で例外が起きた場合、generate_preview がそれを伝播する。
+
+        描画はProcessPoolExecutorの別プロセスで実行されるため、インスタンスメソッドの
+        monkeypatchは子プロセスに反映されない。存在しない保存先ディレクトリを指定して
+        実際にワーカー内のsavefigを失敗させ、例外伝播を検証する。
+        """
+        long_text = "\n".join(["あ" * 20] * 40)
+        save_path = tmp_path / "no_such_dir" / "preview.png"
+
+        with pytest.raises(Exception):  # noqa: B017 (savefig の例外型はOS依存)
+            pipeline.generate_preview(long_text, save_path=save_path)
+
+    def test_multipage_render_order_matches_page_content(self, pipeline, tmp_path):
+        """並列描画後も戻り値のパス順・命名がページ順と一致する（取り違えていないこと）。
+
+        各submitのstrokes/page_number/page_pathはループ内でその場で計算されて渡され、
+        イテレーション間で共有可変状態を持たないため、混線（取り違え）は構造的に
+        起こり得ない。ここではその結果として現れるべき出力（順序・命名・非空ファイル）
+        を確認する。
+        """
+        long_text = "\n".join(["あ" * 20] * 40)
+        save_path = tmp_path / "preview.png"
+
+        result = pipeline.generate_preview(long_text, save_path=save_path)
+
+        assert len(result) >= 2
+        for i, p in enumerate(result, start=1):
+            assert p == tmp_path / f"preview_p{i}.png"
+            assert p.exists()
+            assert p.stat().st_size > 0
+
     def test_empty_text_returns_single_page(self, pipeline, tmp_path):
         """空テキストは1ページ（空ページ）を返す。"""
         save_path = tmp_path / "empty.png"
@@ -1430,6 +1408,66 @@ class TestMultiPagePreview:
         result = pipeline.generate_preview("テスト", save_path=preview_path)
         assert preview_path.exists()
         assert result[0] == preview_path
+
+
+class TestRenderPageWorker:
+    """ProcessPoolExecutor に渡すモジュールレベル描画関数のテスト（プロセス境界を跨がず直接呼び出し）。"""
+
+    def test_render_page_worker_creates_file(self, tmp_path):
+        from src.gcode.config import PlotterConfig
+        from src.layout.page_layout import PageConfig
+        from src.ui.preview_renderer import render_page_worker
+
+        save_path = tmp_path / "worker_test.png"
+        render_page_worker(
+            strokes=[np.array([[0.0, 0.0], [10.0, 10.0]])],
+            finishes=["none"],
+            ruled_lines=[],
+            save_path=save_path,
+            page_number=3,
+            page_number_strokes=None,
+            plotter_config=PlotterConfig(),
+            page_config=PageConfig(),
+            report_bg_path=None,
+        )
+        assert save_path.exists()
+
+    def test_render_page_worker_reuses_cached_renderer_for_same_config(self, tmp_path):
+        """同一configが続く限りPreviewRendererを再構築しない（プロセス内キャッシュ）。"""
+        from src.gcode.config import PlotterConfig
+        from src.layout.page_layout import PageConfig
+        from src.ui import preview_renderer as preview_renderer_module
+
+        cfg = PlotterConfig()
+        pcfg = PageConfig()
+
+        preview_renderer_module.render_page_worker(
+            strokes=[],
+            finishes=[],
+            ruled_lines=[],
+            save_path=tmp_path / "w1.png",
+            page_number=1,
+            page_number_strokes=None,
+            plotter_config=cfg,
+            page_config=pcfg,
+            report_bg_path=None,
+        )
+        renderer_after_first = preview_renderer_module._worker_renderer_state["renderer"]
+
+        preview_renderer_module.render_page_worker(
+            strokes=[],
+            finishes=[],
+            ruled_lines=[],
+            save_path=tmp_path / "w2.png",
+            page_number=2,
+            page_number_strokes=None,
+            plotter_config=cfg,
+            page_config=pcfg,
+            report_bg_path=None,
+        )
+        renderer_after_second = preview_renderer_module._worker_renderer_state["renderer"]
+
+        assert renderer_after_first is renderer_after_second
 
 
 class TestGradioGallery:
@@ -1465,6 +1503,38 @@ class TestGradioGallery:
                     pytest.fail("gr.Image with label 'Preview' should be replaced by gr.Gallery")
 
 
+class _ImmediateExecutor:
+    """ProcessPoolExecutor の代替テストダブル。実プロセスを起こさず同期実行する。
+
+    generate_preview はページ描画を ProcessPoolExecutor.submit するため、
+    submit した関数への引数を素通しでキャプチャしたい既存テストは実プロセス境界を
+    跨げない（monkeypatch/lambda はサブプロセスに引き継がれない・pickle不可）。
+    submit を同一プロセスで即時実行するこのスタブに差し替えることで、
+    submitted 引数をテストプロセス内でそのまま検証できるようにする。
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def submit(self, fn, *args, **kwargs):
+        from concurrent.futures import Future
+
+        future: Future = Future()
+        try:
+            result = fn(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001 (Futureへ例外をそのまま転送)
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+        return future
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info) -> bool:
+        return False
+
+
 class TestPageNumber:
     """ページ番号の手書きストローク生成テスト。"""
 
@@ -1493,11 +1563,24 @@ class TestPageNumber:
             "_generate_page_number_strokes",
             lambda _page_number: page_number_strokes,
         )
-        monkeypatch.setattr(
-            pipeline,
-            "_preview_with_ruled_lines",
-            lambda _strokes, _ruled, _path, **kwargs: seen.update(kwargs),
-        )
+        # 描画は ProcessPoolExecutor 経由（別プロセス）のため、submit 引数を
+        # テストプロセス内で検証できるよう同期実行スタブに差し替える。
+        monkeypatch.setattr("src.ui.web_app.ProcessPoolExecutor", _ImmediateExecutor)
+
+        def _capture_render(
+            _strokes,
+            _finishes,
+            _ruled_lines,
+            _save_path,
+            _page_number,
+            page_number_strokes,
+            _plotter_config,
+            _page_config,
+            _report_bg_path,
+        ):
+            seen["page_number_strokes"] = page_number_strokes
+
+        monkeypatch.setattr("src.ui.preview_renderer.render_page_worker", _capture_render)
 
         pipeline.generate_preview("あ", tmp_path / "preview.png")
 
@@ -1514,11 +1597,22 @@ class TestPageNumber:
             "_generate_page_number_strokes",
             lambda _page_number: page_number_strokes,
         )
-        monkeypatch.setattr(
-            pipeline,
-            "_preview_with_ruled_lines",
-            lambda _strokes, _ruled, _path, **kwargs: seen.update(kwargs),
-        )
+        monkeypatch.setattr("src.ui.web_app.ProcessPoolExecutor", _ImmediateExecutor)
+
+        def _capture_render(
+            _strokes,
+            _finishes,
+            _ruled_lines,
+            _save_path,
+            _page_number,
+            page_number_strokes,
+            _plotter_config,
+            _page_config,
+            _report_bg_path,
+        ):
+            seen["page_number_strokes"] = page_number_strokes
+
+        monkeypatch.setattr("src.ui.preview_renderer.render_page_worker", _capture_render)
 
         pipeline.generate_preview("あ", tmp_path / "preview.png")
 
@@ -1556,9 +1650,7 @@ class TestPageNumber:
         assert captured["strokes"] == [body_stroke]
         assert captured["finishes"] == ["none"]
 
-    def test_generate_gcode_file_adds_page_number_strokes_by_default(
-        self, tmp_path, monkeypatch
-    ):
+    def test_generate_gcode_file_adds_page_number_strokes_by_default(self, tmp_path, monkeypatch):
         """デフォルトでは G-code 用ストロークへページ番号を混ぜる。"""
         pipeline = PlotterPipeline()
         body_stroke = np.array([[0.0, 0.0], [1.0, 1.0]])

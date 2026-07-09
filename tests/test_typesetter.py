@@ -871,8 +871,9 @@ class TestBlockMathRowConsumption:
         placements = pages[0]
         x_chars = [p.y for p in placements if p.char == "x"]
         assert len(x_chars) == 1
-        # 2行ぶん確保 → 中央 = (line_positions[0] + line_positions[1]) / 2
-        expected_center = (line_positions[0] + line_positions[1]) / 2
+        # 2行ぶん確保 → 帯中央 = 先頭行の上端(line_positions[0]+spacing) と
+        # 末尾行の下端(line_positions[1]) の中点 = line_positions[0]
+        expected_center = (line_positions[0] + line_spacing + line_positions[1]) / 2
         # 数式のベースライン（'x' の y）が中央付近にあるか（半行ぶんの誤差を許容）
         assert abs(x_chars[0] - expected_center) < line_spacing * 0.5
 
@@ -888,6 +889,85 @@ class TestBlockMathRowConsumption:
         # 差は line_spacing * 2 程度になる
         assert (a_y - b_y) >= line_spacing * 1.5
         assert (a_y - b_y) <= line_spacing * 2.5
+
+
+class TestPageBreakBeforeH1:
+    """page_break_before_h1=True で章(level-1 見出し)ごとに改ページする。"""
+
+    def _doc(self):
+        return "概要\n\n# 1. 目的\n\n本文1\n\n# 2. 理論\n\n本文2"
+
+    def test_each_chapter_starts_new_page(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, page_break_before_h1=True)
+        pages = ts.typeset(self._doc())
+        # 概要 / 1.目的 / 2.理論 が別ページ
+        assert len(pages) == 3
+        assert any(p.char == "概" for p in pages[0])  # 概要=ページ1
+        assert any(p.char == "目" for p in pages[1])  # 1.目的=ページ2
+        assert any(p.char == "理" for p in pages[2])  # 2.理論=ページ3
+
+    def test_first_heading_no_blank_leading_page(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, page_break_before_h1=True)
+        pages = ts.typeset(self._doc())
+        # 先頭ページが空でない（概要が先頭ページ top に来る）
+        assert pages[0]
+        line_positions = ts._layout.line_positions()
+        gai_y = next(p.y for p in pages[0] if p.char == "概")
+        assert gai_y == pytest.approx(line_positions[0])
+
+    def test_disabled_keeps_chapters_on_same_page(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, page_break_before_h1=False)
+        pages = ts.typeset(self._doc())
+        # 改ページしないので短い文書は1ページに収まる
+        assert len(pages) == 1
+
+
+class TestBlockMathFractionRulingAlignment:
+    """handwrite_math=True のブロック数式: トップレベル分数の罫線揃え。"""
+
+    def test_top_level_fraction_bar_snaps_to_ruling(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=True)
+        line_positions = ts._layout.line_positions()
+        pages = ts.typeset(r"$$ L = l + r + \frac{2r^{2}}{5(l+r)} $$")
+        head = next(p for p in pages[0] if p.math_source)
+        assert head.math_fraction_bar_y is not None
+        # 分数線が罫線(line_positions)のいずれかに乗る
+        assert any(abs(head.math_fraction_bar_y - y) < 1e-6 for y in line_positions)
+
+    def test_non_fraction_block_has_no_bar(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=True)
+        pages = ts.typeset(r"$$ g = 9.80 \pm 0.01 $$")
+        head = next(p for p in pages[0] if p.math_source)
+        assert head.math_fraction_bar_y is None
+
+    def test_sqrt_formula_ruling_aligned(self):
+        # √ の屋根 rect を除外した上で内側の分数線を検出し、罫線に揃える
+        # （屋根と分数線の二重線を避けつつ、分数線自体は他の式と同じく整列させる）。
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=True)
+        line_positions = ts._layout.line_positions()
+        pages = ts.typeset(r"$$ T_{0} = 2\pi\sqrt{\frac{I}{Mgh}} $$")
+        head = next(p for p in pages[0] if p.math_source)
+        assert head.math_fraction_bar_y is not None
+        assert any(abs(head.math_fraction_bar_y - y) < 1e-6 for y in line_positions)
+
+    def test_handwrite_false_no_ruling_alignment(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=False)
+        pages = ts.typeset(r"$$ L = l + r + \frac{2r^{2}}{5(l+r)} $$")
+        head = next(p for p in pages[0] if p.math_source)
+        assert head.math_fraction_bar_y is None
+
+    def test_nested_fraction_consumes_multiple_rows(self):
+        ts = Typesetter(PageConfig(), font_size=4.5, handwrite_math=True)
+        line_spacing = ts._config.line_spacing
+        src = (
+            r"前" + "\n" + r"$$ L' = \frac{\frac{1}{3}m_{w}l^{2} + \frac{2}{5}Mr^{2} "
+            r"+ M(l+r)^{2}}{\frac{1}{2}m_{w}l + M(l+r)} $$" + "\n" + r"後"
+        )
+        pages = ts.typeset(src)
+        前_y = next(p.y for p in pages[0] if p.char == "前")
+        後_y = next(p.y for p in pages[0] if p.char == "後")
+        # 入れ子分数は分子が高く3行以上消費
+        assert (前_y - 後_y) >= line_spacing * 3.5
 
 
 class TestBlockMathLineBreak:
@@ -1016,9 +1096,9 @@ class TestInlineMath:
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("$V = IR$")
         placements = pages[0]
-        # "V = IR" の5文字分（スペース含む）のCharPlacementが生成される
+        # "V=IR" の4文字分（LaTeX math のスペースは除外）のCharPlacementが生成される
         chars = [p.char for p in placements]
-        assert "".join(chars) == "V = IR"
+        assert "".join(chars) == "V=IR"
 
     def test_mixed_text_and_math(self):
         """通常テキスト$数式$通常テキスト の混在が正しく配置される。"""
@@ -1026,7 +1106,7 @@ class TestInlineMath:
         pages = ts.typeset("電圧$V = IR$です")
         placements = pages[0]
         chars = [p.char for p in placements]
-        assert "".join(chars) == "電圧V = IRです"
+        assert "".join(chars) == "電圧V=IRです"
 
     def test_mixed_text_x_positions_monotonic(self):
         """混在テキストのx座標が単調増加する（重なりなし）。
@@ -1328,13 +1408,13 @@ class TestHeadings:
         assert "。" not in chars
         assert "．" in chars
 
-    def test_period_in_number_also_replaced(self):
-        """数値中のピリオドも全角「．」に置換される（本文一律統一の仕様）。"""
+    def test_period_in_number_not_replaced(self):
+        """数値中の小数点は全角「．」に置換しない（URL・小数点は word chars 間なので保持）。"""
         ts = Typesetter(PageConfig(), font_size=7.0)
         pages = ts.typeset("0.2")
         chars = [p.char for p in pages[0]]
-        assert "." not in chars
-        assert "．" in chars
+        assert "." in chars
+        assert "．" not in chars
 
     def test_comma_replaced_with_zenkaku(self):
         """読点系（, 、）は本文で全角「，」(U+FF0C)に統一される。"""
@@ -1563,6 +1643,67 @@ class TestTablePlacement:
         assert v_rules[0] >= area.x - 1e-6
         assert v_rules[-1] <= area.x + area.width + 1e-6
 
+    # --- セル内インライン数式 ---
+
+    _MATH_TABLE = (
+        "| 測定量 | 最大許容誤差 |\n"
+        "|---|---|\n"
+        "| 針金 $l$ | $\\Delta l \\leq 1.3$ [mm] |\n"
+        "| 片振幅角 | $\\Delta\\alpha \\leq 2.8\\times10^{-2}$ [rad] |\n"
+    )
+
+    def _placements(self, text, font_size=4.5, handwrite_math=False):
+        ts = Typesetter(PageConfig(), font_size=font_size, handwrite_math=handwrite_math)
+        ts.handwrite_math = handwrite_math
+        return ts, ts.typeset(text)[0]
+
+    def test_cell_math_not_raw_latex(self):
+        """セル内の $...$ は LaTeX 生文字（\\, {, } 等）として描かれない。"""
+        _, placements = self._placements(self._MATH_TABLE)
+        cell_chars = {p.char for p in placements if p.char and p.line_segment is None}
+        # バックスラッシュ・波括弧・$ がそのままセル文字として残っていない
+        assert "\\" not in cell_chars
+        assert "{" not in cell_chars and "}" not in cell_chars
+        assert "$" not in cell_chars
+
+    def test_cell_math_rendered(self):
+        """skeletonize 経路でセル数式が math_source 付き placement として描かれる。"""
+        _, placements = self._placements(self._MATH_TABLE, handwrite_math=False)
+        math_ps = [p for p in placements if p.math_source]
+        # 2つの数式入りセル（$\Delta l ...$, $\Delta\alpha ...$）が複合式として描画される
+        assert len(math_ps) >= 2
+
+    def test_cell_math_within_column(self):
+        """数式入りセルの内容が所属列の右縦罫線を越えない。"""
+        ts, placements = self._placements(self._MATH_TABLE)
+        v_rules = sorted(
+            p.line_segment[0]
+            for p in placements
+            if p.line_segment is not None and p.line_segment[0] == p.line_segment[2]
+        )
+        right_edge = v_rules[-1]
+        # 全セル内容（テキスト文字＋数式 bbox 右端）が表右端を越えない
+        for p in placements:
+            if p.char and p.line_segment is None:
+                assert p.x <= right_edge + 1e-6
+            if p.math_bbox is not None:
+                bx, _by, bw, _bh = p.math_bbox
+                assert bx + bw <= right_edge + 1e-6, (
+                    f"数式 bbox 右端 {bx + bw:.2f} が表右端 {right_edge:.2f} を越えた"
+                )
+
+    def test_cell_math_handwrite_flag(self):
+        """handwrite_math=True でセル数式に math_handwrite が伝播する。"""
+        _, placements = self._placements(self._MATH_TABLE, handwrite_math=True)
+        math_ps = [p for p in placements if p.math_source]
+        assert math_ps  # 構造式（\times・上付き）は plain でないので math_source 付き
+        assert all(p.math_handwrite for p in math_ps)
+
+    def test_font_size_restored_after_table(self):
+        """セル数式描画で一時変更した font_size が表後に復元される。"""
+        ts, _ = self._placements(self._MATH_TABLE, font_size=4.5)
+        assert ts.font_size == pytest.approx(4.5)
+
 
 class TestPlainMathBodyRouting:
     """単純数式の本文手書き経路ルーティングと□回避。"""
@@ -1572,7 +1713,7 @@ class TestPlainMathBodyRouting:
         placements = ts.typeset("$V = IR$")[0]
         # 本文文字として配置（math_source なし）
         assert all(p.math_source is None for p in placements)
-        assert "".join(p.char for p in placements) == "V = IR"
+        assert "".join(p.char for p in placements) == "V=IR"
 
     def test_plain_greek_routed_to_body(self):
         ts = Typesetter(PageConfig(), font_size=7.0)
@@ -1591,3 +1732,151 @@ class TestPlainMathBodyRouting:
         ts = Typesetter(PageConfig(), font_size=7.0)
         placements = ts.typeset(r"$A \simeq B$")[0]
         assert any(p.math_source for p in placements)
+
+    def test_table_cell_digit_uses_char_scale(self):
+        """表セルの半角数字は本文同様 effective_char_scale で縮む（漢字基準に浮かない）。"""
+        from src.layout.char_metrics import effective_char_scale
+
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        table = "| 回数 | 値 |\n|---|---|\n| 10 | 230 |\n"
+        pls = ts.typeset(table)[0]
+        # セル内の数字 '2'（line_segment なしの実文字）
+        digit = next(p for p in pls if p.char == "2" and not getattr(p, "line_segment", None))
+        # 表 scale は列幅次第だが、最大でも self.font_size。字種スケールが効いていれば
+        # 4.5 フルサイズより必ず小さい。
+        assert digit.font_size <= 4.5 * effective_char_scale("2") + 1e-6
+
+    def test_plain_math_digit_matches_body_digit_size(self):
+        """plain 数式の数字は本文数字と同じ font_size（字種スケール適用）になる。
+
+        本文半角は effective_char_scale で縮小されるが、plain 数式分岐が
+        self.font_size をそのまま使うと数式数字だけ大きく浮いていた。
+        """
+        from src.layout.char_metrics import effective_char_scale
+
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        body = ts.typeset("8")[0]
+        math = ts.typeset("$8$")[0]
+        body_fs = next(p.font_size for p in body if p.char == "8")
+        math_fs = next(p.font_size for p in math if p.char == "8")
+        assert math_fs == pytest.approx(body_fs)
+        assert math_fs == pytest.approx(4.5 * effective_char_scale("8"))
+
+
+class TestBlockDiagram:
+    """ブロック図DSL（```blockdiagram ... ```）の組版。"""
+
+    _OPEN_LOOP = "```blockdiagram\nR --> [制御器] --> [プラント] --> C\n```\n"
+    _CLOSED_LOOP = "```blockdiagram\nR --> [制御器] --> [プラント] --> C\nfeedback: [センサ]\n```\n"
+
+    def test_box_labels_present(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._OPEN_LOOP)[0]
+        chars = {p.char for p in placements if p.char}
+        assert {"制", "御", "器"} <= chars
+        assert {"プ", "ラ", "ン", "ト"} <= chars
+
+    def test_has_multiple_line_segments(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._OPEN_LOOP)[0]
+        segs = [p for p in placements if p.line_segment is not None]
+        # 箱2つ(4辺x2=8) + 接続線3本 + 矢じり3x2=6 以上
+        assert len(segs) >= 14
+
+    def test_open_loop_has_no_sigma(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._OPEN_LOOP)[0]
+        assert not any(p.char == "Σ" for p in placements)
+
+    def test_closed_loop_has_sigma(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._CLOSED_LOOP)[0]
+        assert any(p.char == "Σ" for p in placements)
+
+    def test_closed_loop_has_feedback_box_label(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._CLOSED_LOOP)[0]
+        chars = {p.char for p in placements if p.char}
+        assert {"セ", "ン", "サ"} <= chars
+
+    def test_diagram_consumes_rows_and_next_block_follows(self):
+        """図の下に続く段落が図のブロック分の行を消費した後に配置される。"""
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        md = self._OPEN_LOOP + "\n続きの文章。"
+        placements = ts.typeset(md)[0]
+        text_chars = [p for p in placements if p.char in ("続", "き")]
+        assert text_chars  # 図の下に文章が配置されている
+        # 続きの文章は図の要素より下(小さいy=罫線が下にある)に位置する
+        diagram_min_y = min(p.y for p in placements if p.line_segment is not None)
+        for tc in text_chars:
+            assert tc.y <= diagram_min_y + 1e-6
+
+    def test_diagram_fits_in_content_width(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._OPEN_LOOP)[0]
+        layout = PageLayout(PageConfig())
+        area = layout.content_area()
+        xs = [seg[0] for p in placements if p.line_segment for seg in [p.line_segment]]
+        xs += [seg[2] for p in placements if p.line_segment for seg in [p.line_segment]]
+        assert xs
+        assert min(xs) >= area.x - 1e-6
+        assert max(xs) <= area.x + area.width + 1e-6
+
+
+class TestDendrogram:
+    """デンドログラムDSL（```dendrogram ... ```）の組版。"""
+
+    _DENDRO = (
+        "```dendrogram\norder: B C A D E\nB + C : 1\nA + D : 2\nBC + AD : 3\nABCD + E : 4\n```\n"
+    )
+
+    def test_leaf_labels_present(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._DENDRO)[0]
+        chars = {p.char for p in placements if p.char}
+        assert {"B", "C", "A", "D", "E"} <= chars
+
+    def test_has_multiple_line_segments_for_brackets(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._DENDRO)[0]
+        segs = [p for p in placements if p.line_segment is not None]
+        # U字ブラケット(2垂直+1水平)x4結合 = 12本以上 + 軸・目盛り
+        assert len(segs) >= 12
+
+    def test_height_tick_labels_present(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._DENDRO)[0]
+        chars = {p.char for p in placements if p.char}
+        assert {"1", "2", "3", "4"} <= chars
+
+    def test_dendrogram_consumes_rows_and_next_block_follows(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        md = self._DENDRO + "\n続きの文章。"
+        placements = ts.typeset(md)[0]
+        text_chars = [p for p in placements if p.char in ("続", "き")]
+        assert text_chars
+        dendro_min_y = min(p.y for p in placements if p.line_segment is not None)
+        for tc in text_chars:
+            assert tc.y <= dendro_min_y + 1e-6
+
+    def test_dendrogram_fits_in_content_width(self):
+        ts = Typesetter(PageConfig(), font_size=4.5)
+        placements = ts.typeset(self._DENDRO)[0]
+        layout = PageLayout(PageConfig())
+        area = layout.content_area()
+        xs = [seg[0] for p in placements if p.line_segment for seg in [p.line_segment]]
+        xs += [seg[2] for p in placements if p.line_segment for seg in [p.line_segment]]
+        assert xs
+        assert min(xs) >= area.x - 1e-6
+        assert max(xs) <= area.x + area.width + 1e-6
+
+
+class TestArrowHead:
+    def test_arrow_head_returns_two_segments_sharing_tip(self):
+        from src.layout.typesetter import _arrow_head
+
+        segs = _arrow_head(10.0, 20.0, 0.0, size=2.0)
+        assert len(segs) == 2
+        for x1, y1, x2, y2 in segs:
+            assert (x1, y1) == (10.0, 20.0)
+            assert (x2, y2) != (x1, y1)

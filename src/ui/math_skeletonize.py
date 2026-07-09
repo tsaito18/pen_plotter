@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 
 import matplotlib
@@ -459,6 +460,615 @@ def render_math_char_to_unit_strokes(text: str) -> tuple[np.ndarray, ...] | None
     if not binary.any():
         return None
 
+    binary = _crop(binary)
+    skeleton = morphology.skeletonize(binary)
+    pixel_strokes = _trace_skeleton(skeleton)
+
+    h_px, w_px = skeleton.shape
+    result: list[np.ndarray] = []
+    for ps in pixel_strokes:
+        if len(ps) < _MIN_STROKE_PX:
+            continue
+        col = ps[:, 0] / max(w_px - 1, 1)
+        row = 1.0 - ps[:, 1] / max(h_px - 1, 1)  # Y-UP
+        stroke = np.stack([col, row], axis=1).astype(np.float64)
+        diffs = np.diff(stroke, axis=0)
+        length = float(np.hypot(diffs[:, 0], diffs[:, 1]).sum())
+        if length >= _MIN_STROKE_UNIT:
+            result.append(stroke)
+
+    return tuple(result) if result else None
+
+
+# ---- matplotlib mathtext 実配置の抽出（手書き差し替え用） ------------------
+# matplotlib に LaTeX 数式を正しい配置でレイアウトさせ、各グリフ／罫線の位置・
+# サイズを取り出す。通常グリフ（変数・数字・演算子）は手書きストロークへ差し替え、
+# 大型構造記号（√・大括弧・∑・∫）はそのグリフだけ skeletonize し、罫線（分数線・
+# 根号の横棒）は直線ストロークにする。座標系は baseline 原点・上向き正の pt（dpi=72
+# で pt=px）。oy/y はグリフ／矩形の baseline（描画原点）の y 座標。
+
+# 大型記号に使われる別フォント family の判定基準。DejaVu Sans 以外（STIXSize* 等）は
+# √・大括弧・∑・∫ など手書き字形を持たない構造記号なので skeleton で描く。
+_HANDWRITE_FONT_FAMILY = "DejaVu Sans"
+# 単一グリフ skeleton 化のレンダリング pt（_render_to_gray の _FONT_SIZE_PT に依らず、
+# 大型記号の縦横比を保つため十分大きい固定値で描く）。
+_GLYPH_RENDER_PT = 120
+
+
+# 数式の基準グリフ（上付き・添字でない通常文字）の標準サイズ pt。
+# extract_math_layout が _FONT_SIZE_PT 基準でレイアウトするため、それと一致させる。
+_REF_GLYPH_PT = _FONT_SIZE_PT
+
+# 手書き数式の基準グリフ（大文字）を本文 cap height の何倍に合わせるか。
+# render_math_handwritten の縮尺 s = font_size*MATH_INLINE_CAP_RATIO/ref_cap_height_pt と
+# 予約幅 handwrite_draw_width_mm の単一ソース。StrokeRenderer もこの定数を参照する。
+MATH_INLINE_CAP_RATIO = 0.70
+# ブロック表示数式（$$...$$）の cap 比。インライン(0.70)より一回り大きく描く。
+# 単純分数の分子/分母が各1行に収まる範囲（report 罫線7.14mmで num≈1行）に調整。
+MATH_BLOCK_CAP_RATIO = 0.85
+
+
+@lru_cache(maxsize=1)
+def ref_cap_height_pt() -> float:
+    """基準サイズ(``_REF_GLYPH_PT`` pt)で描いた大文字のインク高(pt)を返す。
+
+    数式の手書き差し替えでスケールを取るときの基準。式全体の墨高(上付き・分数で
+    背が高い)で割ると基準文字が縮むため、代わりに「通常サイズの大文字インク高」を
+    本文の大文字インク高(≈0.7*font_size)へ揃える縮尺を取る。フォント不変なので
+    キャッシュする。
+
+    Returns:
+        基準大文字のインク高(pt)。測定失敗時は em の概算値(0.7*_REF_GLYPH_PT)。
+    """
+    ink = glyph_ink_bbox("M", float(_REF_GLYPH_PT))
+    if ink is None:
+        return 0.7 * _REF_GLYPH_PT
+    return ink[3]
+
+
+@dataclass(frozen=True)
+class MathGlyph:
+    """matplotlib mathtext がレイアウトした 1 グリフ。座標は pt（baseline 原点・上向き正）。"""
+
+    char: str  # 描画文字（chr(num)）
+    x: float  # 左 x（pt）
+    baseline_y: float  # baseline の y（pt, 上向き正）
+    fontsize: float  # そのグリフの実 pt（下付き・分数で縮小される）
+    is_large: bool  # True=大型構造記号（√・大括弧・∑・∫ 等。手書きにできない）
+
+
+@dataclass(frozen=True)
+class MathRect:
+    """分数線・根号の横棒など。座標は pt（baseline 原点・上向き正、y=下端）。"""
+
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+@dataclass(frozen=True)
+class MathLayout:
+    """matplotlib mathtext のレイアウト結果（pt 単位、baseline 原点・上向き正）。"""
+
+    width: float  # 全体幅（pt）
+    height: float  # baseline から上の高さ（pt）
+    depth: float  # baseline から下の深さ（pt）
+    glyphs: tuple[MathGlyph, ...]
+    rects: tuple[MathRect, ...]
+
+
+def extract_math_layout(math_src: str) -> MathLayout | None:
+    """LaTeX 数式を matplotlib mathtext でレイアウトし、グリフ／罫線の配置を抽出する。
+
+    各グリフは ``(x, baseline_y, fontsize)`` を原点に当該 fontsize で描いた位置に座る
+    （baseline 原点・上向き正の pt）。手書き差し替えではこの配置に合わせて unit 字形を
+    スケール・移動する。
+
+    Args:
+        math_src: LaTeX ソース（``$`` なし。``\\tag{}`` は呼び出し側で除去済みのこと）。
+
+    Returns:
+        ``MathLayout``。レイアウト失敗時は ``None``。
+    """
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.mathtext import MathTextParser
+
+    safe = re.sub(r"(?<!\\)%", r"\\%", math_src)
+    # plain な ( ) を \left( \right) へ昇格し、分数等を囲む括弧が中身の高さに追従して
+    # 縦に伸びるようにする（matplotlib は plain 括弧を自動拡大せず、分数を囲んでも一行高の
+    # ままになる）。既存の \left( \right) は lookbehind で二重変換を避ける。括弧が不均衡な
+    # 式では \left/\right 対応が崩れて parse 失敗し得るので、その場合は昇格前の safe に戻す。
+    sized = re.sub(r"(?<!left)\(", r"\\left(", safe)
+    sized = re.sub(r"(?<!right)\)", r"\\right)", sized)
+    # fontset は既定(dejavusans)のまま使う。cm を rc_context 内で MathTextParser に
+    # 適用すると本物の Computer Modern フォント(cmmi10/cmr10/cmsy10)が選ばれ、通常
+    # グリフの family_name が "DejaVu Sans" でなくなり is_large 判定が壊れる。手書き
+    # 差し替えでは通常グリフの見た目は使わず配置と is_large 判定だけ要るので、判定が
+    # 安定する dejavusans でレイアウトを取る（大型記号は STIXSize* で出る）。
+    mtp = MathTextParser("path")
+    prop = FontProperties(size=_FONT_SIZE_PT)
+    vp = None
+    for candidate in (sized, safe):
+        try:
+            vp = mtp.parse(f"${candidate}$", dpi=72, prop=prop)
+            break
+        except Exception:
+            continue
+    if vp is None:
+        logger.exception("math layout extract failed: %r", math_src)
+        return None
+
+    glyphs: list[MathGlyph] = []
+    for font, fontsize, num, ox, oy in vp.glyphs:
+        glyphs.append(
+            MathGlyph(
+                char=chr(num),
+                x=float(ox),
+                baseline_y=float(oy),
+                fontsize=float(fontsize),
+                is_large=font.family_name != _HANDWRITE_FONT_FAMILY,
+            )
+        )
+    rects = tuple(
+        MathRect(x=float(x), y=float(y), width=float(w), height=float(h)) for x, y, w, h in vp.rects
+    )
+    return MathLayout(
+        width=float(vp.width),
+        height=float(vp.height),
+        depth=float(vp.depth),
+        glyphs=tuple(glyphs),
+        rects=rects,
+    )
+
+
+def handwrite_draw_width_mm(
+    math_src: str, font_size: float, cap_ratio: float = MATH_INLINE_CAP_RATIO
+) -> float | None:
+    """``render_math_handwritten`` が描く実描画幅(mm)。
+
+    手書き経路は cap 基準縮尺 ``s = font_size*cap_ratio/ref_cap_height_pt`` で
+    ``layout.width``(pt advance) を mm へ写す。typesetter の予約幅をこの実幅に一致させ、
+    上付き・分数を含む式が予約枠（表セル等）からはみ出すのを防ぐ単一ソース。手書き化
+    できない式（レイアウト抽出失敗・墨なし）は ``None`` を返し、呼び出し側で aspect 基準
+    （skeletonize 経路の実幅）へフォールバックさせる。
+
+    Args:
+        math_src: LaTeX ソース（``$`` なし）。
+        font_size: 本文の論理 em（mm）。
+        cap_ratio: 基準グリフを本文 cap height の何倍にするか。インライン=
+            ``MATH_INLINE_CAP_RATIO``、ブロック表示数式=``MATH_BLOCK_CAP_RATIO``。
+    """
+    layout = extract_math_layout(math_src)
+    if layout is None or layout.width <= 0:
+        return None
+    s = (font_size * cap_ratio) / ref_cap_height_pt()
+    return layout.width * s
+
+
+# トップレベル分数線の math axis 帯判定の許容(pt)。matplotlib の分数線中心は
+# フォント由来の math axis（実測 cy≈6〜7pt）に集中する。同じ帯に複数 rect があれば
+# 横並び分数（式が複数の同レベル分数を持つ）とみなし、罫線揃え対象から外す。
+_FRACTION_AXIS_TOL_PT = 4.0
+# 罫線揃えを無効化する構造的大型記号（√・大括弧・∑・∫）。これらに分数が囲まれると
+# 分数線を罫線に乗せると括弧/根号/総和記号が行をまたいで崩れるため。
+_STRUCTURAL_LARGE_CHARS = frozenset("()√∑∫")
+
+
+def detect_top_level_fraction_bar(layout: "MathLayout") -> float | None:
+    """罫線揃え対象となる単一トップレベル分数線の中心 y(pt) を返す。対象外なら ``None``。
+
+    罫線紙の手書きで分数を「分子=上の行／分数線=罫線／分母=下の行」に展開できるのは、
+    式が単一の主分数を持つ場合（例: ``L=l+r+\\frac{..}{..}`` / 入れ子の主分数）。横並び
+    複数分数・括弧内のみの分数・分数なしは展開すると行をまたいで崩れるため対象外。
+
+    判定: (a) 大型構造記号（√・大括弧 ``\\left(`` 等・∑・∫＝``is_large``）を含む式は除外
+    （分数が括弧/根号に囲まれ・指数が掛かるため、分数線を罫線に乗せると行をまたいで崩れる）。
+    (b) 最も幅広い rect の中心 y(=math axis 候補) の ±``_FRACTION_AXIS_TOL_PT`` 帯に rect が
+    ちょうど1本のときだけ、その中心 y を返す。入れ子分数(分子/分母内の小分数)は axis 帯の外
+    （上下にずれる）ため自然に除外され、横並び複数分数は同帯に複数入るため除外される。
+
+    Args:
+        layout: ``extract_math_layout`` の結果。
+
+    Returns:
+        主分数線の中心 y(pt, baseline 原点・上向き正)。対象外は ``None``。
+    """
+    if not layout.rects:
+        return None
+    # 大括弧・∑・∫ など構造的な大型記号を含む式は罫線揃えしない（括弧内分数
+    # (2π/T)^2 等）。is_large はフォント由来の判定でプライム記号 ' 等も該当する
+    # ため、構造記号の char に限定する。√ は屋根 rect を除外した上で内側/外側の
+    # 分数線を罫線揃えできるため対象に含める。
+    if any(g.is_large and g.char in _STRUCTURAL_LARGE_CHARS and g.char != "√" for g in layout.glyphs):
+        return None
+    # √ の屋根 rect を候補から除外する（renderer と同じヒューリスティック:
+    # √ インク中央より右から始まり √ 下端より上にある最左の rect）。屋根は分数線
+    # と紛らわしい高さに来ることがあり、含めると axis 判定が狂う。
+    roof_ids: set[int] = set()
+    for g in layout.glyphs:
+        if g.char != "√":
+            continue
+        ink = glyph_ink_bbox(g.char, g.fontsize)
+        if ink is None:
+            continue
+        gx, gy, gw, gh = ink
+        left = g.x + gx
+        right = left + gw
+        bottom = g.baseline_y + gy
+        best_i = None
+        for ri, r in enumerate(layout.rects):
+            if ri in roof_ids:
+                continue
+            rcy = r.y + r.height / 2.0
+            in_x = (left + gw * 0.5) <= r.x <= (right + gw * 2.5)
+            above = rcy >= bottom + gh * 0.3
+            if in_x and above and (best_i is None or r.x < layout.rects[best_i].x):
+                best_i = ri
+        if best_i is not None:
+            roof_ids.add(best_i)
+    cands = [r for ri, r in enumerate(layout.rects) if ri not in roof_ids]
+    if not cands:
+        return None
+    widest = max(cands, key=lambda r: r.width)
+    wcy = widest.y + widest.height / 2.0
+    near = [r for r in cands if abs((r.y + r.height / 2.0) - wcy) <= _FRACTION_AXIS_TOL_PT]
+    if not near:
+        return None
+    # 横並びの複数分数（v²/2g + p/ρg + … や l/d・v²/2g）は全分数線が同一 axis 帯に
+    # 並ぶため、共通の帯として平均 cy へ揃える（従来は「1本のみ」に限定していたが、
+    # 複数でも同じ罫線に乗せれば分子=上の行・分母=下の行で自然に手書き展開できる）。
+    return sum(r.y + r.height / 2.0 for r in near) / len(near)
+
+
+# 数式分割で「文の切れ目」として扱う演算子。
+# 関係演算子（=, <, >, \le, \ge, \ne 等）は意味的に最も自然な分割点で、ここで切れば
+# 「左辺」と「右辺」が別行に分かれて手書きの感覚に合う。
+# 加減（+, -）は補助的な2次分割（関係演算子だけでは max_width に収まらないとき用）。
+_RELATION_LATEX_OPS: tuple[str, ...] = (
+    "\\leq",
+    "\\geq",
+    "\\le",
+    "\\ge",
+    "\\neq",
+    "\\ne",
+    "\\approx",
+    "\\sim",
+    "\\simeq",
+    "\\equiv",
+)
+_RELATION_SINGLE_OPS: tuple[str, ...] = ("=", "<", ">")
+_ADDITIVE_OPS: tuple[str, ...] = ("+", "-")
+
+
+def promote_top_level_frac_to_dfrac(src: str) -> str:
+    """ソース中の **深さ 0**（``\\sqrt`` 内を除く）にある ``\\frac`` を ``\\dfrac`` に置換。
+
+    matplotlib mathtext は通常 ``\\frac`` を script style（≈0.7em）で描き、複数の
+    分数が並ぶと各文字が小さく見える（subsize 累積）。``\\dfrac`` は display style
+    で常に本文 em で描くため、ブロック数式のトップレベル分数を ``\\dfrac`` に
+    置換すると分子・分母の文字が本文サイズになり読みやすくなる。
+
+    深さ追跡は ``\\sqrt{...}`` のみ（``\\left( ... \\right)`` 括弧内の \\frac は
+    対象に含める）。括弧で囲まれた分数（例: ``\\left(\\frac{2\\pi}{T}\\right)^2``）
+    は subsize にすべきでない。``\\sqrt`` 内の \\frac は屋根突き抜けを避けるため
+    除外する。
+    """
+    result: list[str] = []
+    depth = 0  # \sqrt 内の深さのみ追跡（\left \right や { } は深さに含めない）
+    n = len(src)
+    i = 0
+    # \sqrt 直後の { ... } を sqrt のスコープと判定するため、最後に見た \sqrt 直後で
+    # depth+1 にするフラグを立て、対応する閉じ } で -1 する。
+    sqrt_brace_pending = False
+    sqrt_depths: list[int] = []  # 入れ子 \sqrt 内の brace 深さスタック
+    brace_depth = 0
+    while i < n:
+        c = src[i]
+        if c == "{":
+            brace_depth += 1
+            if sqrt_brace_pending:
+                sqrt_depths.append(brace_depth)
+                depth += 1
+                sqrt_brace_pending = False
+            result.append(c)
+            i += 1
+        elif c == "}":
+            if sqrt_depths and brace_depth == sqrt_depths[-1]:
+                sqrt_depths.pop()
+                depth -= 1
+            brace_depth -= 1
+            result.append(c)
+            i += 1
+        elif c == "\\":
+            j = i + 1
+            while j < n and src[j].isalpha():
+                j += 1
+            cmd = src[i:j]
+            if cmd == "\\sqrt":
+                sqrt_brace_pending = True
+                result.append(cmd)
+            elif depth <= 1 and cmd == "\\frac":
+                # depth==1 は「トップレベル √ の中」。旧 √ 描画（matplotlib glyph）は
+                # dfrac 化すると屋根を突き抜けたため除外していたが、現行 √ は中身
+                # bbox 追従のポリライン描画なので昇格してよい（√ 内の分数が script
+                # size で潰れるのを防ぐ）。√ の入れ子（depth>=2）は据え置き。
+                result.append("\\dfrac")
+            else:
+                result.append(cmd)
+            i = j
+        else:
+            result.append(c)
+            i += 1
+    return "".join(result)
+
+
+def _count_top_level_fracs(src: str) -> int:
+    """``src`` 中の深さ 0 にある ``\\frac`` の個数を数える。
+
+    深さは ``{`` / ``}``・``\\left`` / ``\\right`` で増減。``\\sqrt{...}`` 内・
+    ``\\left( ... \\right)`` 内・添字 ``_{...}`` 上付き ``^{...}`` 内の分数は深さ > 0
+    で除外される。
+    """
+    depth = 0
+    count = 0
+    n = len(src)
+    i = 0
+    while i < n:
+        c = src[i]
+        if c == "{":
+            depth += 1
+            i += 1
+        elif c == "}":
+            depth -= 1
+            i += 1
+        elif c == "\\":
+            j = i + 1
+            while j < n and src[j].isalpha():
+                j += 1
+            cmd = src[i:j]
+            if cmd == "\\left":
+                depth += 1
+            elif cmd == "\\right":
+                depth -= 1
+            elif depth == 0 and cmd == "\\frac":
+                count += 1
+            i = j
+        else:
+            i += 1
+    return count
+
+
+def _split_at_top_level(
+    src: str,
+    latex_ops: tuple[str, ...],
+    single_ops: tuple[str, ...],
+) -> list[str]:
+    """``src`` を depth=0 にある ``latex_ops`` / ``single_ops`` で分割する。
+
+    分割点の演算子は **次** のセグメント先頭に残す（例: ``a + b`` → ``["a ", "+ b"]``）。
+    各セグメントを単独の LaTeX として描画したとき、関係/加減演算子が「行頭の演算子」と
+    して自然に見える。先頭の単項 ``+/-`` は分割点にしない（``preceding`` が空なら skip）。
+
+    深さ追跡: ``{`` / ``}`` で +/-1、``\\left`` / ``\\right`` でも +/-1。これにより
+    ``\\frac{a}{b}`` 内の ``a``/``b`` や ``\\left( x + y \\right)`` 内の ``+`` は分割対象外。
+
+    Args:
+        src: LaTeX ソース（``$`` なし、``\\tag{}`` 除去済み）。
+        latex_ops: 多文字演算子（``\\le`` 等、``\\`` 始まり）。
+        single_ops: 単文字演算子（``=`` ``<`` ``>`` ``+`` ``-``）。
+
+    Returns:
+        非空セグメントのリスト。分割点が無ければ ``[src]``。
+    """
+    segments: list[str] = []
+    depth = 0
+    n = len(src)
+    i = 0
+    start = 0
+    while i < n:
+        c = src[i]
+        if c == "{":
+            depth += 1
+            i += 1
+        elif c == "}":
+            depth -= 1
+            i += 1
+        elif c == "\\":
+            j = i + 1
+            while j < n and src[j].isalpha():
+                j += 1
+            cmd = src[i:j]
+            if cmd == "\\left":
+                depth += 1
+                i = j
+            elif cmd == "\\right":
+                depth -= 1
+                i = j
+            elif depth == 0 and cmd in latex_ops:
+                if src[start:i].strip():
+                    segments.append(src[start:i])
+                    start = i
+                i = j
+            else:
+                i = j
+        elif depth == 0 and c in single_ops:
+            preceding = src[start:i].strip()
+            if not preceding:
+                # 単項記号（行頭の +/-）は分割しない
+                i += 1
+            else:
+                segments.append(src[start:i])
+                start = i
+                i += 1
+        else:
+            i += 1
+    segments.append(src[start:])
+    return [s for s in segments if s.strip()]
+
+
+def split_math_for_width(
+    body_src: str,
+    font_size: float,
+    max_width_mm: float,
+    cap_ratio: float = MATH_BLOCK_CAP_RATIO,
+    force_split_multiple_fractions: bool = False,
+) -> list[str]:
+    """ブロック数式が ``max_width_mm`` を超える、または複数分数を持つなら分割。
+
+    根本解決の方針: 長い数式を縮小フィットさせると本文より小さくなり読めない。
+    matplotlib mathtext は ``\\frac`` 内の文字を subsize で縮小描画するため、
+    多数の分数を横並びにすると各文字が小さく見える（式(4)等）。代わりに意味の
+    切れ目（``=`` ``\\le`` 等の関係演算子、必要なら ``+`` ``-``）で改行し、各
+    セグメントを別の罫線行に展開する。各セグメントの分数が 1 つになれば、
+    上位の罫線揃え処理（``detect_top_level_fraction_bar``）が「分子=上行・
+    分母=下行・分数線=罫線」の縦展開に切り替わり、subsize による縮小を回避する。
+
+    手順:
+      1. 全体幅 ``handwrite_draw_width_mm`` を測る。``max_width_mm`` 以下なら 1 行のまま
+         （``force_split_multiple_fractions`` が True で分数 ≥ 2 個なら分割を試みる）。
+      2. 関係演算子で 1 次分割。すべてのセグメントが ``max_width_mm`` 以下なら採用。
+      3. 残ったオーバーセグメントは加減で 2 次分割し、貪欲に連結して ``max_width_mm``
+         以下になるよう詰め直す。
+      4. 分割できない場合は元の単一セグメントを返す（呼び出し側が従来の縮小経路へ）。
+
+    Args:
+        body_src: ``\\tag{}`` 除去後の LaTeX ソース。
+        font_size: 本文の論理 em (mm)。
+        max_width_mm: 1 行あたりの幅上限 (mm)。通常は本文幅。
+        cap_ratio: ブロック数式の cap 比（既定 ``MATH_BLOCK_CAP_RATIO``）。
+        force_split_multiple_fractions: True かつ式に 2 個以上のトップレベル分数線が
+            あれば、幅が ``max_width_mm`` 以下でも分割する（subsize 累積回避）。
+
+    Returns:
+        分割後のセグメントリスト（各要素は valid な LaTeX ソース）。
+    """
+
+    def measure(seg: str) -> float:
+        w = handwrite_draw_width_mm(seg, font_size, cap_ratio=cap_ratio)
+        return w if w is not None and w > 0 else 0.0
+
+    full_w = measure(body_src)
+    needs_split = full_w > 0 and full_w > max_width_mm
+    if not needs_split and force_split_multiple_fractions:
+        # 複数の **トップレベル** ``\frac`` を持つ式は subsize 累積で読みづらい。
+        # ソース文字列から深さ 0 の ``\frac`` を数える（``\sqrt`` 内・``\left( \right)`` 内・
+        # 添字 ``{}`` 内の入れ子分数は深さ > 0 で除外される）。
+        if _count_top_level_fracs(body_src) >= 2:
+            needs_split = True
+    if not needs_split:
+        return [body_src]
+    if full_w <= 0:
+        return [body_src]
+
+    # 1 次: 関係演算子で分割
+    rel_segs = _split_at_top_level(body_src, _RELATION_LATEX_OPS, _RELATION_SINGLE_OPS)
+    if len(rel_segs) <= 1:
+        rel_segs = [body_src]
+
+    # 各関係セグメントを確認。
+    # - 幅 > max_width_mm → 加減で 2 次分割（収まる単位に貪欲連結）
+    # - force_split_multiple_fractions=True かつ \frac が 2 個以上 → 加減で
+    #   分割し、各セグメントの \frac を 1 個以下に抑える（subsize 累積回避）
+    final_segs: list[str] = []
+    for seg in rel_segs:
+        seg_w = measure(seg)
+        too_wide = seg_w > max_width_mm
+        too_many_fracs = (
+            force_split_multiple_fractions and _count_top_level_fracs(seg) >= 2
+        )
+        if not too_wide and not too_many_fracs:
+            final_segs.append(seg)
+            continue
+        add_segs = _split_at_top_level(seg, (), _ADDITIVE_OPS)
+        if len(add_segs) <= 1:
+            # 分割不能（単一項のまま大きい：\frac{...}{...} が長い等）→ そのまま渡す
+            final_segs.append(seg)
+            continue
+        # 貪欲連結: cur+next が
+        # (a) max_width 超、または
+        # (b) force_split 時に \frac が 2 個以上
+        # になったら確定して次セグメントへ。
+        cur = ""
+        for piece in add_segs:
+            trial = cur + piece
+            over_width = cur and measure(trial) > max_width_mm
+            over_fracs = (
+                force_split_multiple_fractions
+                and cur
+                and _count_top_level_fracs(trial) >= 2
+            )
+            if over_width or over_fracs:
+                final_segs.append(cur)
+                cur = piece
+            else:
+                cur = trial
+        if cur:
+            final_segs.append(cur)
+
+    if len(final_segs) <= 1:
+        return [body_src]
+    return final_segs
+
+
+@lru_cache(maxsize=512)
+def glyph_ink_bbox(char: str, fontsize: float) -> tuple[float, float, float, float] | None:
+    """1 グリフを baseline 原点・``fontsize`` pt で描いた実インク bbox を返す。
+
+    matplotlib の ``vp.glyphs`` の ``(ox, oy)`` は glyph の baseline（描画原点）であり
+    インク範囲ではない。手書き／skeleton の unit 字形を「そのグリフが画面で占める矩形」
+    へ正確に貼り込むため、当該 fontsize で TextPath を描いたときの実インク範囲（baseline
+    原点・上向き正の pt）を返す。空白等で墨が無ければ None。
+
+    Args:
+        char: 1 文字。
+        fontsize: pt。
+
+    Returns:
+        ``(x_min, y_min, width, height)``（baseline 原点・上向き正の pt）。墨なしは None。
+    """
+    from matplotlib.textpath import TextPath
+
+    try:
+        # extract_math_layout と同じく既定 fontset(dejavusans)で取り、baseline・サイズの
+        # 基準を一致させる。$...$ で囲み mathtext 経由で描くことで √・大括弧など別フォントの
+        # 記号も正しいグリフが選ばれる（math 字形に統一）。
+        safe = re.sub(r"(?<!\\)%", r"\\%", char)
+        tp = TextPath((0, 0), f"${safe}$", size=fontsize)
+        v = tp.vertices
+        if len(v) == 0:
+            return None
+        x_min, y_min = float(v[:, 0].min()), float(v[:, 1].min())
+        x_max, y_max = float(v[:, 0].max()), float(v[:, 1].max())
+    except Exception:
+        return None
+    w, h = x_max - x_min, y_max - y_min
+    if w <= 0 or h <= 0:
+        return None
+    return (x_min, y_min, w, h)
+
+
+@lru_cache(maxsize=256)
+def render_glyph_unit_strokes(char: str) -> tuple[np.ndarray, ...] | None:
+    """1 つの記号（大型構造記号も含む）を unit square [0,1]×[0,1] Y-UP に skeleton 化する。
+
+    ``√`` ``∑`` ``∫`` や大括弧など手書き字形を持たない構造記号を、matplotlib（cm
+    fontset）の数式書体で描いてスケルトン化する。``render_math_char_to_unit_strokes``
+    は本文文字向けに ``$...$`` でラップして描くが、こちらは大型記号用に十分大きい pt で
+    描いて縦横比を保つ。返り値は tuple（lru_cache のため）。失敗時は None。
+
+    Args:
+        char: 描画する 1 文字（``√`` ``(`` ``∑`` 等）。
+
+    Returns:
+        unit square Y-UP のストローク列（tuple）。失敗時は None。
+    """
+    gray = _render_to_gray(char)
+    if gray is None:
+        return None
+    binary = _binarize(gray)
+    if not binary.any():
+        return None
     binary = _crop(binary)
     skeleton = morphology.skeletonize(binary)
     pixel_strokes = _trace_skeleton(skeleton)
