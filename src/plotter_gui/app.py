@@ -181,14 +181,11 @@ class MainWindow:
 
     def __init__(self, root: tk.Tk, worker: PlotterWorker | None = None) -> None:
         self._root = root
-        # 後方互換のため self.root も残す (既存テスト参照)。
-        self.root = root
 
         # UI 永続状態。dispatch_event が破壊的に更新し、callback が読み出す。
         self._state: UiState = UiState()
         # 選択済み G-code 内容 (送信開始時に worker へ渡す)。
         self._selected_lines: list[str] | None = None
-        self._selected_path: Path | None = None
 
         # Worker は DI 可能。テスト時は MockSerial を仕込んだ Worker を渡す。
         # 未指定時は既定 (実シリアル接続) の Worker を生成。
@@ -306,7 +303,6 @@ class MainWindow:
         プレビュー描画は FilePickerWidget 内で完結している。MainWindow では
         送信用の行リストを読み込んで保持する役割のみ。
         """
-        self._selected_path = path
         self._selected_lines = handle_file_selected(path, log_view=self.log_view)
 
     # -----------------------------------------------------------------

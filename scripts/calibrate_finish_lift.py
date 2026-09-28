@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.gcode.calibration import build_calibration_gcode
 from src.gcode.generator import GCodeGenerator
-from src.ui.web_app import PlotterPipeline
+from src.handwriting.finishing import HANE, HARAI
+from src.pipeline import PlotterPipeline
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -52,26 +53,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    kanjivg_dir = args.kanjivg_dir if args.kanjivg_dir.exists() else None
-    checkpoint = args.checkpoint if args.checkpoint and args.checkpoint.exists() else None
-
     pipeline = PlotterPipeline(
-        checkpoint_path=checkpoint,
-        kanjivg_dir=kanjivg_dir,
+        checkpoint_path=args.checkpoint,
+        kanjivg_dir=args.kanjivg_dir,
         user_strokes_dir=args.user_strokes_dir,
     )
-
-    placements = pipeline.text_to_placements(args.char)
-    if not placements or not placements[0]:
+    pages = pipeline.typeset(args.char)
+    if not pages[0]:
         print(f"文字を配置できなかった: {args.char!r}")
         return 1
 
-    strokes, finishes = pipeline.placements_to_strokes_with_finishes(placements[0])
+    page = pipeline.render_page(pages[0])
+    strokes, finishes = page.strokes, page.finishes
     if not strokes:
         print(f"ストロークが生成されなかった: {args.char!r}")
         return 1
 
-    n_lift = sum(1 for f in finishes if f in ("harai", "hane"))
+    n_lift = sum(1 for f in finishes if f in (HARAI, HANE))
     if n_lift == 0:
         print(
             f"警告: {args.char!r} に払い・はねが無く Z リフトが出ない。"

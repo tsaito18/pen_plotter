@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +105,8 @@ _LATEX_ACCENTS: set[str] = {
 class MathElement:
     type: str  # "text", "frac", "sup", "sub", "sqrt", "symbol", "group", "operator", "accent"
     content: str = ""
-    numerator: Optional[MathElement] = None
-    denominator: Optional[MathElement] = None
+    numerator: MathElement | None = None
+    denominator: MathElement | None = None
     children: list[MathElement] = field(default_factory=list)
 
 
@@ -117,7 +116,7 @@ class MathPlacement:
     x: float
     y: float
     font_size: float
-    role: Optional[str] = None
+    role: str | None = None
     line_segment: tuple[float, float, float, float] | None = None
 
 
@@ -148,10 +147,6 @@ class _ParserState:
     def __init__(self, source: str) -> None:
         self._src = source
         self._pos = 0
-
-    @property
-    def _remaining(self) -> str:
-        return self._src[self._pos :]
 
     def _peek(self) -> str | None:
         if self._pos < len(self._src):
@@ -275,10 +270,7 @@ class _ParserState:
                 sub_children = _ParserState(sub_src).parse_elements()
                 elements.append(MathElement(type="sub", children=sub_children))
 
-            elif ch == "{" or ch == "}":
-                self._advance()
-
-            elif ch == "\n":
+            elif ch == "{" or ch == "}" or ch == "\n":
                 self._advance()
 
             else:
@@ -303,7 +295,7 @@ class _ParserState:
 
 
 # 文字幅推定の係数（font_size に対する比率）
-_CHAR_WIDTH_RATIO = 0.6
+CHAR_WIDTH_RATIO = 0.6
 
 
 class MathLayoutEngine:
@@ -362,7 +354,7 @@ class MathLayoutEngine:
         """単一要素を box として返す。横方向の起点は x、ベースラインは y。"""
         if elem.type == "text" or elem.type == "symbol" or elem.type == "tag":
             text = elem.content
-            width = len(text) * font_size * _CHAR_WIDTH_RATIO
+            width = len(text) * font_size * CHAR_WIDTH_RATIO
             return MathBox(
                 placements=[MathPlacement(text=text, x=x, y=y, font_size=font_size)],
                 width=width,
@@ -372,7 +364,7 @@ class MathLayoutEngine:
 
         if elem.type == "operator":
             text = elem.content
-            width = len(text) * font_size * _CHAR_WIDTH_RATIO
+            width = len(text) * font_size * CHAR_WIDTH_RATIO
             return MathBox(
                 placements=[
                     MathPlacement(
@@ -412,7 +404,7 @@ class MathLayoutEngine:
     def _layout_frac(elem: MathElement, x: float, y: float, font_size: float) -> MathBox:
         frac_font = font_size * 0.7
         gap = font_size * 0.15
-        # 分子は y より上、分母は下に配置するため、各々の box は仮ベースラインで計算してから平行移動する
+        # 分子は y より上、分母は下に置く。各 box を仮ベースラインで計算してから平行移動する
         num_children = elem.numerator.children if elem.numerator else []
         den_children = elem.denominator.children if elem.denominator else []
 
@@ -627,11 +619,3 @@ class MathLayoutEngine:
             ascent=ascent,
             descent=child_box.descent,
         )
-
-    @staticmethod
-    def total_width(placements: list[MathPlacement]) -> float:
-        if not placements:
-            return 0.0
-        rightmost = max(p.x + len(p.text) * p.font_size * _CHAR_WIDTH_RATIO for p in placements)
-        leftmost = min(p.x for p in placements)
-        return rightmost - leftmost

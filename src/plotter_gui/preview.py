@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.plotter_gui._resources import resource_path
+from src.resources import resource_path
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
@@ -141,7 +141,7 @@ def parse_gcode(source: str | Path) -> list[Stroke]:
     return [Stroke(points=pts) for pts in strokes]
 
 
-def render_strokes(ax: "Axes", strokes: list[Stroke]) -> None:
+def render_strokes(ax: Axes, strokes: list[Stroke]) -> None:
     """matplotlib Axes へストロークを描画する。
 
     Web UI (src/ui/preview_renderer.py) のプレビューと見た目を揃えるため:

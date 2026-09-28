@@ -1,10 +1,10 @@
+"""ユーザー筆跡の人物プロファイル（``<root>/<profile>/<文字>/*.json``）。"""
+
 from __future__ import annotations
 
 import re
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
-
 
 _PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -26,15 +26,6 @@ def validate_profile_id(profile_id: str) -> str:
     if not _PROFILE_ID_RE.match(profile_id):
         raise ValueError("profile id must contain only letters, numbers, '_' or '-'")
     return profile_id
-
-
-def is_character_data_dir(path: Path) -> bool:
-    if not path.is_dir():
-        return False
-    for char_dir in path.iterdir():
-        if char_dir.is_dir() and list(char_dir.glob("*.json")):
-            return True
-    return False
 
 
 def list_profiles(root_dir: Path) -> list[StrokeProfile]:
@@ -77,12 +68,22 @@ def ensure_profile(root_dir: Path, profile_id: str) -> Path:
     return path
 
 
-def resolve_profile_dir(root_dir: Path, profile_id: str) -> Path:
-    profile_id = validate_profile_id(profile_id)
-    path = Path(root_dir) / profile_id
-    if not path.is_dir():
-        raise ValueError(f"profile not found: {profile_id}")
-    return path
+def resolve_character_root(root: Path | str | None, profile_id: str | None = None) -> Path | None:
+    """ユーザー筆跡ディレクトリを「文字ディレクトリ群の親」へ解決する。
+
+    ``root`` がプロファイルのルート（``<root>/<profile>/<文字>/*.json``）なら
+    ``profile_id`` のプロファイル（未指定・不明なら先頭）を返す。``root`` 自体が
+    文字ディレクトリ群の親ならそのまま返す。存在しなければ None。
+    """
+    if root is None or not Path(root).is_dir():
+        return None
+    profiles = list_profiles(Path(root))
+    if not profiles:
+        return Path(root)
+    for p in profiles:
+        if p.id == profile_id:
+            return p.path
+    return profiles[0].path
 
 
 def resolve_training_dirs(root_dir: Path, dataset: dict | None) -> list[Path]:
@@ -108,25 +109,3 @@ def resolve_training_dirs(root_dir: Path, dataset: dict | None) -> list[Path]:
     if profile_id not in profiles:
         raise ValueError(f"profile not found: {profile_id}")
     return [profiles[profile_id]]
-
-
-def migrate_legacy_root(root_dir: Path, profile_id: str = "taiga") -> list[Path]:
-    """Move legacy root-level character dirs into a named profile.
-
-    This is intentionally conservative: only directories that directly contain JSON files
-    are moved. Existing profile directories are left untouched.
-    """
-    root_dir = Path(root_dir)
-    target = ensure_profile(root_dir, profile_id)
-    moved: list[Path] = []
-    for child in sorted(root_dir.iterdir()):
-        if child == target or not child.is_dir():
-            continue
-        if not list(child.glob("*.json")):
-            continue
-        dest = target / child.name
-        if dest.exists():
-            raise FileExistsError(f"migration target already exists: {dest}")
-        shutil.move(str(child), str(dest))
-        moved.append(dest)
-    return moved

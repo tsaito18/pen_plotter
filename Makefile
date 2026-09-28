@@ -1,71 +1,53 @@
-.PHONY: ui collect train pretrain finetune preview test lint format help
+.PHONY: help ui collect pretrain finetune train preview test test-fast lint format
 
-VENV := . .venv/bin/activate &&
+RUN := . .venv/bin/activate &&
 
 # デフォルトパラメータ
-CHECKPOINT  ?= data/models/finetuned.pt
-PRETRAIN_CP ?= data/models/pretrain_checkpoint.pt
-USER_DIR    ?= data/user_strokes
-REF_DIR     ?= data/strokes
-PORT        ?= 7860
-COLLECT_PORT?= 8080
-EPOCHS_PRE  ?= 80
-EPOCHS_FT   ?= 20
+CHECKPOINT   ?= data/models/finetuned.pt
+PRETRAIN_CP  ?= data/models/pretrain_checkpoint.pt
+USER_DIR     ?= data/user_strokes
+REF_DIR      ?= data/strokes
+PORT         ?= 7860
+COLLECT_PORT ?= 8080
+EPOCHS_PRE   ?= 80
+EPOCHS_FT    ?= 20
+TAG          ?= latest
 
 help: ## ヘルプを表示
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-ui: ## Web UIを起動
-	$(VENV) python scripts/run_ui.py --checkpoint $(CHECKPOINT) --port $(PORT)
+ui: ## Web UI を起動
+	$(RUN) python scripts/run_ui.py --checkpoint $(CHECKPOINT) --kanjivg-dir $(REF_DIR) \
+		--user-strokes-dir $(USER_DIR) --port $(PORT)
 
-collect: ## ストローク収集UIを起動
-	$(VENV) python scripts/collect_strokes.py --port $(COLLECT_PORT)
+collect: ## 手書きサンプル収集 UI を起動
+	$(RUN) python scripts/collect_strokes.py --output-dir $(USER_DIR) --port $(COLLECT_PORT)
 
-train: pretrain finetune ## 訓練（pretrain + finetune）
+pretrain: ## 変形モデルをユーザー筆跡で訓練
+	$(RUN) python scripts/train.py pretrain --user-dir $(USER_DIR) --ref-dir $(REF_DIR) \
+		--epochs $(EPOCHS_PRE) --batch-size 256 --hidden-dim 128 --style-dim 128 \
+		--learning-rate 0.001 --use-aligner
 
-pretrain: ## 事前訓練
-	$(VENV) python scripts/pretrain.py \
-		--model-version v3-user \
-		--hand-dir $(USER_DIR) \
-		--ref-dir $(REF_DIR) \
-		--epochs $(EPOCHS_PRE) \
-		--batch-size 256 \
-		--hidden-dim 128 \
-		--style-dim 128 \
-		--learning-rate 0.001 \
+finetune: ## StyleEncoder を微調整
+	$(RUN) python scripts/train.py finetune --checkpoint $(PRETRAIN_CP) --user-dir $(USER_DIR) \
+		--ref-dir $(REF_DIR) --epochs $(EPOCHS_FT) --batch-size 8 --learning-rate 0.0005 \
 		--use-aligner
 
-finetune: ## ファインチューニング
-	$(VENV) python scripts/finetune.py \
-		--checkpoint $(PRETRAIN_CP) \
-		--user-dir $(USER_DIR) \
-		--ref-dir $(REF_DIR) \
-		--epochs $(EPOCHS_FT) \
-		--batch-size 8 \
-		--learning-rate 0.0005 \
-		--use-aligner
+train: pretrain finetune ## pretrain → finetune
 
-preview: ## プレビュー画像を生成（TEXT変数で指定）
-	@$(VENV) python -c "\
-	from src.ui.web_app import PlotterPipeline; \
-	from pathlib import Path; \
-	import time; \
-	p = PlotterPipeline( \
-		checkpoint_path=Path('$(CHECKPOINT)'), \
-		kanjivg_dir=Path('$(REF_DIR)'), \
-		user_strokes_dir=Path('$(USER_DIR)'), \
-	); \
-	text = '$(TEXT)' if '$(TEXT)' else '1. 実験目的\n抵抗とコンデンサを組み合わせたCR直列回路において、時定数$$\\\\tau = RC$$を測定する。\n電圧の減衰は$$V(t) = V_0 e^{-t/RC}$$で表される。'; \
-	out = f'/tmp/preview_{int(time.time())}.png'; \
-	p.generate_preview(text, out); \
-	print(f'Saved: {out}')"
+preview: ## 固定 seed の手書きプレビュー（A/B 比較用, TAG で世代名）
+	$(RUN) python scripts/compare_handwriting.py --tag $(TAG) --checkpoint $(CHECKPOINT) \
+		--kanjivg-dir $(REF_DIR) --user-strokes-dir $(USER_DIR)
 
-test: ## テスト実行
-	$(VENV) pytest
+test: ## 全テスト
+	$(RUN) pytest
+
+test-fast: ## 重いテストを除く
+	$(RUN) pytest -m "not slow and not hardware"
 
 lint: ## リント
-	$(VENV) ruff check src/ tests/ scripts/
+	$(RUN) ruff check src tests scripts
 
 format: ## フォーマット
-	$(VENV) ruff format src/ tests/ scripts/
+	$(RUN) ruff format src tests scripts

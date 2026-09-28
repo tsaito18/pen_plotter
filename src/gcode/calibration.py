@@ -10,12 +10,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
-import numpy.typing as npt
 
 from src.gcode.config import PlotterConfig
 from src.gcode.generator import GCodeGenerator
-
-Stroke = npt.NDArray[np.float64]
+from src.geometry import Stroke
 
 
 def _strokes_width(strokes: list[Stroke]) -> float:
@@ -56,23 +54,18 @@ def build_pen_z_calibration(
     """
     cfg = base_config or PlotterConfig()
     gen = GCodeGenerator(cfg)
-    lines: list[str] = gen._header()
+    lines: list[str] = gen.header()
 
     for i, z in enumerate(z_values):
         y = y_top - i * row_spacing
         x1 = x_origin + line_length
         lines.append(cfg.pen_up_command)
-        lines.append(
-            f"G0 X{gen._format_coord(x_origin)} Y{gen._format_coord(y)} F{cfg.travel_speed:.0f}"
-        )
+        lines.append(f"G0 X{gen.fmt(x_origin)} Y{gen.fmt(y)} F{cfg.travel_speed:.0f}")
         # 目標 Z まで下ろしてから水平に引く（線全体を固定 Z で描く）。
-        lines.append(f"G1 Z{gen._format_coord(z)} F{cfg.pen_z_feed:.0f}")
-        lines.append(
-            f"G1 X{gen._format_coord(x1)} Y{gen._format_coord(y)} "
-            f"Z{gen._format_coord(z)} F{cfg.draw_speed:.0f}"
-        )
+        lines.append(f"G1 Z{gen.fmt(z)} F{cfg.pen_z_feed:.0f}")
+        lines.append(f"G1 X{gen.fmt(x1)} Y{gen.fmt(y)} Z{gen.fmt(z)} F{cfg.draw_speed:.0f}")
 
-    lines.extend(gen._footer())
+    lines.extend(gen.footer())
     return lines
 
 
@@ -102,7 +95,7 @@ def build_calibration_gcode(
     """
     base_config = base_config or PlotterConfig()
     header_gen = GCodeGenerator(base_config)
-    lines: list[str] = header_gen._header()
+    lines: list[str] = header_gen.header()
 
     if strokes and z_values:
         gap = spacing_mm if spacing_mm is not None else _strokes_width(strokes) * 1.6
@@ -110,7 +103,7 @@ def build_calibration_gcode(
             gen = GCodeGenerator(replace(base_config, finish_lift_z=z))
             offset = np.array([i * gap, 0.0], dtype=np.float64)
             for stroke, finish in zip(strokes, finishes):
-                lines.extend(gen._stroke_to_gcode(stroke + offset, finish=finish))
+                lines.extend(gen.stroke_to_gcode(stroke + offset, finish=finish))
 
-    lines.extend(header_gen._footer())
+    lines.extend(header_gen.footer())
     return lines

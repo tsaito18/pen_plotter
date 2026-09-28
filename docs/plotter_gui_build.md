@@ -32,4 +32,4 @@ uv sync --extra build
 - **起動時に画面が白いまま**: 初回起動は数秒の展開待ちあり、しばらく待つ。
 - **アンチウイルスがブロック**: PyInstaller 製 exe は誤検知されやすい。配布前に SmartScreen 通過のため自己署名するか、Windows Defender に除外指定を案内する。
 - **FigureCanvasTkAgg の ImportError**: `plotter_gui.spec` の `hiddenimports` に `matplotlib.backends.backend_tkagg` が入っていることを確認。
-- **データファイルが見つからない**: `plotter_gui.spec` の `datas` 行と `_resources.resource_path` 経由のパス解決を確認。
+- **データファイルが見つからない**: `plotter_gui.spec` の `datas` 行と `src/resources.py` の `resource_path` 経由のパス解決を確認。

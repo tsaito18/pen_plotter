@@ -26,7 +26,7 @@ from src.gcode.generator import GCodeGenerator
 
 def _frange(start: float, stop: float, step: float) -> list[float]:
     """start から stop まで step 刻み（降順可）。端点 stop を含める。"""
-    n = int(round(abs(start - stop) / abs(step))) + 1
+    n = round(abs(start - stop) / abs(step)) + 1
     sign = -1.0 if stop < start else 1.0
     return [round(start + sign * abs(step) * i, 3) for i in range(n)]
 
@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     z_values = _frange(args.z_start, args.z_stop, args.z_step)
 
     cfg = PlotterConfig()
-    if not (0.0 <= args.y_top - (len(z_values) - 1) * args.row_spacing):
+    if not (args.y_top - (len(z_values) - 1) * args.row_spacing >= 0.0):
         print("警告: 行数×行間隔が紙の高さを超える可能性。--row-spacing を詰めること。")
 
     gcode = build_pen_z_calibration(

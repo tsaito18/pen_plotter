@@ -1,32 +1,24 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.egg-info/
 dist/
 build/
 .venv/
+.ruff_cache/
+.pytest_cache/
 
-# Data
-data/strokes/
-data/user_strokes/
-data/models/
-data/report_examples/
-data/experiments/
-data/subsets/
-data/inkscape_ext/
-data/samples/
+# ローカルデータ（サンプルは data_examples/ にある。シンボリックリンクでも可）
+data/strokes
+data/user_strokes
+data/models
+data/experiments
 
-# G-code
+# 生成物
 *.gcode
-
-# Jupyter
-.ipynb_checkpoints/
+plotter_gui_error.log
 
 # IDE
 .idea/
 .vscode/
 *.swp
-*.swo
-test_env/
-data/user_strokes_old/

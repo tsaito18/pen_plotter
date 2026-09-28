@@ -11,7 +11,6 @@ import datetime
 import tkinter as tk
 from tkinter import ttk
 
-
 # レベル別の前景色マッピング。
 # - info: 黒 (通常)
 # - sent: 青 (送信した行を識別)

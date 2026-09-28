@@ -21,8 +21,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Mapping, Sequence
 
 from src.layout.line_breaking import is_halfwidth
 
@@ -95,7 +95,7 @@ def char_ink_length(strokes: Sequence[Stroke]) -> float:
     return sum(stroke_ink_length(stroke) for stroke in strokes)
 
 
-def _percentile(sorted_values: list[float], pct: float) -> float:
+def percentile(sorted_values: list[float], pct: float) -> float:
     """昇順済みリストに対する線形補間 percentile。
 
     numpy 依存を避けるため自前実装。マップ生成と正規化の両方で使う。
@@ -134,10 +134,11 @@ def normalize_robust(
     if not values:
         return []
     ordered = sorted(values)
-    lo = _percentile(ordered, low_pct)
-    hi = _percentile(ordered, high_pct)
+    lo = percentile(ordered, low_pct)
+    hi = percentile(ordered, high_pct)
     span = hi - lo
-    if span <= 0.0:
+    # 定数列でも percentile 補間の丸めで ~1e-16 の差が出るため、相対的に 0 とみなす
+    if span <= 1e-12 * max(1.0, abs(hi)):
         return [0.0] * len(values)
     return [min(1.0, max(0.0, (v - lo) / span)) for v in values]
 

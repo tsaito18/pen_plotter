@@ -1,0 +1,543 @@
+"""V3 スタイル転写の変形器（KanjiVG 参照ストロークをユーザーの書き癖へ変形する）。
+
+deformer_type:
+    - ``"offset"``: MLP による点ごとのオフセット（:class:`StrokeDeformer`）
+    - ``"affine"``: 画ごとの affine 変換（:class:`AffineStrokeDeformer`）
+    - ``"transformer"``: Self/Cross-Attention による点ごとのオフセット
+    - ``"twostage"``: affine（大域）＋ Transformer（細部）。本番採用。
+
+``affine`` 以外はオフセット ``(B, N, 2)`` を返し、訓練・推論とも
+:func:`postprocess_offsets`（平滑化＋クランプ）を通して使う。
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+import torch
+from torch import nn
+
+# オフセットのクランプ幅と平滑化窓。訓練と推論で必ず同じ値を使う（train-inference gap 防止）。
+OFFSET_CLAMP = 0.4
+SMOOTHING_KERNEL_SIZE = 15
+
+DEFORMER_TYPES = ("offset", "affine", "transformer", "twostage")
+
+
+def build_deformer(config: Mapping[str, Any]) -> nn.Module:
+    """設定（チェックポイントの ``config`` と同形式）から変形器を構築する。"""
+    kind = config.get("deformer_type", "offset")
+    style_dim = config.get("style_dim", 128)
+    dropout = config.get("dropout", 0.0)
+    if kind == "affine":
+        return AffineStrokeDeformer(
+            style_dim=style_dim, hidden_dim=config.get("hidden_dim", 64), dropout=dropout
+        )
+    if kind in ("transformer", "twostage"):
+        cls = TransformerDeformer if kind == "transformer" else TwoStageDeformer
+        return cls(
+            style_dim=style_dim,
+            d_model=config.get("d_model", 64),
+            nhead=config.get("nhead", 4),
+            num_self_attn_layers=config.get("num_self_attn_layers", 2),
+            ff_dim=config.get("ff_dim", 128),
+            dropout=dropout,
+        )
+    if kind == "offset":
+        return StrokeDeformer(
+            style_dim=style_dim, hidden_dim=config.get("hidden_dim", 256), dropout=dropout
+        )
+    raise ValueError(f"unknown deformer_type: {kind!r} (expected one of {DEFORMER_TYPES})")
+
+
+def smooth_offsets(offsets: torch.Tensor, kernel_size: int = SMOOTHING_KERNEL_SIZE) -> torch.Tensor:
+    """点ごとのオフセット ``(B, N, 2)`` を移動平均で平滑化する（高周波のガタつき除去）。"""
+    if offsets.shape[1] <= kernel_size:
+        return offsets
+    b, n, _ = offsets.shape
+    x = offsets.permute(0, 2, 1).reshape(b * 2, 1, n)
+    pad = kernel_size // 2
+    x_padded = nn.functional.pad(x, (pad, pad), mode="replicate")
+    kernel = torch.ones(1, 1, kernel_size, device=x.device) / kernel_size
+    smoothed = nn.functional.conv1d(x_padded, kernel)
+    return smoothed.reshape(b, 2, n).permute(0, 2, 1)
+
+
+def postprocess_offsets(offsets: torch.Tensor) -> torch.Tensor:
+    """訓練時の後処理（平滑化→クランプ）。推論は温度ノイズをこの間に挟む。"""
+    return smooth_offsets(offsets).clamp(-OFFSET_CLAMP, OFFSET_CLAMP)
+
+
+def compute_local_curvature(points: torch.Tensor) -> torch.Tensor:
+    """Compute local curvature at each point from adjacent triplets.
+
+    Uses cross-product magnitude / (edge lengths product) to estimate curvature,
+    then normalizes to [0, 1] via sigmoid. Boundary points copy their neighbor's value.
+
+    Args:
+        points: (batch, N, 2) xy coordinates.
+
+    Returns:
+        curvature: (batch, N, 1) normalized curvature values in [0, 1].
+    """
+    batch, n, _ = points.shape
+    if n < 3:
+        return torch.zeros(batch, n, 1, device=points.device, dtype=points.dtype)
+
+    p_prev = points[:, :-2]  # (batch, N-2, 2)
+    p_curr = points[:, 1:-1]
+    p_next = points[:, 2:]
+
+    v1 = p_curr - p_prev  # (batch, N-2, 2)
+    v2 = p_next - p_curr
+
+    # 2D cross product magnitude = |v1.x * v2.y - v1.y * v2.x|
+    cross = (v1[..., 0] * v2[..., 1] - v1[..., 1] * v2[..., 0]).abs()
+
+    len1 = v1.norm(dim=-1).clamp(min=1e-8)
+    len2 = v2.norm(dim=-1).clamp(min=1e-8)
+
+    # Raw curvature: cross / (len1 * len2), range [0, 1] geometrically
+    raw_curv = cross / (len1 * len2)
+
+    # Sigmoid normalization to [0, 1], scaled so moderate bends are visible
+    curv_interior = torch.sigmoid(raw_curv * 4.0 - 2.0)  # (batch, N-2)
+
+    # Pad boundaries by copying neighbor values
+    curv = torch.cat(
+        [curv_interior[:, :1], curv_interior, curv_interior[:, -1:]],
+        dim=1,
+    )
+
+    return curv.unsqueeze(-1)  # (batch, N, 1)
+
+
+class StrokeDeformer(nn.Module):
+    """Predicts per-point offsets to deform reference strokes to user style."""
+
+    MAX_STROKE_INDEX = 16
+
+    def __init__(
+        self,
+        style_dim: int = 128,
+        hidden_dim: int = 256,
+        num_layers: int = 3,
+        stroke_embed_dim: int = 16,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.style_dim = style_dim
+        self.hidden_dim = hidden_dim
+        self.stroke_embed_dim = stroke_embed_dim
+
+        self.stroke_embedding = nn.Embedding(self.MAX_STROKE_INDEX, stroke_embed_dim)
+
+        # ref_x, ref_y, normalized_t, curvature, style_vector, stroke_embed
+        input_dim = 2 + 1 + 1 + style_dim + stroke_embed_dim
+
+        layers: list[nn.Module] = []
+        in_dim = input_dim
+        for _ in range(num_layers - 1):
+            layers.extend(
+                [
+                    nn.Linear(in_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(dropout),
+                ]
+            )
+            in_dim = hidden_dim
+        layers.append(nn.Linear(in_dim, 2))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(
+        self,
+        reference_points: torch.Tensor,
+        style: torch.Tensor,
+        stroke_index: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Predict per-point offsets.
+
+        Args:
+            reference_points: (batch, N, 2) reference xy coordinates.
+            style: (batch, style_dim) style vector from StyleEncoder.
+            stroke_index: (batch,) integer stroke index, clamped to MAX_STROKE_INDEX-1.
+
+        Returns:
+            offsets: (batch, N, 2) predicted offset per point.
+        """
+        batch_size, n_points, _ = reference_points.shape
+
+        # normalized_t: position along the stroke [0, 1]
+        t = torch.linspace(0, 1, n_points, device=reference_points.device)
+        t = t.unsqueeze(0).unsqueeze(-1).expand(batch_size, n_points, 1)
+
+        # local curvature from reference geometry
+        curvature = compute_local_curvature(reference_points)
+
+        # style broadcast to each point
+        style_expanded = style.unsqueeze(1).expand(batch_size, n_points, self.style_dim)
+
+        # stroke embedding
+        if stroke_index is not None:
+            idx = stroke_index.clamp(0, self.MAX_STROKE_INDEX - 1)
+            stroke_emb = self.stroke_embedding(idx)
+            stroke_emb = stroke_emb.unsqueeze(1).expand(batch_size, n_points, self.stroke_embed_dim)
+        else:
+            stroke_emb = torch.zeros(
+                batch_size,
+                n_points,
+                self.stroke_embed_dim,
+                device=reference_points.device,
+            )
+
+        features = torch.cat([reference_points, t, curvature, style_expanded, stroke_emb], dim=-1)
+        return self.mlp(features)
+
+
+class AffineStrokeDeformer(nn.Module):
+    """Predicts per-stroke affine transformation (rotation, scale, shear, translation)."""
+
+    MAX_STROKE_INDEX = 16
+
+    def __init__(
+        self,
+        style_dim: int = 128,
+        hidden_dim: int = 64,
+        stroke_embed_dim: int = 16,
+        dropout: float = 0.0,
+        theta_mult: float = 0.015,
+        scale_mult: float = 0.04,
+        shear_mult: float = 0.015,
+        translation_mult: float = 0.08,
+    ) -> None:
+        super().__init__()
+        self.style_dim = style_dim
+        self.stroke_embedding = nn.Embedding(self.MAX_STROKE_INDEX, stroke_embed_dim)
+        self.theta_mult = theta_mult
+        self.scale_mult = scale_mult
+        self.shear_mult = shear_mult
+        self.translation_mult = translation_mult
+        input_dim = style_dim + stroke_embed_dim + 4  # +4 for stroke stats (cx, cy, w, h)
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 6),  # theta, sx, sy, shear, tx, ty
+        )
+        self.mlp[-1].weight.data.zero_()
+        self.mlp[-1].bias.data.zero_()
+
+    def forward(
+        self,
+        reference_points: torch.Tensor,
+        style: torch.Tensor,
+        stroke_index: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Predict affine transformation and apply to reference points.
+
+        Args:
+            reference_points: (batch, N, 2) reference xy coordinates.
+            style: (batch, style_dim) style vector from StyleEncoder.
+            stroke_index: (batch,) integer stroke index, clamped to MAX_STROKE_INDEX-1.
+
+        Returns:
+            transformed: (batch, N, 2) transformed points.
+            params: (batch, 6) raw affine parameters.
+        """
+        batch = reference_points.shape[0]
+        center = reference_points.mean(dim=1)
+        mins = reference_points.min(dim=1).values
+        maxs = reference_points.max(dim=1).values
+        size = maxs - mins
+        stroke_stats = torch.cat([center, size], dim=-1)
+
+        if stroke_index is not None:
+            idx = stroke_index.clamp(0, self.MAX_STROKE_INDEX - 1)
+            s_emb = self.stroke_embedding(idx)
+        else:
+            s_emb = torch.zeros(batch, self.stroke_embedding.embedding_dim, device=style.device)
+
+        features = torch.cat([style, s_emb, stroke_stats], dim=-1)
+        params = self.mlp(features)
+
+        theta = params[:, 0] * self.theta_mult
+        sx = 1.0 + params[:, 1] * self.scale_mult
+        sy = 1.0 + params[:, 2] * self.scale_mult
+        shear = params[:, 3] * self.shear_mult
+        tx = params[:, 4] * self.translation_mult
+        ty = params[:, 5] * self.translation_mult
+
+        cos_t = torch.cos(theta)
+        sin_t = torch.sin(theta)
+        a11 = sx * cos_t
+        a12 = -sy * sin_t + shear
+        a21 = sx * sin_t
+        a22 = sy * cos_t
+
+        centered = reference_points - center.unsqueeze(1)
+        x_new = centered[:, :, 0] * a11.unsqueeze(1) + centered[:, :, 1] * a12.unsqueeze(1)
+        y_new = centered[:, :, 0] * a21.unsqueeze(1) + centered[:, :, 1] * a22.unsqueeze(1)
+        transformed = torch.stack([x_new, y_new], dim=-1)
+        translation = torch.stack([tx, ty], dim=-1).unsqueeze(1)
+        transformed = transformed + center.unsqueeze(1) + translation
+
+        return transformed, params
+
+
+class TransformerDeformer(nn.Module):
+    """Transformer-based stroke deformer with self-attention + cross-attention to style.
+
+    Self-attention enables inter-point communication (replacing post-hoc smooth_offsets).
+    Cross-attention allows each point to modulate style influence differently.
+    """
+
+    MAX_STROKE_INDEX = 16
+
+    def __init__(
+        self,
+        style_dim: int = 128,
+        d_model: int = 64,
+        nhead: int = 4,
+        num_self_attn_layers: int = 2,
+        ff_dim: int = 128,
+        stroke_embed_dim: int = 16,
+        max_points: int = 64,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.style_dim = style_dim
+        self.d_model = d_model
+        self.stroke_embed_dim = stroke_embed_dim
+
+        self.stroke_embedding = nn.Embedding(self.MAX_STROKE_INDEX, stroke_embed_dim)
+
+        # Input: ref_xy(2) + t(1) + curvature(1) + stroke_embed(stroke_embed_dim)
+        input_dim = 2 + 1 + 1 + stroke_embed_dim
+        self.input_proj = nn.Linear(input_dim, d_model)
+
+        # Learned positional encoding
+        self.pos_embed = nn.Embedding(max_points, d_model)
+
+        # Self-attention encoder layers
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=ff_dim,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.self_attn_layers = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_self_attn_layers
+        )
+
+        # Cross-attention to style (multi-token: project style to num_style_tokens KV tokens)
+        self.num_style_tokens = 4
+        self.style_proj = nn.Linear(style_dim, d_model * self.num_style_tokens)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True
+        )
+        self.cross_norm = nn.LayerNorm(d_model)
+
+        # Output projection - zero-initialized for identity deformation at start
+        self.output_proj = nn.Linear(d_model, 2)
+        self.output_proj.weight.data.zero_()
+        self.output_proj.bias.data.zero_()
+
+    def forward(
+        self,
+        reference_points: torch.Tensor,
+        style: torch.Tensor,
+        stroke_index: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Predict per-point offsets using Transformer architecture.
+
+        Args:
+            reference_points: (batch, N, 2) reference xy coordinates.
+            style: (batch, style_dim) style vector from StyleEncoder.
+            stroke_index: (batch,) integer stroke index.
+
+        Returns:
+            offsets: (batch, N, 2) predicted offset per point.
+        """
+        batch_size, n_points, _ = reference_points.shape
+
+        t = torch.linspace(0, 1, n_points, device=reference_points.device)
+        t = t.unsqueeze(0).unsqueeze(-1).expand(batch_size, n_points, 1)
+
+        curvature = compute_local_curvature(reference_points)
+
+        if stroke_index is not None:
+            idx = stroke_index.clamp(0, self.MAX_STROKE_INDEX - 1)
+            stroke_emb = self.stroke_embedding(idx)
+            stroke_emb = stroke_emb.unsqueeze(1).expand(batch_size, n_points, self.stroke_embed_dim)
+        else:
+            stroke_emb = torch.zeros(
+                batch_size,
+                n_points,
+                self.stroke_embed_dim,
+                device=reference_points.device,
+            )
+
+        # Concatenate input features: ref_xy + t + curvature + stroke_embed
+        features = torch.cat([reference_points, t, curvature, stroke_emb], dim=-1)
+
+        # Input projection + positional encoding
+        x = self.input_proj(features)
+        positions = torch.arange(n_points, device=reference_points.device)
+        positions = positions.clamp(max=self.pos_embed.num_embeddings - 1)
+        x = x + self.pos_embed(positions).unsqueeze(0)
+
+        # Self-attention: inter-point communication
+        x = self.self_attn_layers(x)
+
+        # Cross-attention to style (multi-token KV for richer attention)
+        style_tokens = self.style_proj(style).view(batch_size, self.num_style_tokens, self.d_model)
+        attn_out, _ = self.cross_attn(query=x, key=style_tokens, value=style_tokens)
+        x = self.cross_norm(x + attn_out)
+
+        # Output projection (zero-initialized -> starts as identity)
+        return self.output_proj(x)
+
+
+class TwoStageDeformer(nn.Module):
+    """Two-stage deformer: per-stroke affine + per-point Transformer offsets.
+
+    Stage 1 (Affine): captures global per-stroke transformations
+        — rotation, scale, shear, translation. Models user style traits
+        like consistent slant, stroke size, and stroke position bias.
+    Stage 2 (Transformer): per-point offsets on the affine-transformed
+        reference, capturing fine-grained local style.
+
+    Forward returns offsets relative to the ORIGINAL reference points,
+    so it remains a drop-in replacement for StrokeDeformer / TransformerDeformer:
+        deformed = ref + deformer(ref, style, stroke_index)
+    """
+
+    MAX_STROKE_INDEX = 16
+
+    def __init__(
+        self,
+        style_dim: int = 128,
+        d_model: int = 64,
+        nhead: int = 4,
+        num_self_attn_layers: int = 2,
+        ff_dim: int = 128,
+        affine_hidden_dim: int = 64,
+        stroke_embed_dim: int = 16,
+        max_points: int = 64,
+        dropout: float = 0.0,
+        # Affine multipliers tuned for larger global deformation
+        theta_mult: float = 0.05,  # ~3° at param=1
+        scale_mult: float = 0.10,  # ±10%
+        shear_mult: float = 0.05,
+        translation_mult: float = 0.30,  # ±0.3 in [0,10] coord = 3%
+    ) -> None:
+        super().__init__()
+        self.affine = AffineStrokeDeformer(
+            style_dim=style_dim,
+            hidden_dim=affine_hidden_dim,
+            stroke_embed_dim=stroke_embed_dim,
+            dropout=dropout,
+            theta_mult=theta_mult,
+            scale_mult=scale_mult,
+            shear_mult=shear_mult,
+            translation_mult=translation_mult,
+        )
+        self.transformer = TransformerDeformer(
+            style_dim=style_dim,
+            d_model=d_model,
+            nhead=nhead,
+            num_self_attn_layers=num_self_attn_layers,
+            ff_dim=ff_dim,
+            stroke_embed_dim=stroke_embed_dim,
+            max_points=max_points,
+            dropout=dropout,
+        )
+
+    def forward(
+        self,
+        reference_points: torch.Tensor,
+        style: torch.Tensor,
+        stroke_index: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Predict per-point offsets from original reference points.
+
+        Args:
+            reference_points: (batch, N, 2)
+            style: (batch, style_dim)
+            stroke_index: (batch,)
+
+        Returns:
+            offsets: (batch, N, 2) — total offset (affine + transformer per-point)
+            relative to the ORIGINAL reference_points. Apply via:
+                deformed = reference_points + offsets
+        """
+        # Stage 1: affine-transformed points
+        affined, _params = self.affine(reference_points, style, stroke_index)
+
+        # Stage 2: per-point offsets on the affined points
+        per_point = self.transformer(affined, style, stroke_index)
+
+        # Return total offset relative to original reference
+        return (affined - reference_points) + per_point
+
+
+def affine_deformation_loss(
+    transformed: torch.Tensor,
+    target_points: torch.Tensor,
+) -> torch.Tensor:
+    """MSE loss between affine-transformed points and target points.
+
+    Args:
+        transformed: (batch, N, 2) transformed points.
+        target_points: (batch, N, 2) target points.
+
+    Returns:
+        Scalar loss.
+    """
+    return ((transformed - target_points) ** 2).mean()
+
+
+def deformation_loss(
+    predicted_offsets: torch.Tensor,
+    target_offsets: torch.Tensor,
+    mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """MSE loss between predicted and target offsets.
+
+    Args:
+        predicted_offsets: (batch, N, 2)
+        target_offsets: (batch, N, 2)
+        mask: optional (batch, N) boolean mask, True for valid points.
+
+    Returns:
+        Scalar loss.
+    """
+    diff_sq = (predicted_offsets - target_offsets) ** 2
+
+    if mask is not None:
+        mask_expanded = mask.unsqueeze(-1).float()
+        diff_sq = diff_sq * mask_expanded
+        return diff_sq.sum() / mask_expanded.sum().clamp(min=1.0)
+
+    return diff_sq.mean()
+
+
+def smoothness_loss(offsets: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    """Penalize large differences between offsets of adjacent points.
+
+    Args:
+        offsets: (batch, N, 2) predicted offsets.
+        mask: (batch, N) optional mask.
+    """
+    diff = offsets[:, 1:] - offsets[:, :-1]  # (batch, N-1, 2)
+    sq_diff = (diff**2).sum(dim=-1)  # (batch, N-1)
+
+    if mask is not None:
+        valid = mask[:, 1:] * mask[:, :-1]  # (batch, N-1)
+        return (sq_diff * valid).sum() / valid.sum().clamp(min=1)
+    return sq_diff.mean()

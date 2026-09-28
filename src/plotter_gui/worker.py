@@ -20,7 +20,6 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from src.comm.grbl_controller import GrblController
 from src.comm.serial_sender import SerialPort, SerialSender, StreamCancelled
 from src.gcode.config import PlotterConfig
 from src.plotter_gui.events import (
@@ -85,7 +84,6 @@ class PlotterWorker:
         # 接続状態 (worker thread から書き込み、emergency_stop からも読む)
         self._port: SerialPort | None = None
         self._sender: SerialSender | None = None
-        self._controller: GrblController | None = None
 
         # emergency_stop ↔ worker thread の port 書き込み排他用ロック。
         # 通常の send_line は worker thread に閉じているため不要だが、
@@ -256,7 +254,6 @@ class PlotterWorker:
 
         self._port = port
         self._sender = SerialSender(port)
-        self._controller = GrblController(port)
         self._emit(Connected(port_name=port_name))
 
     def _do_disconnect(self) -> None:
@@ -267,7 +264,6 @@ class PlotterWorker:
                 close_fn()
         self._port = None
         self._sender = None
-        self._controller = None
         self._emit(Disconnected())
 
     def _do_home(self) -> None:
@@ -300,13 +296,8 @@ class PlotterWorker:
         stale な状態として破棄する。進行中 stream への停止は stream 開始後に
         emergency_stop() が再度 set する。
         """
-        try:
-            sender = self._require_sender()
-        except RuntimeError as exc:
-            # 接続前の呼び出しは _dispatch 側に任せたいので例外を再 raise する。
-            # Started/Finished は出さない (まだ Started を出していない)。
-            raise exc
-
+        # 接続前なら RuntimeError をそのまま投げる（まだ Started を出していない）
+        sender = self._require_sender()
         self._cancel_event.clear()
         self._emit(JobStarted(kind="stream"))
 
