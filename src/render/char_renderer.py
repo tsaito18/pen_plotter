@@ -59,9 +59,12 @@ _CHAR_SUBSTITUTIONS: dict[str, str] = {
     "＋": "+",
     "－": "-",
     "／": "/",
+    "＜": "<",
+    "＞": ">",
     "−": "-",  # 数学マイナス
     "〜": "~",  # 波ダッシュ
     "～": "~",  # 全角チルダ
+    **{chr(0xFF10 + i): str(i) for i in range(10)},  # 全角数字
 }
 
 # 揺らぎを乗せない（形が崩れやすい）句読点・長音・括弧類
@@ -236,7 +239,7 @@ class CharRenderer:
 
         char = _CHAR_SUBSTITUTIONS.get(original, original)
         if char != original:
-            placement = replace(placement, char=char, slant=0.0)
+            placement = replace(placement, char=char)
         smooth = original in _SMOOTH_CHARS or char in _SMOOTH_CHARS
 
         rendered = (
@@ -276,8 +279,9 @@ class CharRenderer:
     def _render_symbol(self, placement: CharPlacement) -> tuple[str, RenderedChar] | None:
         char = placement.char
         if char in CIRCLED_NUMBERS:
-            digits, _types = self.kanjivg.load(CIRCLED_NUMBERS[char])
-            glyph = circled_number_glyph(digits)
+            glyph = circled_number_glyph(
+                [self.kanjivg.load(d)[0] or [] for d in CIRCLED_NUMBERS[char]]
+            )
         else:
             glyph = symbol_glyph(char)
         if glyph is None:

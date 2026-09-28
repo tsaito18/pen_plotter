@@ -60,6 +60,8 @@ _TAG_RE = re.compile(r"\\tag\{[^}]*\}")
 _PAGE_BREAK_RE = re.compile(r"^-{3,}$")
 _CAPTION_RE = re.compile(r"^:\s+(.+)$")
 _NOINDENT_RE = re.compile(r"^\\noindent[ \t]")
+# 描画も字送りもしない文字（ゼロ幅スペース・BOM 等。コピー＆ペーストで紛れ込む）
+_ZERO_WIDTH_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
 # 折り返し前にインライン数式を 1 文字に畳むための私用領域コードポイント
 _INLINE_MATH_PLACEHOLDER_BASE = 0xE000
 
@@ -379,7 +381,7 @@ class Typesetter:
         """テキストをページごとの配置要素リストへ組版する。"""
         if not text:
             return [[]]
-        text = normalize_body_punctuation(text)
+        text = normalize_body_punctuation(_ZERO_WIDTH_RE.sub("", text))
         area = self.layout.content_area()
         rows = self.layout.line_positions()
 

@@ -93,12 +93,29 @@ def fit_into_box(strokes: list[Stroke], x0: float, y0: float, x1: float, y1: flo
 CIRCLED_NUMBERS: dict[str, str] = {chr(0x2460 + i): str(i + 1) for i in range(20)}
 
 
-def circled_number_glyph(digit_strokes: list[Stroke] | None) -> list[Stroke]:
-    """丸数字: 外周の円＋内側に縮小した数字字形。"""
+def circled_number_glyph(digits: list[list[Stroke]]) -> list[Stroke]:
+    """丸数字: 外周の円＋内側に縮小した数字字形（複数桁は横に並べる）。
+
+    Args:
+        digits: 各桁の字形（数字の参照字形。無い桁は空リスト）。
+    """
     circle = unit_circle(0.5, 0.5, 0.46)
-    if not digit_strokes:
+    inner: list[Stroke] = []
+    x = 0.0
+    for strokes in digits:
+        if not strokes:
+            continue
+        pts = np.concatenate(strokes, axis=0)
+        mins, spans = pts.min(axis=0), np.ptp(pts, axis=0)
+        height = max(spans[1], 1e-6)
+        # 高さを 1 に正規化して左から詰める（桁間は字高の 0.2）
+        inner.extend((s - mins) / height + np.array([x, 0.0]) for s in strokes)
+        x += spans[0] / height + 0.2
+    if not inner:
         return [circle]
-    return [circle, *fit_into_box(digit_strokes, 0.3, 0.28, 0.7, 0.72)]
+    # 1 桁は従来どおり中央の枠、2 桁は横長の枠に収める
+    box = (0.3, 0.28, 0.7, 0.72) if len(digits) == 1 else (0.2, 0.3, 0.8, 0.7)
+    return [circle, *fit_into_box(inner, *box)]
 
 
 # =============================================================================

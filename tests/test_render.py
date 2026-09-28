@@ -236,3 +236,31 @@ def test_render_page_preview_writes_png(tmp_path: Path):
     stroke = np.column_stack([np.linspace(10, 50, 20), np.full(20, 100.0)])
     render_page_preview([stroke, stroke[:1]], [HARAI], path, config=PlotterConfig())
     assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# --- 字形欠損・置換の不具合（回帰） ---
+
+
+@pytest.mark.parametrize(("fullwidth", "ascii_char"), [("２", "2"), ("＜", "<"), ("＞", ">")])
+def test_fullwidth_chars_use_ascii_glyphs(kanjivg_dir, fullwidth: str, ascii_char: str):
+    r = _renderer(kanjivg_dir=kanjivg_dir)
+    assert len(r.render(_at(fullwidth)).strokes) == len(r.render(_at(ascii_char)).strokes) > 0
+    assert r.coverage.missing_glyphs == []
+
+
+def test_substituted_chars_keep_their_slant():
+    r = _renderer()
+    upright = r.render(_at("＝")).strokes
+    tilted = r.render(_at("＝", slant=0.2)).strokes
+    assert not np.allclose(upright[0], tilted[0])
+
+
+def test_two_digit_circled_numbers_draw_both_digits(kanjivg_dir):
+    r = _renderer(kanjivg_dir=kanjivg_dir)
+    one = r.render(_at("①")).strokes
+    twelve = r.render(_at("⑫")).strokes
+    assert len(one) == 1 + 1  # 円 + 「1」
+    assert len(twelve) == 1 + 1 + 2  # 円 + 「1」 + 「2」
+    inner = np.concatenate(twelve[1:])
+    circle = twelve[0]
+    assert circle[:, 0].min() < inner[:, 0].min() and inner[:, 0].max() < circle[:, 0].max()

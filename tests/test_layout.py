@@ -265,3 +265,10 @@ def test_table_is_centered_with_caption_below():
             assert left < p.x < right
     caption_y = next(p.y for p in page if p.char == "表")
     assert caption_y < min(p.line_segment[1] for p in horizontal)
+
+
+def test_zero_width_characters_take_no_space():
+    ts = _typesetter()
+    plain = ts.typeset("あい")[0]
+    with_zwsp = ts.typeset("あ​い﻿")[0]
+    assert [(p.char, p.x) for p in with_zwsp] == [(p.char, p.x) for p in plain]
