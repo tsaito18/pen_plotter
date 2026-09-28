@@ -81,16 +81,21 @@ def test_page_numbers_can_be_disabled(kanjivg_dir: Path, tmp_path: Path):
     assert pen_downs(True) > pen_downs(False)
 
 
-def test_same_seed_reproduces_output(kanjivg_dir: Path, user_strokes_root: Path, tmp_path: Path):
+def test_seed_alone_reproduces_all_randomness(
+    kanjivg_dir: Path, user_strokes_root: Path, tiny_checkpoint: Path, tmp_path: Path
+):
+    """seed だけで配置・字形・ML 温度ノイズの全揺らぎが再現できる（グローバル乱数に非依存）。"""
+
     def run(seed: int) -> str:
-        np.random.seed(0)
+        np.random.seed(None)  # グローバル乱数を毎回かき混ぜても結果が変わらないこと
         p = PlotterPipeline(
-            Settings(messiness=1.0, instance_variation=0.5),
+            Settings(messiness=1.0, instance_variation=0.5, temperature=1.0),
+            checkpoint_path=tiny_checkpoint,
             kanjivg_dir=kanjivg_dir,
             user_strokes_dir=user_strokes_root,
             seed=seed,
         )
-        return p.generate_gcode("十人一十人", tmp_path / f"{seed}.gcode")[0].read_text()
+        return p.generate_gcode("十人一十人あ", tmp_path / f"{seed}.gcode")[0].read_text()
 
     assert run(1) == run(1)
     assert run(1) != run(2)

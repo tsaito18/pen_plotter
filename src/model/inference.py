@@ -25,7 +25,13 @@ TEMP_NOISE_AMP = 0.12
 STROKE_NOISE_SCALE = 0.02
 
 
-def temperature_noise(num_strokes: int, num_points: int, amp: float, num_ctrl: int = 6) -> NDArray:
+def temperature_noise(
+    num_strokes: int,
+    num_points: int,
+    amp: float,
+    rng: np.random.Generator,
+    num_ctrl: int = 6,
+) -> NDArray:
     """画ごと・x/y 独立の低周波ノイズ ``(num_strokes, num_points, 2)``（float32）。
 
     少数の制御点に置いたガウスノイズを点数へ線形補間するので、点間で相関した
@@ -33,7 +39,7 @@ def temperature_noise(num_strokes: int, num_points: int, amp: float, num_ctrl: i
     """
     if amp <= 0.0:
         return np.zeros((num_strokes, num_points, 2), dtype=np.float32)
-    ctrl = np.random.normal(0.0, amp, size=(num_strokes, num_ctrl, 2))
+    ctrl = rng.normal(0.0, amp, size=(num_strokes, num_ctrl, 2))
     t_ctrl = np.linspace(0.0, 1.0, num_ctrl)
     t_pts = np.linspace(0.0, 1.0, num_points)
     out = np.empty((num_strokes, num_points, 2), dtype=np.float32)
@@ -141,6 +147,7 @@ class StrokeInference:
         reference_strokes: list[NDArray],
         temperature: float = 0.0,
         deform_scale: float = 1.0,
+        rng: np.random.Generator | None = None,
     ) -> list[NDArray[np.float32]]:
         """参照ストロークを変形する（2 点未満の画は除く）。
 
@@ -148,7 +155,9 @@ class StrokeInference:
             reference_strokes: KanjiVG 参照字形（Y-UP）。
             temperature: 点ごとの低周波揺らぎの強さ（0 で決定的）。
             deform_scale: 変形量の倍率（<1 で参照字形へ近づける。多画字の固まり防止）。
+            rng: 揺らぎの乱数源（省略時は毎回新しい非決定的な乱数）。
         """
+        rng = rng if rng is not None else np.random.default_rng()
         if self._style is None:
             raise RuntimeError("style is not set; call set_style() first")
         refs = [
@@ -173,7 +182,7 @@ class StrokeInference:
             if temperature > 0:
                 # クランプ前に足すので、合算後も ±OFFSET_CLAMP に収まる
                 noise = temperature_noise(
-                    offsets.shape[0], offsets.shape[1], temperature * TEMP_NOISE_AMP
+                    offsets.shape[0], offsets.shape[1], temperature * TEMP_NOISE_AMP, rng
                 )
                 offsets = offsets + torch.from_numpy(noise).to(offsets.device)
             offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP) * deform_scale
@@ -183,10 +192,10 @@ class StrokeInference:
         ns = STROKE_NOISE_SCALE
         for stroke in deformed:
             center = stroke.mean(axis=0)
-            rotated = (stroke - center) @ rotation_matrix(np.random.normal(0, ns * 0.05))
-            sx = 1.0 + np.random.normal(0, ns * 0.03)
-            sy = 1.0 + np.random.normal(0, ns * 0.03)
-            shift = np.array([np.random.normal(0, ns * 0.1), np.random.normal(0, ns * 0.1)])
+            rotated = (stroke - center) @ rotation_matrix(rng.normal(0, ns * 0.05))
+            sx = 1.0 + rng.normal(0, ns * 0.03)
+            sy = 1.0 + rng.normal(0, ns * 0.03)
+            shift = rng.normal(0, ns * 0.1, size=2)
             varied = rotated * np.array([sx, sy]) + center + shift
             strokes.append(upsample_stroke(varied.astype(np.float32)))
         return strokes

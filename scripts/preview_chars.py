@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     if not chars:
         sys.exit("Error: 描ける文字がありません")
 
-    np.random.seed(args.seed)
+    rng = np.random.default_rng(args.seed)
     user_dir = resolve_character_root(args.user_strokes_dir, args.profile)
     engine = StrokeInference.from_user_strokes(args.checkpoint, user_dir)
 
@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         ref = refs[ch]
         _plot(axes[row][0], ref, "reference")
         for col in range(args.samples):
-            generated = engine.generate(ref, temperature=args.temperature)
+            generated = engine.generate(ref, temperature=args.temperature, rng=rng)
             _plot(axes[row][1 + col], generated, f"#{col + 1}")
     fig.suptitle(f"{args.checkpoint.name}  temperature={args.temperature}")
     plt.tight_layout()

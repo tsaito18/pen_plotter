@@ -45,6 +45,7 @@ src/geometry.py, src/resources.py  共通の型・幾何関数 / 同梱データ
 ```
 - 文字の描画経路（`render/char_renderer.py`）: 数式 → 幾何字形（記号・句読点・ギリシャ文字）→ ユーザー筆跡 → 幾何英字 → ML変形（CJKのみ）→ KanjiVG参照
 - 組版結果は `CharPlacement`（文字 / 罫線 `line_segment` / 数式 `math: MathSpec`）の列。数式は1式=1要素
+- 乱数: 生成時の揺らぎ（配置・字形・ML温度ノイズ）は全て `PlotterPipeline(seed=...)` の1系列から引く。`np.random` のグローバル状態には依存しない（訓練時のデータ拡張のみグローバル乱数）
 
 ### MLモデル V3アーキテクチャ（スタイル転写 / per-point offset）
 ```

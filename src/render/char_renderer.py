@@ -176,7 +176,7 @@ class CharRenderer:
         kanjivg_dir: KanjiVG 参照字形のディレクトリ。
         user_strokes_dir: ユーザー筆跡の文字ディレクトリ群の親（1 プロファイル分）。
         inference: ML 推論エンジン（:class:`src.model.inference.StrokeInference`）。
-        augmenter: 揺らぎの乱数源。None なら揺らぎなし。
+        augmenter: 揺らぎの生成器。None なら弾性変形・手ブレ・字のばらつきなし。
         line_spacing: 行間(mm)。
         temperature: ML 変形の字形揺らぎ。
         instance_variation: 同じ字を書くたびに変える画ごとの微小 affine の強さ。
@@ -204,6 +204,8 @@ class CharRenderer:
         self.instance_variation = instance_variation
         self.japanese_only = japanese_only
         self.coverage = CharCoverageReport()
+        # 全ての乱数はこの 1 系列から引く（augmenter の seed で全体が再現できる）
+        self.rng = augmenter.rng if augmenter is not None else np.random.default_rng()
 
     @property
     def has_reference_source(self) -> bool:
@@ -296,7 +298,7 @@ class CharRenderer:
         sample = self.user_db.best_sample(placement.char)
         if sample is None:
             return None
-        glyph = _jitter_strokes(_normalize_user_strokes(sample))
+        glyph = _jitter_strokes(_normalize_user_strokes(sample), self.rng)
         positioned = position_strokes(glyph, placement, self.line_spacing)
         if not smooth:
             positioned = self._distort(positioned, waver_scale(len(positioned)))
@@ -319,7 +321,7 @@ class CharRenderer:
         waver = waver_scale(len(reference))
         try:
             raw = self.inference.generate(  # type: ignore[attr-defined]
-                reference, temperature=self.temperature, deform_scale=waver
+                reference, temperature=self.temperature, deform_scale=waver, rng=self.rng
             )
         except Exception:
             logger.warning("ML inference failed for %r", placement.char, exc_info=True)
@@ -391,7 +393,7 @@ class CharRenderer:
         span = bbox_span(strokes)
         if span < 1e-9:
             return strokes
-        rng = aug.rng
+        rng = self.rng
         out: list[Stroke] = []
         for s in strokes:
             c = s.mean(axis=0)
@@ -414,20 +416,16 @@ def _resolve_finishes(kvg_types: list[str], positioned: list[Stroke]) -> list[st
     return finishes
 
 
-def _jitter_strokes(strokes: list[Stroke]) -> list[Stroke]:
+def _jitter_strokes(strokes: list[Stroke], rng: np.random.Generator) -> list[Stroke]:
     """ユーザー筆跡の各画に微小な回転・拡縮・移動を掛ける（単位系）。"""
     ns = _DIRECT_NOISE_SCALE
     result = []
     for stroke in strokes:
         center = stroke.mean(axis=0)
-        angle = np.random.normal(0, ns * 0.05)
-        rotated = (stroke - center) @ rotation_matrix(angle)
-        sx = 1.0 + np.random.normal(0, ns * 0.03)
-        sy = 1.0 + np.random.normal(0, ns * 0.03)
-        scaled = rotated * np.array([sx, sy])
-        dx = np.random.normal(0, ns * 0.1)
-        dy = np.random.normal(0, ns * 0.1)
-        result.append(scaled + center + np.array([dx, dy]))
+        rotated = (stroke - center) @ rotation_matrix(rng.normal(0, ns * 0.05))
+        scale = 1.0 + rng.normal(0, ns * 0.03, size=2)
+        shift = rng.normal(0, ns * 0.1, size=2)
+        result.append(rotated * scale + center + shift)
     return result
 
 

@@ -220,10 +220,10 @@ def test_inference_requires_a_style(tiny_checkpoint: Path):
 
 def test_temperature_noise_is_smooth_and_scaled():
     np.random.seed(0)
-    noise = temperature_noise(4, 32, amp=0.1)
+    noise = temperature_noise(4, 32, amp=0.1, rng=np.random.default_rng(0))
     assert noise.shape == (4, 32, 2)
     assert np.abs(np.diff(noise, axis=1)).max() < 0.1
-    assert not temperature_noise(2, 8, amp=0.0).any()
+    assert not temperature_noise(2, 8, amp=0.0, rng=np.random.default_rng()).any()
 
 
 def test_upsample_keeps_corners_and_endpoints():

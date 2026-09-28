@@ -12,8 +12,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.pipeline import PlotterPipeline
@@ -93,7 +91,6 @@ def main(argv: list[str] | None = None) -> None:
     args.out.mkdir(parents=True, exist_ok=True)
 
     print(f"seed={args.seed}  messiness={args.messiness}  tag={args.tag}")
-    np.random.seed(args.seed)
     pipeline = PlotterPipeline(
         Settings(messiness=args.messiness, temperature=args.temperature),
         checkpoint_path=args.checkpoint,

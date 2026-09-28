@@ -66,7 +66,7 @@ class PlotterPipeline:
         user_strokes_dir: ユーザー筆跡（文字ディレクトリ群の親、またはプロファイルのルート）。
         profile: ``user_strokes_dir`` がプロファイルのルートのときに使うプロファイル ID。
         japanese_only: かな・漢字・句読点・数字以外を描かない。
-        seed: 揺らぎの乱数 seed（配置・字形の揺らぎを再現可能にする）。
+        seed: 乱数 seed。配置・字形・ML の温度ノイズまで全ての揺らぎが再現できる。
     """
 
     def __init__(
@@ -126,7 +126,6 @@ class PlotterPipeline:
         本文の文字は行ごとに左右交互（蛇行）の順で書き、ペンの移動を減らす。罫線・
         数式はその場の順序を保つ。
         """
-        aug = self.augmenter
         drew_any = False
         units: list[_DrawUnit] = []
         for i, p in enumerate(placements):
@@ -137,11 +136,15 @@ class PlotterPipeline:
             rendered = self.renderer.render(p)
             strokes, finishes = rendered.strokes, rendered.finishes
             if drew_any and self.renderer.has_reference_source and strokes:
-                shift = float(aug.rng.uniform(0, _CHAR_LEFT_SHIFT_MAX))
+                shift = float(self.renderer.rng.uniform(0, _CHAR_LEFT_SHIFT_MAX))
                 strokes = [s - np.array([shift, 0.0]) for s in strokes]
             if self.settings.connection_strength > 0 and len(strokes) > 1:
                 strokes, finishes = insert_connections(
-                    strokes, finishes, self.settings.connection_strength, p.font_size, aug.rng
+                    strokes,
+                    finishes,
+                    self.settings.connection_strength,
+                    p.font_size,
+                    self.renderer.rng,
                 )
             drew_any = drew_any or bool(strokes)
             units.append(_DrawUnit(p, strokes, finishes, i, serpentine=p.is_text))
