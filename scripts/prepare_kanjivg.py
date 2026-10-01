@@ -53,7 +53,7 @@ def download_kanjivg(dest_dir: Path) -> Path:
         return xml_path
 
     logger.info("KanjiVGをダウンロード中: %s", KANJIVG_URL)
-    urllib.request.urlretrieve(KANJIVG_URL, gz_path)  # noqa: S310
+    urllib.request.urlretrieve(KANJIVG_URL, gz_path)
 
     with gzip.open(gz_path, "rb") as f_in, open(xml_path, "wb") as f_out:
         shutil.copyfileobj(f_in, f_out)

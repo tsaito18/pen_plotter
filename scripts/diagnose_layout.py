@@ -8,10 +8,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
-from src.ui.layout_diagnostics import diagnose_layout
-from src.ui.web_app import PlotterPipeline
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.diagnostics import diagnose_layout
+from src.pipeline import PlotterPipeline
 
 
 def main() -> int:

@@ -23,15 +23,17 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from src.layout.char_metrics import (
     COMPLEXITY_PCT_HIGH,
     COMPLEXITY_PCT_LOW,
     COMPLEXITY_WEIGHT_INK,
     COMPLEXITY_WEIGHT_STROKE,
-    _percentile,
     char_ink_length,
     compute_complexity,
     normalize_robust,
+    percentile,
 )
 
 # src/layout/char_metrics.py から見たプロジェクトルート（このスクリプトと同基準）
@@ -133,14 +135,14 @@ def build_complexity_map(strokes_dir: Path) -> tuple[dict, dict]:
         "weights": {"stroke": COMPLEXITY_WEIGHT_STROKE, "ink": COMPLEXITY_WEIGHT_INK},
         "percentiles": {"low": COMPLEXITY_PCT_LOW, "high": COMPLEXITY_PCT_HIGH},
         "stroke_count": {
-            "low_bound": _percentile(sorted_strokes, COMPLEXITY_PCT_LOW),
-            "high_bound": _percentile(sorted_strokes, COMPLEXITY_PCT_HIGH),
+            "low_bound": percentile(sorted_strokes, COMPLEXITY_PCT_LOW),
+            "high_bound": percentile(sorted_strokes, COMPLEXITY_PCT_HIGH),
             "min": sorted_strokes[0],
             "max": sorted_strokes[-1],
         },
         "ink_len": {
-            "low_bound": round(_percentile(sorted_ink, COMPLEXITY_PCT_LOW), 4),
-            "high_bound": round(_percentile(sorted_ink, COMPLEXITY_PCT_HIGH), 4),
+            "low_bound": round(percentile(sorted_ink, COMPLEXITY_PCT_LOW), 4),
+            "high_bound": round(percentile(sorted_ink, COMPLEXITY_PCT_HIGH), 4),
             "min": round(sorted_ink[0], 4),
             "max": round(sorted_ink[-1], 4),
         },

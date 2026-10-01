@@ -38,6 +38,19 @@ explicit = true
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "BLE"]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # 日本語の全角記号（、。（）等）を含む文字列・コメント
+    "B905",  # zip(strict=) は長さが一致する前提の箇所が多く、付けても可読性が下がるだけ
+    "SIM105",  # try/except/pass の方が意図（握りつぶす理由のコメント）を書きやすい
+    "SIM300",  # 範囲チェック（lo <= x <= hi 相当）を Yoda 条件と誤検出する
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/ui/content.py" = ["E501"]  # HTML/Markdown の文字列リテラル
+"tests/**" = ["BLE001"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
 

@@ -1,54 +1,45 @@
-"""訓練済みモデルを使ったストローク生成推論。"""
+"""訓練済み V3 変形モデルによる推論（KanjiVG 参照字形 → ユーザーの書き癖へ変形）。"""
 
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
 import torch
 from numpy.typing import NDArray
+from scipy.interpolate import CubicSpline
 
-from src.model.stroke_model import StrokeGenerator
+from src.geometry import resample_stroke, rotation_matrix
+from src.model.data import limit_style_points, load_style_sample, normalize_deltas
+from src.model.deformers import OFFSET_CLAMP, build_deformer, smooth_offsets
+from src.model.device import detect_device
 from src.model.style_encoder import StyleEncoder
-from src.model.train import TrainConfig
 
 logger = logging.getLogger(__name__)
 
-MAX_STYLE_POINTS = 4096
-
-# temperature=1 での per-point offset ゆらぎ振幅（offset座標系, clamp=0.4）。
-# clamp の約1/3 に収め、同字を生成ごとに変えつつ字形を破綻させない実機キャリブ値。
+# temperature=1 での点ごとのオフセット揺らぎ振幅（オフセット座標系, clamp=0.4 の約 1/3）
 TEMP_NOISE_AMP = 0.12
+# 変形後の画ごとの微小な回転・拡縮・移動の強さ
+STROKE_NOISE_SCALE = 0.02
 
 
-def _temperature_noise(
+def temperature_noise(
     num_strokes: int,
     num_points: int,
     amp: float,
+    rng: np.random.Generator,
     num_ctrl: int = 6,
-) -> NDArray[np.float32]:
-    """ストロークごと・x/y独立の低周波ゆらぎノイズを生成する。
+) -> NDArray:
+    """画ごと・x/y 独立の低周波ノイズ ``(num_strokes, num_points, 2)``（float32）。
 
-    少数の制御点（``num_ctrl``）にガウスノイズを置き、ストローク点数へ線形補間して
-    展開する。点間で相関した滑らかなノイズになるため、ガタつく高周波ノイズと違い
-    自然な字形のばらつきを生む。グローバルな ``np.random`` を使うため、呼び出し側の
-    ``np.random.seed`` による再現性スキームにそのまま乗る。
-
-    Args:
-        num_strokes: ストローク数（バッチ次元）。
-        num_points: ストロークあたりの点数。
-        amp: 制御点ノイズの標準偏差（振幅）。``0`` でゼロ配列を返す。
-        num_ctrl: 制御点数。少ないほど低周波（滑らか）になる。
-
-    Returns:
-        ``(num_strokes, num_points, 2)`` 形状の float32 ノイズ。
+    少数の制御点に置いたガウスノイズを点数へ線形補間するので、点間で相関した
+    滑らかな揺らぎになる（高周波のガタつきにならない）。``amp=0`` でゼロ。
     """
     if amp <= 0.0:
         return np.zeros((num_strokes, num_points, 2), dtype=np.float32)
-
-    ctrl = np.random.normal(0.0, amp, size=(num_strokes, num_ctrl, 2))
+    ctrl = rng.normal(0.0, amp, size=(num_strokes, num_ctrl, 2))
     t_ctrl = np.linspace(0.0, 1.0, num_ctrl)
     t_pts = np.linspace(0.0, 1.0, num_points)
     out = np.empty((num_strokes, num_points, 2), dtype=np.float32)
@@ -58,487 +49,153 @@ def _temperature_noise(
     return out
 
 
-@lru_cache(maxsize=1)
-def _cuda_is_usable() -> bool:
-    """CUDA kernel が実行できるか確認する。available だけでは不十分。"""
-    if not torch.cuda.is_available():
-        return False
-    try:
-        probe = torch.ones(1, device="cuda")
-        probe.add_(1)
-        torch.cuda.synchronize()
-    except Exception as exc:
-        logger.warning("CUDA unavailable for inference; falling back to CPU: %s", exc)
-        return False
-    return True
+def upsample_stroke(
+    points: NDArray, pts_per_unit: float = 8.0, corner_thresh: float = 0.85
+) -> NDArray[np.float32]:
+    """角で区切った区間ごとに 3 次スプラインで補間し、曲線を滑らかに増点する。
 
+    入力点は動かさない（補間のみ）ので、角は鋭いまま保たれる。
+    """
+    if len(points) < 3:
+        return points
+    corners = [0]
+    for i in range(1, len(points) - 1):
+        v1 = points[i] - points[i - 1]
+        v2 = points[i + 1] - points[i]
+        len1 = np.linalg.norm(v1)
+        len2 = np.linalg.norm(v2)
+        if len1 < 1e-8 or len2 < 1e-8:
+            continue
+        if np.clip(np.dot(v1, v2) / (len1 * len2), -1.0, 1.0) < corner_thresh:
+            corners.append(i)
+    corners.append(len(points) - 1)
 
-def _detect_device(device: str | torch.device | None = None) -> torch.device:
-    """推論に使うデバイスを選ぶ。明示指定がなければ accelerator 優先。"""
-    if device is not None:
-        return torch.device(device)
-    if _cuda_is_usable():
-        return torch.device("cuda")
-    if hasattr(torch, "xpu") and torch.xpu.is_available():
-        return torch.device("xpu")
-    return torch.device("cpu")
-
-
-def _limit_style_sample(
-    style_sample: torch.Tensor,
-    max_points: int = MAX_STYLE_POINTS,
-) -> torch.Tensor:
-    """Keep inference style sequences within GPU LSTM limits."""
-    if style_sample.ndim != 3 or style_sample.shape[1] <= max_points:
-        return style_sample.contiguous()
-    indices = (
-        torch.linspace(
-            0,
-            style_sample.shape[1] - 1,
-            max_points,
-            device=style_sample.device,
-        )
-        .round()
-        .long()
-    )
-    return style_sample.index_select(1, indices).contiguous()
+    parts: list[NDArray] = []
+    for start, end in pairwise(corners):
+        seg = points[start : end + 1]
+        seg_diffs = np.diff(seg, axis=0)
+        seg_lens = np.sqrt((seg_diffs**2).sum(axis=1))
+        n_out = max(int(seg_lens.sum() * pts_per_unit), 2)
+        if len(seg) < 3:
+            t_orig = np.linspace(0, 1, len(seg))
+            t_new = np.linspace(0, 1, n_out)
+            part = np.stack(
+                [np.interp(t_new, t_orig, seg[:, 0]), np.interp(t_new, t_orig, seg[:, 1])], axis=1
+            )
+        else:
+            cum = np.concatenate([[0.0], np.cumsum(seg_lens)])
+            if cum[-1] < 1e-12:
+                part = seg
+            else:
+                part = CubicSpline(cum, seg, bc_type="clamped")(np.linspace(0.0, cum[-1], n_out))
+        parts.append(part[1:] if parts else part)
+    return np.concatenate(parts, axis=0).astype(np.float32)
 
 
 class StrokeInference:
+    """V3 チェックポイントを読み込み、参照字形をユーザーのスタイルで変形する。
+
+    Args:
+        checkpoint_path: ``deformer_state_dict`` を持つ V3 チェックポイント。
+        style_sample: StyleEncoder へ渡す筆跡の差分系列 ``(1, N, 3)``。
+        device: 実行デバイス（省略時は自動選択）。
+    """
+
     def __init__(
         self,
         checkpoint_path: Path | str,
-        generator_kwargs: dict | None = None,
-        style_encoder_kwargs: dict | None = None,
+        style_sample: torch.Tensor | None = None,
         device: str | torch.device | None = None,
     ) -> None:
-        self.device = _detect_device(device)
-        torch.serialization.add_safe_globals([TrainConfig])
+        self.device = detect_device(device)
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-
-        is_v3 = "deformer_state_dict" in checkpoint
-        is_v2 = "char_encoder_state_dict" in checkpoint
-
+        if "deformer_state_dict" not in checkpoint:
+            raise ValueError(f"not a V3 deformation checkpoint: {checkpoint_path}")
         config = checkpoint.get("config", {})
-        self.norm_stats = checkpoint.get("norm_stats", None)
+        self.norm_stats: dict | None = checkpoint.get("norm_stats")
+        self.deformer_type: str = config.get("deformer_type", "offset")
+        self.num_points: int = config.get("num_points", 32)
 
-        if is_v3:
-            from src.model.stroke_deformer import AffineStrokeDeformer, StrokeDeformer
-
-            style_dim = config.get("style_dim", 128)
-            hidden_dim = config.get("hidden_dim", 256)
-            dropout = config.get("dropout", 0.0)
-
-            self.deformer_type = config.get("deformer_type", "offset")
-            if self.deformer_type == "affine":
-                self.deformer = AffineStrokeDeformer(
-                    style_dim=style_dim,
-                    hidden_dim=hidden_dim,
-                    dropout=dropout,
-                )
-            elif self.deformer_type == "transformer":
-                from src.model.stroke_deformer import TransformerDeformer
-
-                self.deformer = TransformerDeformer(
-                    style_dim=style_dim,
-                    d_model=config.get("d_model", 64),
-                    nhead=config.get("nhead", 4),
-                    num_self_attn_layers=config.get("num_self_attn_layers", 2),
-                    ff_dim=config.get("ff_dim", 128),
-                    dropout=dropout,
-                )
-            elif self.deformer_type == "twostage":
-                from src.model.stroke_deformer import TwoStageDeformer
-
-                self.deformer = TwoStageDeformer(
-                    style_dim=style_dim,
-                    d_model=config.get("d_model", 64),
-                    nhead=config.get("nhead", 4),
-                    num_self_attn_layers=config.get("num_self_attn_layers", 2),
-                    ff_dim=config.get("ff_dim", 128),
-                    dropout=dropout,
-                )
-            else:
-                self.deformer = StrokeDeformer(
-                    style_dim=style_dim,
-                    hidden_dim=hidden_dim,
-                    dropout=dropout,
-                )
-            state = checkpoint["deformer_state_dict"]
-            try:
-                self.deformer.load_state_dict(state)
-            except RuntimeError:
-                # Dropout層なしで保存された旧チェックポイントとの互換
-                self.deformer.load_state_dict(state, strict=False)
-                model_keys = set(self.deformer.state_dict().keys())
-                saved_keys = set(state.keys())
-                missing = model_keys - saved_keys
-                if missing:
-                    # キーのリマップ: 旧 mlp.{0,2,4} → 新 mlp.{0,3,6} 等
-                    remap = {}
-                    saved_mlp = sorted(k for k in saved_keys if k.startswith("mlp."))
-                    model_mlp = sorted(k for k in model_keys if k.startswith("mlp."))
-                    for sk, mk in zip(saved_mlp, model_mlp):
-                        remap[mk] = state[sk]
-                    new_state = {
-                        k: remap.get(k, state.get(k, v))
-                        for k, v in self.deformer.state_dict().items()
-                    }
-                    self.deformer.load_state_dict(new_state)
-            self.deformer.to(self.device)
-            self.deformer.eval()
-
-            style_enc_kwargs = dict(style_encoder_kwargs or {})
-            if "style_dim" not in style_enc_kwargs:
-                style_enc_kwargs["style_dim"] = style_dim
-            self.style_encoder = StyleEncoder(**style_enc_kwargs)
-            self.style_encoder.load_state_dict(checkpoint["style_encoder_state_dict"])
-            self.style_encoder.to(self.device)
-            self.style_encoder.eval()
-
-            self.version = 3
-            self.num_points = config.get("num_points", 32)
-            self.char_encoder = None
-            self.ref_norm_stats = None
-            self.generator = None
-            return
-
-        gen_kwargs = dict(generator_kwargs or {})
-        style_enc_kwargs = dict(style_encoder_kwargs or {})
-
-        config_to_gen = {"hidden_dim", "style_dim", "num_mixtures"}
-        for key in config_to_gen:
-            if key in config and key not in gen_kwargs:
-                gen_kwargs[key] = config[key]
-        if "style_dim" in config and "style_dim" not in style_enc_kwargs:
-            style_enc_kwargs["style_dim"] = config["style_dim"]
-
-        gen_kwargs.setdefault("input_dim", 2)
-
-        self.char_encoder = None
-        self.ref_norm_stats = checkpoint.get("ref_norm_stats", None)
-        if is_v2:
-            from src.model.char_encoder import CharEncoder
-
-            char_dim = config.get("char_dim", 128)
-            gen_kwargs["char_dim"] = char_dim
-
-            char_enc_sd = checkpoint["char_encoder_state_dict"]
-            lstm_weight = char_enc_sd["lstm.weight_ih_l0"]
-            input_dim = lstm_weight.shape[1]
-            hidden_dim = lstm_weight.shape[0] // 4
-            fc_weight = char_enc_sd["fc.weight"]
-            out_dim = fc_weight.shape[0]
-            num_layers = sum(
-                1 for k in char_enc_sd if k.startswith("lstm.weight_ih_l") and "_reverse" not in k
-            )
-
-            self.char_encoder = CharEncoder(
-                input_dim=input_dim,
-                hidden_dim=hidden_dim,
-                char_dim=out_dim,
-                num_layers=num_layers,
-            )
-            self.char_encoder.load_state_dict(char_enc_sd)
-            self.char_encoder.to(self.device)
-            self.char_encoder.eval()
-            self.version = 2
-        else:
-            self.version = 1
-
-        self.generator = StrokeGenerator(**gen_kwargs)
-        self.style_encoder = StyleEncoder(**style_enc_kwargs)
-
-        self.generator.load_state_dict(checkpoint["generator_state_dict"])
+        self.deformer = build_deformer(config)
+        self.deformer.load_state_dict(checkpoint["deformer_state_dict"])
+        self.deformer.to(self.device).eval()
+        self.style_encoder = StyleEncoder(style_dim=config.get("style_dim", 128))
         self.style_encoder.load_state_dict(checkpoint["style_encoder_state_dict"])
+        self.style_encoder.to(self.device).eval()
 
-        self.generator.to(self.device)
-        self.style_encoder.to(self.device)
-        self.generator.eval()
-        self.style_encoder.eval()
+        self._style: torch.Tensor | None = None
+        if style_sample is not None:
+            self.set_style(style_sample)
+
+    @classmethod
+    def from_user_strokes(
+        cls, checkpoint_path: Path | str, user_strokes_dir: Path | str | None
+    ) -> StrokeInference:
+        """ユーザー筆跡ディレクトリの全サンプルをスタイルとして使う推論器を作る。"""
+        return cls(checkpoint_path, style_sample=load_style_sample(user_strokes_dir))
+
+    @torch.no_grad()
+    def set_style(self, style_sample: torch.Tensor) -> None:
+        """スタイル（筆跡の差分系列）を設定する。スタイルベクトルは 1 回だけ計算する。"""
+        if self.norm_stats is not None:
+            style_sample = normalize_deltas(style_sample, self.norm_stats)
+        self._style = self.style_encoder(limit_style_points(style_sample).to(self.device))
 
     @torch.no_grad()
     def generate(
         self,
-        style_sample: torch.Tensor,
-        num_steps: int = 100,
-        temperature: float = 1.0,
-        reference_strokes: list[NDArray[np.float64]] | None = None,
-        noise_scale: float = 0.02,
-        deform_scale: float = 1.0,
-    ) -> list[np.ndarray]:
-        """スタイルサンプルからストロークを生成する。V3はデフォーメーション方式。
-
-        deform_scale: per-point offset（V3変形量）の倍率。``1.0`` で通常、``<1`` で
-            参照字形へ近づける。多画字の固まり防止に画数で逓減して渡す。
-        """
-        if self.version == 3:
-            return self._generate_v3(
-                style_sample,
-                reference_strokes,
-                noise_scale,
-                deform_scale=deform_scale,
-                temperature=temperature,
-            )
-
-        if self.norm_stats is not None:
-            from src.model.data_utils import normalize_deltas
-
-            style_sample = normalize_deltas(style_sample, self.norm_stats)
-        style_sample = _limit_style_sample(style_sample).to(self.device)
-
-        style = self.style_encoder(style_sample)
-
-        char_embedding: torch.Tensor | None = None
-        if self.char_encoder is not None:
-            if reference_strokes is not None:
-                from src.model.char_encoder import CharEncoder
-
-                seq = CharEncoder.strokes_to_sequence(reference_strokes)
-                seq_tensor = torch.tensor(seq, dtype=torch.float32, device=self.device).unsqueeze(0)
-                if self.ref_norm_stats is not None:
-                    from src.model.data_utils import normalize_reference
-
-                    seq_tensor = normalize_reference(seq_tensor, self.ref_norm_stats)
-                char_embedding = self.char_encoder(seq_tensor)
-            else:
-                char_embedding = torch.zeros(1, self.generator.char_dim, device=self.device)
-
-        num_ref_strokes = len(reference_strokes) if reference_strokes is not None else 1
-        all_strokes: list[np.ndarray] = []
-
-        for stroke_idx in range(num_ref_strokes):
-            stroke_index_tensor = torch.tensor([stroke_idx], device=self.device)
-
-            ref_stroke_len = len(reference_strokes[stroke_idx]) if reference_strokes else num_steps
-            max_stroke_steps = min(int(ref_stroke_len * 1.5), num_steps)
-
-            if self.norm_stats is not None:
-                init_dx = -self.norm_stats["mean_x"] / self.norm_stats["std_x"]
-                init_dy = -self.norm_stats["mean_y"] / self.norm_stats["std_y"]
-                current = torch.tensor([[[init_dx, init_dy]]], device=self.device)
-            else:
-                current = torch.zeros(1, 1, 2, device=self.device)
-
-            points: list[list[float]] = []
-
-            for _ in range(max_stroke_steps):
-                output = self.generator(
-                    current,
-                    style,
-                    char_embedding=char_embedding,
-                    stroke_index=stroke_index_tensor,
-                )
-
-                pi = output["pi"][:, -1] / temperature
-                pi = torch.softmax(pi, dim=-1)
-
-                k = torch.multinomial(pi, 1).squeeze(-1)
-
-                mu_x = output["mu_x"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
-                mu_y = output["mu_y"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
-                sigma_x = (
-                    output["sigma_x"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
-                )
-                sigma_y = (
-                    output["sigma_y"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1) * temperature
-                )
-                rho = output["rho"][:, -1].gather(1, k.unsqueeze(1)).squeeze(1)
-
-                z1 = torch.randn_like(mu_x)
-                z2 = torch.randn_like(mu_y)
-                dx = mu_x + sigma_x * z1
-                dy = mu_y + sigma_y * (rho * z1 + torch.sqrt(1 - rho**2 + 1e-6) * z2)
-
-                eos_prob = torch.sigmoid(output["eos_logit"][:, -1, 0])
-
-                if self.norm_stats is not None:
-                    from src.model.data_utils import denormalize_point
-
-                    dx_raw, dy_raw = denormalize_point(dx.item(), dy.item(), self.norm_stats)
-                else:
-                    dx_raw, dy_raw = dx.item(), dy.item()
-
-                points.append([dx_raw, dy_raw])
-
-                if eos_prob > 0.5:
-                    break
-
-                next_input = torch.tensor([[[dx.item(), dy.item()]]], device=self.device)
-                current = torch.cat([current, next_input], dim=1)
-
-            if len(points) >= 2:
-                stroke_points = []
-                cx, cy = 0.0, 0.0
-                for dx_val, dy_val in points:
-                    cx += dx_val
-                    cy += dy_val
-                    stroke_points.append([cx, cy])
-
-                if reference_strokes is not None and stroke_idx < len(reference_strokes):
-                    ref_start = reference_strokes[stroke_idx][0]
-                    for pt in stroke_points:
-                        pt[0] += ref_start[0]
-                        pt[1] += ref_start[1]
-
-                all_strokes.append(np.array(stroke_points))
-
-        if not all_strokes:
-            all_strokes = [np.array([[0.0, 0.0], [1.0, 1.0]])]
-
-        return all_strokes
-
-    @staticmethod
-    def _smooth_stroke(
-        points: NDArray[np.float32],
-        pts_per_unit: float = 8.0,
-        corner_thresh: float = 0.85,
-    ) -> NDArray[np.float32]:
-        """Adaptive upsampling: interpolate (not smooth) between detected corners.
-
-        Splits stroke at sharp corners, applies exact cubic spline interpolation
-        to each segment. Curves get more points for smoothness, but corners
-        stay perfectly sharp — no data points are moved.
-        """
-        if len(points) < 3:
-            return points
-
-        # Detect corners via angle change between consecutive edges
-        corners = [0]
-        for i in range(1, len(points) - 1):
-            v1 = points[i] - points[i - 1]
-            v2 = points[i + 1] - points[i]
-            len1 = np.linalg.norm(v1)
-            len2 = np.linalg.norm(v2)
-            if len1 < 1e-8 or len2 < 1e-8:
-                continue
-            cos_angle = np.clip(np.dot(v1, v2) / (len1 * len2), -1.0, 1.0)
-            if cos_angle < corner_thresh:
-                corners.append(i)
-        corners.append(len(points) - 1)
-
-        from scipy.interpolate import CubicSpline
-
-        result_parts: list[NDArray[np.float32]] = []
-        for seg_i in range(len(corners) - 1):
-            start, end = corners[seg_i], corners[seg_i + 1]
-            seg = points[start : end + 1]
-
-            # Allocate output points proportional to arc length
-            seg_diffs = np.diff(seg, axis=0)
-            seg_len = np.sqrt((seg_diffs**2).sum(axis=1)).sum()
-            n_out = max(int(seg_len * pts_per_unit), 2)
-
-            if len(seg) < 3:
-                t_orig = np.linspace(0, 1, len(seg))
-                t_new = np.linspace(0, 1, n_out)
-                x_new = np.interp(t_new, t_orig, seg[:, 0])
-                y_new = np.interp(t_new, t_orig, seg[:, 1])
-                part = np.stack([x_new, y_new], axis=1)
-            else:
-                # Arc-length parameterized exact cubic spline (s=0)
-                cum = np.concatenate([[0.0], np.cumsum(np.sqrt((seg_diffs**2).sum(axis=1)))])
-                if cum[-1] < 1e-12:
-                    part = seg
-                else:
-                    cs = CubicSpline(cum, seg, bc_type="clamped")
-                    t_new = np.linspace(0.0, cum[-1], n_out)
-                    part = cs(t_new)
-
-            if result_parts:
-                result_parts.append(part[1:])
-            else:
-                result_parts.append(part)
-
-        if not result_parts:
-            return points
-        return np.concatenate(result_parts, axis=0).astype(np.float32)
-
-    def _generate_v3(
-        self,
-        style_sample: torch.Tensor,
-        reference_strokes: list[NDArray[np.float64]] | None,
-        noise_scale: float = 0.3,
-        deform_scale: float = 1.0,
+        reference_strokes: list[NDArray],
         temperature: float = 0.0,
-    ) -> list[np.ndarray]:
-        """V3: Deform reference strokes using predicted offsets (batched).
+        deform_scale: float = 1.0,
+        rng: np.random.Generator | None = None,
+    ) -> list[NDArray[np.float32]]:
+        """参照ストロークを変形する（2 点未満の画は除く）。
 
-        deform_scale<1 で変形量を縮め、参照字形へ近づける（多画字の固まり対策）。
-        temperature>0 で per-point offset に低周波ゆらぎを加え、同じ字でも生成ごとに
-        字形を変える（``temperature=0`` は従来と完全一致＝後方互換）。
+        Args:
+            reference_strokes: KanjiVG 参照字形（Y-UP）。
+            temperature: 点ごとの低周波揺らぎの強さ（0 で決定的）。
+            deform_scale: 変形量の倍率（<1 で参照字形へ近づける。多画字の固まり防止）。
+            rng: 揺らぎの乱数源（省略時は毎回新しい非決定的な乱数）。
         """
-        from src.model.data_utils import normalize_deltas, resample_stroke
-        from src.model.finetune import OFFSET_CLAMP, smooth_offsets
+        rng = rng if rng is not None else np.random.default_rng()
+        if self._style is None:
+            raise RuntimeError("style is not set; call set_style() first")
+        refs = [
+            (i, resample_stroke(np.asarray(s, dtype=np.float32), self.num_points))
+            for i, s in enumerate(reference_strokes)
+            if len(s) >= 2
+        ]
+        if not refs:
+            raise ValueError("at least one reference stroke with >= 2 points is required")
 
-        if reference_strokes is None or len(reference_strokes) == 0:
-            raise ValueError("V3 inference requires reference_strokes")
-
-        if self.norm_stats is not None:
-            style_sample = normalize_deltas(style_sample, self.norm_stats)
-
-        style_sample = _limit_style_sample(style_sample).to(self.device)
-        style = self.style_encoder(style_sample)
-
-        batch_refs: list[NDArray[np.float32]] = []
-        batch_indices: list[int] = []
-        for i, ref_stroke in enumerate(reference_strokes):
-            if len(ref_stroke) < 2:
-                continue
-            ref_resampled = resample_stroke(
-                np.asarray(ref_stroke, dtype=np.float32), self.num_points
-            )
-            batch_refs.append(ref_resampled)
-            batch_indices.append(i)
-
-        if not batch_refs:
-            raise ValueError("V3 inference requires at least one valid reference stroke")
-
-        ref_batch = torch.tensor(np.stack(batch_refs), dtype=torch.float32, device=self.device)
-        idx_batch = torch.tensor(batch_indices, device=self.device)
-        style_batch = style.expand(len(batch_refs), -1)
+        ref_batch = torch.tensor(np.stack([r for _, r in refs]), device=self.device)
+        idx_batch = torch.tensor([i for i, _ in refs], device=self.device)
+        style_batch = self._style.expand(len(refs), -1)
 
         if self.deformer_type == "affine":
             transformed, _params = self.deformer(ref_batch, style_batch, idx_batch)
-            # deform_scale<1 は参照(ref_batch)へ線形にブレンドして変形量を縮める
             if deform_scale != 1.0:
                 transformed = ref_batch + (transformed - ref_batch) * deform_scale
-            deformed_batch = transformed.detach().cpu().numpy()
+            deformed = transformed.cpu().numpy()
         else:
-            offsets = self.deformer(ref_batch, style_batch, idx_batch)
-            # Apply smoothing for all per-point deformers (incl. transformer/twostage)
-            # to remove high-frequency offset noise that creates visible jaggedness
-            if self.deformer_type != "affine":
-                offsets = smooth_offsets(offsets)
-            if temperature and temperature > 0:
-                # 制御点補間による低周波ゆらぎ＝点間で相関し滑らか（高周波ガタつきにしない）。
-                # clamp の前に足すことで合算後も ±OFFSET_CLAMP に収まり字形が破綻しない。
-                noise = _temperature_noise(
-                    offsets.shape[0], offsets.shape[1], temperature * TEMP_NOISE_AMP
+            offsets = smooth_offsets(self.deformer(ref_batch, style_batch, idx_batch))
+            if temperature > 0:
+                # クランプ前に足すので、合算後も ±OFFSET_CLAMP に収まる
+                noise = temperature_noise(
+                    offsets.shape[0], offsets.shape[1], temperature * TEMP_NOISE_AMP, rng
                 )
                 offsets = offsets + torch.from_numpy(noise).to(offsets.device)
             offsets = offsets.clamp(-OFFSET_CLAMP, OFFSET_CLAMP) * deform_scale
-            deformed_batch = (ref_batch + offsets).detach().cpu().numpy()
+            deformed = (ref_batch + offsets).cpu().numpy()
 
-        all_strokes: list[np.ndarray] = []
-        for j in range(len(batch_refs)):
-            deformed = deformed_batch[j]
-
-            # Per-stroke geometric variation
-            center = deformed.mean(axis=0)
-            centered = deformed - center
-            angle = np.random.normal(0, noise_scale * 0.05)
-            cos_a, sin_a = np.cos(angle), np.sin(angle)
-            rotated = centered @ np.array([[cos_a, -sin_a], [sin_a, cos_a]])
-            sx = 1.0 + np.random.normal(0, noise_scale * 0.03)
-            sy = 1.0 + np.random.normal(0, noise_scale * 0.03)
-            scaled = rotated * np.array([sx, sy])
-            dx = np.random.normal(0, noise_scale * 0.1)
-            dy = np.random.normal(0, noise_scale * 0.1)
-            result = scaled + center + np.array([dx, dy])
-
-            # Upsample + smooth for clean curves
-            result = self._smooth_stroke(result.astype(np.float32))
-            all_strokes.append(result)
-
-        return all_strokes
+        strokes: list[NDArray[np.float32]] = []
+        ns = STROKE_NOISE_SCALE
+        for stroke in deformed:
+            center = stroke.mean(axis=0)
+            rotated = (stroke - center) @ rotation_matrix(rng.normal(0, ns * 0.05))
+            sx = 1.0 + rng.normal(0, ns * 0.03)
+            sy = 1.0 + rng.normal(0, ns * 0.03)
+            shift = rng.normal(0, ns * 0.1, size=2)
+            varied = rotated * np.array([sx, sy]) + center + shift
+            strokes.append(upsample_stroke(varied.astype(np.float32)))
+        return strokes

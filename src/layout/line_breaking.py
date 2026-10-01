@@ -1,8 +1,4 @@
-"""禁則処理付き改行モジュール。
-
-日本語組版の禁則処理ルールに従い、行頭・行末禁止文字を考慮した改行を行う。
-半角文字は0.5文字幅として計算する。
-"""
+"""禁則処理付きの改行。"""
 
 from collections.abc import Callable
 
@@ -10,72 +6,9 @@ LINE_START_PROHIBITED: set[str] = set("。、，．）」』】〉》〕!?！？
 LINE_END_PROHIBITED: set[str] = set("（「『【〈《〔")
 
 
-def is_line_start_prohibited(ch: str) -> bool:
-    return ch in LINE_START_PROHIBITED
-
-
-def is_line_end_prohibited(ch: str) -> bool:
-    return ch in LINE_END_PROHIBITED
-
-
 def is_halfwidth(ch: str) -> bool:
+    """ASCII（半角）文字か。"""
     return ord(ch) < 128
-
-
-def _char_width(ch: str) -> float:
-    return 0.5 if is_halfwidth(ch) else 1.0
-
-
-def _text_width(text: str) -> float:
-    return sum(_char_width(ch) for ch in text)
-
-
-def break_lines(text: str, chars_per_line: int) -> list[str]:
-    """禁則処理付きで改行する。
-
-    Args:
-        text: 入力テキスト
-        chars_per_line: 1行あたりの全角文字数上限
-
-    Returns:
-        行のリスト
-    """
-    return break_lines_by_width(text, float(chars_per_line), _char_width)
-
-
-def break_lines_by_width(
-    text: str,
-    max_width: float,
-    char_width: Callable[[str], float],
-) -> list[str]:
-    """文字ごとの幅を使って禁則処理付きで改行する。
-
-    Args:
-        text: 入力テキスト
-        max_width: 1行あたりの幅上限
-        char_width: 1文字の幅を返す関数
-
-    Returns:
-        行のリスト
-    """
-    if not text:
-        return [""]
-
-    paragraphs = text.split("\n")
-    result: list[str] = []
-
-    for paragraph in paragraphs:
-        if not paragraph:
-            result.append("")
-            continue
-        result.extend(break_paragraph_by_width(paragraph, max_width, char_width))
-
-    return result
-
-
-def break_paragraph(text: str, chars_per_line: int) -> list[str]:
-    """半角文字を0.5幅として段落を改行する。"""
-    return break_paragraph_by_width(text, float(chars_per_line), _char_width)
 
 
 def break_paragraph_by_width(
@@ -83,7 +16,11 @@ def break_paragraph_by_width(
     max_width: float,
     char_width: Callable[[str], float],
 ) -> list[str]:
-    """文字ごとの幅を使って段落を禁則処理付きで改行する。"""
+    """段落を ``max_width`` 以内で改行する（``char_width`` は 1 文字の幅）。
+
+    行末禁止文字（開き括弧）で終わる行は 1 文字前で切り、次行頭が行頭禁止文字
+    （句読点・閉じ括弧）なら現在行へ追い込む。
+    """
     lines: list[str] = []
     i = 0
 
@@ -107,11 +44,11 @@ def break_paragraph_by_width(
             break
 
         # 行末禁止文字チェック: 行末が行末禁止文字なら1文字前で切る
-        if is_line_end_prohibited(text[end - 1]):
+        if text[end - 1] in LINE_END_PROHIBITED:
             end -= 1
 
         # 行頭禁止文字チェック: 次行の先頭が行頭禁止文字なら現在行に含める
-        elif end < len(text) and is_line_start_prohibited(text[end]):
+        elif end < len(text) and text[end] in LINE_START_PROHIBITED:
             end += 1
 
         if end == i:

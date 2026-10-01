@@ -19,57 +19,6 @@ class StrokeRecorder:
         self.target_size = target_size
         self.output_dir = output_dir or Path("data/strokes")
 
-    def normalize_points(self, points: list[StrokePoint]) -> list[StrokePoint]:
-        if len(points) <= 1:
-            return (
-                [
-                    StrokePoint(
-                        x=self.target_size / 2,
-                        y=self.target_size / 2,
-                        pressure=points[0].pressure,
-                        timestamp=points[0].timestamp,
-                    )
-                ]
-                if points
-                else []
-            )
-
-        xs = np.array([p.x for p in points])
-        ys = np.array([p.y for p in points])
-
-        x_range = xs.max() - xs.min()
-        y_range = ys.max() - ys.min()
-        scale_denom = max(x_range, y_range)
-
-        if scale_denom == 0:
-            return [
-                StrokePoint(
-                    x=self.target_size / 2,
-                    y=self.target_size / 2,
-                    pressure=p.pressure,
-                    timestamp=p.timestamp,
-                )
-                for p in points
-            ]
-
-        scale = self.target_size / scale_denom
-        xs_scaled = (xs - xs.min()) * scale
-        ys_scaled = (ys - ys.min()) * scale
-
-        # target_size x target_size 領域の中心に配置
-        offset_x = (self.target_size - (xs_scaled.max() - xs_scaled.min())) / 2
-        offset_y = (self.target_size - (ys_scaled.max() - ys_scaled.min())) / 2
-
-        return [
-            StrokePoint(
-                x=float(xs_scaled[i] + offset_x),
-                y=float(ys_scaled[i] + offset_y),
-                pressure=points[i].pressure,
-                timestamp=points[i].timestamp,
-            )
-            for i in range(len(points))
-        ]
-
     def resample_points(self, points: list[StrokePoint], num_points: int = 32) -> list[StrokePoint]:
         if len(points) < 2:
             return points
@@ -113,12 +62,6 @@ class StrokeRecorder:
 
         sample.save(filepath)
         return filepath
-
-    def load_samples(self, character: str) -> list[StrokeSample]:
-        char_dir = self.output_dir / character
-        if not char_dir.exists():
-            return []
-        return [StrokeSample.load(p) for p in sorted(char_dir.glob("*.json"))]
 
     def delete_sample(self, character: str, filename: str) -> bool:
         if "/" in filename or ".." in filename or not re.match(r"^.+_\d+\.json$", filename):

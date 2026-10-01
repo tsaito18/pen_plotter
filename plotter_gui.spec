@@ -5,7 +5,7 @@
 出力: dist/plotter_gui.exe (単一ファイル, ポータブル)。
 
 データファイル (data/report_paper.jpg) は exe に同梱され、実行時に
-sys._MEIPASS 配下へ展開される。src/plotter_gui/_resources.py の
+sys._MEIPASS 配下へ展開される。src/resources.py の
 resource_path がそれを透過的に解決する。
 """
 

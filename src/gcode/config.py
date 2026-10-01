@@ -1,3 +1,5 @@
+"""xDraw A4 ペンプロッタの機械パラメータ（実機キャリブ値）。"""
+
 from dataclasses import dataclass
 
 
@@ -22,7 +24,6 @@ class PlotterConfig:
     # ペン制御 (Z軸)
     pen_down_command: str = "G1G90 Z5.0 F5000"
     pen_up_command: str = "G1G90 Z0.5 F5000"
-    pen_delay: float = 0.0  # Z軸制御は速度指定で完了するため遅延不要
 
     # 終端Zリフト（払い・はねの接触圧を抜く筆遣い表現）
     # pen_down_z は補間の基準となる接触（最大筆圧）高さ。pen_down_command の Z 値と
@@ -59,10 +60,3 @@ class PlotterConfig:
 
     # G-code設定
     decimal_places: int = 2
-
-    def pen_delay_gcode(self) -> str:
-        """ペン昇降後の待機G-code。xDrawはZ軸速度制御のため通常不要。"""
-        if self.pen_delay <= 0:
-            return ""
-        ms = int(self.pen_delay * 1000)
-        return f"G4 P{ms}"

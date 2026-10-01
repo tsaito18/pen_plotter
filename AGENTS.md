@@ -9,7 +9,7 @@
 
 主な処理は、iPad/Apple Pencil などで集めた筆跡サンプルを使い、KanjiVG の参照ストロークにユーザーの筆跡スタイルを転写し、レポート用紙向けに組版して、プレビュー画像または G-code を生成する流れです。
 
-主要なワークフローは `src/ui/web_app.py` の `PlotterPipeline` が束ねています。
+主要なワークフローは `src/pipeline.py` の `PlotterPipeline` が束ねています。
 
 ## 技術スタック
 
@@ -58,17 +58,23 @@ Windows 用 exe を作る場合は `docs/plotter_gui_build.md` を確認して�
 
 ## ディレクトリ構成
 
-- `src/collector/`: 手書きサンプル収集、KanjiVG/CASIA パーサー、iPad UI、データ形式
-- `src/model/`: PyTorch モデル、訓練、推論、StyleEncoder、StrokeDeformer、StrokeAligner
-- `src/layout/`: レポート用紙向け組版、改行、数式、表
-- `src/gcode/`: G-code 生成、最適化、プレビュー、プロッタ設定
-- `src/comm/`: GRBL シリアル通信、ポート検出、コントローラ
-- `src/ui/`: Web/Gradio UI、生成パイプライン、プレビュー、ストローク描画
-- `src/plotter_gui/`: xDraw A4 へ G-code を送る Tkinter デスクトップ GUI
-- `scripts/`: 開発・訓練・変換・起動用 CLI
-- `tests/`: pytest テスト
-- `docs/`: 実機 GUI のチェックリスト、Windows exe ビルド手順
-- `data/`: KanjiVG ストローク、ユーザー筆跡、学習済みモデル、レポート用紙画像
+依存は上から下へ（下の層は上の層を import しない）。
+
+- `src/ui/`: Gradio Web UI（`gradio_app.py`、静的コンテンツ `content.py`・`assets/`）
+- `src/pipeline.py`: テキスト→組版→ストローク→プレビュー/G-code（`PlotterPipeline`）
+- `src/settings.py`: 生成設定 `Settings`（UI・CLI・パイプラインの既定値の単一ソース）
+- `src/diagnostics.py`: レイアウト診断（字形欠損・文字かぶり）
+- `src/render/`: 配置要素→手書きストローク（`char_renderer`: 経路選択、`positioning`、`math_image`: 数式の細線化、`preview`）
+- `src/glyphs/`: 字形ソース（`geometric`: 記号・英字の幾何字形、`sources`: KanjiVG・ユーザー筆跡）
+- `src/layout/`: 組版（`typesetter`、`placement`、`math_layout`、`table_layout`、`line_breaking`、`char_metrics`）
+- `src/handwriting/`: 手書きの揺らぎ（`augmentation`、`pink_noise`）と筆遣い（`finishing`）
+- `src/model/`: ML（`deformers`、`style_encoder`、`aligner`、`data`、`training`、`inference`）。torch 依存はここだけ
+- `src/gcode/`: G-code 生成・プロッタ設定・キャリブレーション
+- `src/comm/`, `src/plotter_gui/`: GRBL シリアル通信、Tkinter 送信 GUI
+- `src/collector/`: 手書きサンプル収集、KanjiVG パーサー、プロファイル、訓練ジョブ
+- `scripts/`: CLI（`run_ui.py`、`train.py`、`collect_strokes.py` など）
+- `tests/`: pytest（`tests/conftest.py` が小さな合成データを作るので `data/` に依存しない）
+- `data/`: レポート用紙画像・複雑度マップ（`strokes`/`user_strokes`/`models` は git 管理外。`data_examples/` を参照）
 
 ## アーキテクチャの要点
 
@@ -77,11 +83,11 @@ Windows 用 exe を作る場合は `docs/plotter_gui_build.md` を確認して�
 1. `collector` でユーザー筆跡を収集する。
 2. `model` で筆跡スタイルを学習・推論する。
 3. `layout` でレポート用紙に合わせて文字、数式、表を配置する。
-4. `ui` の `PlotterPipeline` がストローク生成、プレビュー、G-code 生成を統合する。
-5. `gcode` が xDraw A4 向けの G-code を生成・最適化する。
+4. `pipeline` の `PlotterPipeline` がストローク生成、プレビュー、G-code 生成を統合する。
+5. `gcode` が xDraw A4 向けの G-code を生成する（書き順を保持し、本文は行ごとに蛇行順）。
 6. `comm` または `plotter_gui` が GRBL 互換機へ送信する。
 
-`PlotterPipeline` は薄いオーケストレータとして扱い、重い処理は `Typesetter`、`StrokeRenderer`、`PreviewRenderer`、`GCodeGenerator` など各責務のクラスへ寄せてください。
+`PlotterPipeline` は薄いオーケストレータとして扱い、重い処理は `Typesetter`、`CharRenderer`、`render_page_preview`、`GCodeGenerator` など各責務のモジュールへ寄せてください。
 
 ## 手書き生成モデル
 
@@ -108,7 +114,7 @@ matplotlib default                 : Y-UP
 - 訓練時はユーザーストロークを Y 反転して KanjiVG に合わせます。
 - 推論出力は Y-UP として扱います。
 - プレビューでは不要に `invert_yaxis()` を入れないでください。
-- `src/ui/stroke_renderer.py` の正規化処理は Y-DOWN から Y-UP への変換を含みます。
+- `src/render/char_renderer.py` の正規化処理（`_normalize_user_strokes`）は Y-DOWN から Y-UP への変換を含みます。
 
 ## xDraw A4 / GRBL 実機注意
 
@@ -138,7 +144,7 @@ WSL では Tkinter GUI や実機 USB 制御が期待通り動かないことが�
 守ること:
 
 - 新機能・バグ修正は原則として対応するテストを追加または更新する。
-- `tests/` に `test_{module}.py` 形式で置く。
+- `tests/` にパッケージ単位の `test_{package}.py` として置く。private 実装の細部ではなく振る舞いをテストする。
 - 型ヒントを付ける。
 - docstring は必要な場所に Google style で書く。
 - ruff の整形・リント方針に合わせる。
@@ -171,15 +177,15 @@ ruff check src/ tests/ scripts/
 ## よく触る入口
 
 - Web UI: `scripts/run_ui.py`, `src/ui/gradio_app.py`
-- 生成パイプライン: `src/ui/web_app.py`
-- ストローク描画: `src/ui/stroke_renderer.py`
-- プレビュー: `src/ui/preview_renderer.py`
+- 生成パイプライン: `src/pipeline.py`, `src/settings.py`
+- 文字の描画: `src/render/char_renderer.py`, `src/render/positioning.py`, `src/glyphs/geometric.py`
+- プレビュー: `src/render/preview.py`
 - 組版: `src/layout/typesetter.py`, `src/layout/page_layout.py`
-- 数式: `src/layout/math_layout.py`
-- G-code: `src/gcode/generator.py`, `src/gcode/config.py`, `src/gcode/optimizer.py`
-- 実機通信: `src/comm/grbl_controller.py`, `src/comm/serial_sender.py`
+- 数式: `src/layout/math_layout.py`, `src/render/math_image.py`
+- G-code: `src/gcode/generator.py`, `src/gcode/config.py`
+- 実機通信: `src/comm/serial_sender.py`
 - 送信 GUI: `src/plotter_gui/app.py`, `src/plotter_gui/worker.py`
-- 訓練: `src/model/pretrain.py`, `src/model/finetune.py`, `scripts/pretrain.py`, `scripts/finetune.py`
+- 訓練: `src/model/training.py`, `scripts/train.py`
 
 ## 作業時の優先順位
 

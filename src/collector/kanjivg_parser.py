@@ -9,11 +9,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-def _parse_coordinate_pair(text: str) -> tuple[float, float]:
-    parts = text.split(",")
-    return float(parts[0]), float(parts[1])
-
-
 def _sample_cubic_bezier(
     p0: tuple[float, float],
     p1: tuple[float, float],
@@ -180,16 +175,6 @@ class KanjiVGParser:
         """SVGファイルからストロークと筆画タイプを抽出。"""
         svg_text = Path(path).read_text(encoding="utf-8")
         return self.parse_svg_with_types(svg_text)
-
-    def parse_svg(self, svg_string: str) -> list[NDArray[np.float64]]:
-        """SVG文字列からストロークリストを抽出。"""
-        strokes, _ = self.parse_svg_with_types(svg_string)
-        return strokes
-
-    def parse_file(self, path: Path | str) -> list[NDArray[np.float64]]:
-        """SVGファイルからストロークリストを抽出。"""
-        strokes, _ = self.parse_file_with_types(path)
-        return strokes
 
     def normalize(
         self, strokes: list[NDArray[np.float64]], target_size: float = 1.0
