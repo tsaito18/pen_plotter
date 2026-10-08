@@ -147,6 +147,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
+手書き生成の手法検討（不自然さの原因分析・試す手法の候補・推奨順）は [docs/手書き生成_手法検討.md](docs/手書き生成_手法検討.md) を参照。
 
 ## メモリ（別デバイスでの開発継続用）
 
@@ -189,7 +190,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 
 ### 全体進捗（2026-04-01時点）
 - KanjiVG 6,699文字変換済み（SVGパーサー: smooth cubic bezier s/S対応済み）
-- 直接ストローク使用（サンプル単位ランダム選択 + 幾何バリエーション）
+- 直接ストローク使用（字ごとに総点数最多のサンプルを固定 + 画ごとの微小affine）
 - ガイド付きストローク収集UI（381文字セット、KanjiVGお手本表示、Apple Pencilのみ入力）
 - ユーザーサンプル: 381文字 / 925+サンプル収集済み（data/user_strokes/）
 - V3 StrokeDeformer（per-point offset MLP + 局所曲率）でユーザーデータ訓練完了
