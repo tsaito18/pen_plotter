@@ -98,7 +98,11 @@ export class WritingPad extends EventTarget {
       if (e.pointerType === "touch") this._touchDown(e);
       if (!this._accept(e) || this.current) return;
       e.preventDefault();
-      el.setPointerCapture(e.pointerId);
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        // 合成イベントなど capture できないポインタでも書ける
+      }
       this.current = { id: e.pointerId, points: [this._point(e)], smooth: [this._point(e)] };
       this.dispatchEvent(new Event("strokestart"));
       this._drawLive([]);
@@ -108,8 +112,9 @@ export class WritingPad extends EventTarget {
       if (!this.current || e.pointerId !== this.current.id) return;
       e.preventDefault();
       this.current.points.push(this._point(e));
-      const coalesced = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-      for (const c of coalesced) this.current.smooth.push(this._point(c));
+      // 中間点が取れない環境（合成イベント・一部ブラウザ）ではイベント自体を使う
+      const coalesced = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+      for (const c of coalesced.length ? coalesced : [e]) this.current.smooth.push(this._point(c));
       const predicted = e.getPredictedEvents ? e.getPredictedEvents().map((p) => this._point(p)) : [];
       this._drawLive(predicted);
     });

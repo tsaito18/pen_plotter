@@ -1219,13 +1219,14 @@
 
   .mobile-nav {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     padding: 6px 10px calc(6px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--line);
     background: var(--surface);
     z-index: 5;
   }
 
+  .mobile-nav a,
   .mobile-nav button {
     display: flex;
     flex-direction: column;
@@ -1235,6 +1236,7 @@
     border-radius: 10px;
     font-size: 11px;
     color: var(--text-3);
+    text-decoration: none;
   }
 
   .mobile-nav button[aria-current="true"] {

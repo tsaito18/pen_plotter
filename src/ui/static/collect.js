@@ -359,7 +359,11 @@ async function save() {
     toast(`「${info.char}」を保存しました`, "ok", 3200, {
       label: "取り消す",
       run: async () => {
-        await api("/api/collect/undo", { method: "POST", body: { profile: state.profile } }).catch(() => null);
+        // 取り消すのは「この保存」（後から別の字を保存していても間違えない）
+        await api("/api/collect/samples", {
+          method: "DELETE",
+          params: { profile: state.profile, char: info.char, file: result.filename },
+        }).catch(() => null);
         state.session = Math.max(0, state.session - 1);
         toast(`「${info.char}」を取り消しました`, "info", 1600);
         loadNext();
