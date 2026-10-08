@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,8 @@ def test_settings_defaults_are_valid_and_roundtrip():
     assert restored.font_size == 6.0 and restored.plot_page_numbers is False
     assert Settings.from_dict({"font_size": "abc"}).font_size == s.font_size
     assert Settings.from_dict(None) == s
+    assert s.plotter_config().finish_strength == 0.0  # 払い・はねは既定で抜かない（鉛筆の線）
+    assert Settings(finish_strength=0.7).plotter_config().finish_strength == 0.7
 
 
 @pytest.mark.parametrize(
@@ -99,6 +102,18 @@ def test_seed_alone_reproduces_all_randomness(
 
     assert run(1) == run(1)
     assert run(1) != run(2)
+
+
+def test_gaps_between_glyphs_are_even(kanjivg_dir: Path):
+    """字間（隣の字とのインクの隙間）が字形の幅によらずほぼ一定（キツキツ・空きすぎがない）。"""
+    p = PlotterPipeline(Settings(messiness=0.0), kanjivg_dir=kanjivg_dir, seed=0)
+    line = [pl for pl in p.typeset("一りあ人りり口一あり")[0] if pl.is_text]
+    boxes = []
+    for pl in line:
+        pts = np.concatenate(p.renderer.render(pl).strokes)
+        boxes.append((pts[:, 0].min(), pts[:, 0].max()))
+    gaps = np.array([b[0] - a[1] for a, b in pairwise(boxes)]) / p.settings.font_size
+    assert gaps.min() > 0.1 and np.ptp(gaps) < 0.15
 
 
 def test_empty_text_gives_an_empty_page(pipeline: PlotterPipeline, tmp_path: Path):

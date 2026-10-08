@@ -7,8 +7,8 @@ LINE_END_PROHIBITED: set[str] = set("（「『【〈《〔")
 
 
 def is_halfwidth(ch: str) -> bool:
-    """ASCII（半角）文字か。"""
-    return ord(ch) < 128
+    """欧文の幅で組む文字か（ASCII とギリシャ文字）。"""
+    return ord(ch) < 128 or 0x0391 <= ord(ch) <= 0x03F5
 
 
 def break_paragraph_by_width(

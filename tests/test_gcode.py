@@ -14,6 +14,7 @@ from src.gcode.generator import GCodeGenerator, simplify_stroke
 from src.handwriting.finishing import CONNECT, HANE, HARAI, NONE, TOME
 
 CFG = PlotterConfig()
+BRUSH = PlotterConfig(finish_strength=1.0)  # 払い・はねの抜きを最大にした設定
 SQUARE = np.array([[10.0, 10.0], [50.0, 10.0], [50.0, 50.0], [10.0, 50.0], [10.0, 10.0]])
 LONG_LINE = np.column_stack([np.linspace(10, 30, 41), np.full(41, 100.0)])
 # 簡略化(RDP)で潰れないよう揺らぎのある長い画
@@ -62,13 +63,20 @@ def test_feed_rate_is_slow_at_both_ends_and_fast_in_the_middle():
 
 @pytest.mark.parametrize("finish", [NONE, TOME])
 def test_no_z_changes_for_tome_and_none(finish: str):
-    draws = _draws(GCodeGenerator().generate([LONG_LINE], finishes=[finish]))
+    draws = _draws(GCodeGenerator(BRUSH).generate([LONG_LINE], finishes=[finish]))
     assert all(_z(line) is None for line in draws)
 
 
 @pytest.mark.parametrize("finish", [HARAI, HANE])
+def test_finishes_are_plain_pencil_lines_by_default(finish: str):
+    """既定は抜かない（実物の鉛筆の払いは先まで同じ太さ）。Z も速度も変えない。"""
+    plain = GCodeGenerator().generate([WAVY], finishes=[NONE], vary_speed=False)
+    assert GCodeGenerator().generate([WAVY], finishes=[finish], vary_speed=False) == plain
+
+
+@pytest.mark.parametrize("finish", [HARAI, HANE])
 def test_harai_and_hane_lift_z_at_the_end(finish: str):
-    draws = _draws(GCodeGenerator().generate([WAVY], finishes=[finish]))
+    draws = _draws(GCodeGenerator(BRUSH).generate([WAVY], finishes=[finish]))
     zs = [_z(line) for line in draws if _z(line) is not None]
     assert zs and zs == sorted(zs, reverse=True)  # 終端へ向かって単調に持ち上げる
     assert CFG.finish_lift_z <= min(zs) and max(zs) <= CFG.pen_down_z
@@ -76,7 +84,7 @@ def test_harai_and_hane_lift_z_at_the_end(finish: str):
 
 
 def test_harai_slows_down_while_lifting():
-    no_vary = GCodeGenerator().generate([WAVY], finishes=[HARAI], vary_speed=False)
+    no_vary = GCodeGenerator(BRUSH).generate([WAVY], finishes=[HARAI], vary_speed=False)
     lifted = [_feed(line) for line in _draws(no_vary) if _z(line) is not None]
     assert set(lifted) == {int(CFG.draw_speed * CFG.harai_speed_factor)}
 

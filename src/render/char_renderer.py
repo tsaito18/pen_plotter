@@ -3,11 +3,14 @@
 文字は次の優先順で字形を決める（先に見つかったものを使う）:
 
 1. 数式: matplotlib 描画 → 細線化（:mod:`src.render.math_image`）
-2. 幾何字形: 記号・句読点・括弧・ギリシャ文字・数式記号・丸数字
+2. 幾何字形: 記号・句読点・ギリシャ文字・数式記号・丸数字（括弧は本人サンプルを優先）
 3. ユーザー筆跡: 本人が書いたサンプル（英字も含む）
 4. 幾何英字: 英字サンプルが無いとき
-5. ML 変形: KanjiVG 参照字形をユーザーの書き癖で変形（CJK のみ）
-6. KanjiVG 参照字形そのもの（数字、または ML が使えないとき）
+5. 部品合成: 本人が書いた字の部品で組み立てる（:mod:`src.glyphs.compose`、CJK のみ）
+6. ML 変形: KanjiVG 参照字形をユーザーの書き癖で変形（CJK のみ）
+7. KanjiVG 参照字形そのもの（数字、または ML が使えないとき）
+
+KanjiVG 由来の字（5〜7）には本人の書き癖（:mod:`src.glyphs.style`）を掛ける。
 
 経路ごとに揺らぎ（弾性変形・手ブレ）の強さを変え、ページ内の質感を揃える。
 """
@@ -21,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from src.geometry import Stroke, bbox_span, rotation_matrix
+from src.glyphs.compose import ComponentComposer, load_components
 from src.glyphs.geometric import (
     CIRCLED_NUMBERS,
     circled_number_glyph,
@@ -28,11 +32,11 @@ from src.glyphs.geometric import (
     symbol_glyph,
 )
 from src.glyphs.sources import KanjiVGStore, UserStrokeDB
+from src.glyphs.style import WritingStyle, estimate_writing_style
 from src.handwriting.augmentation import HandwritingAugmenter
 from src.handwriting.finishing import (
     HARAI,
     NONE,
-    apply_finishing,
     classify_finishes,
     infer_finishes,
 )
@@ -66,6 +70,10 @@ _CHAR_SUBSTITUTIONS: dict[str, str] = {
     "～": "~",  # 全角チルダ
     **{chr(0xFF10 + i): str(i) for i in range(10)},  # 全角数字
 }
+
+# 本人サンプルがあれば幾何字形より優先する記号（括弧）と、その代用サンプル
+_USER_FIRST_SYMBOLS = frozenset("（）()「」『』［］[]｛｝{}【】")
+_USER_SAMPLE_ALIASES = {"(": "（", ")": "）", "[": "［", "]": "］", "{": "｛", "}": "｝"}
 
 # 揺らぎを乗せない（形が崩れやすい）句読点・長音・括弧類
 _SMOOTH_CHARS = frozenset("、。，．・ー～—―()（）「」『』【】〈〉《》〔〕")
@@ -105,6 +113,7 @@ class CharCoverageReport:
     """どの経路で描いたかの集計（UI の「文字カバレッジ」表示用）。"""
 
     user_strokes: list[str] = field(default_factory=list)
+    composed: list[str] = field(default_factory=list)
     ml_inference: list[str] = field(default_factory=list)
     kanjivg: list[str] = field(default_factory=list)
     geometric: list[str] = field(default_factory=list)
@@ -181,6 +190,8 @@ class CharRenderer:
         temperature: ML 変形の字形揺らぎ。
         instance_variation: 同じ字を書くたびに変える画ごとの微小 affine の強さ。
         japanese_only: かな・漢字・句読点・数字以外を描かない。
+        writing_style: 本人サンプルの無いかな・漢字に掛ける書き癖。None なら本人サンプルと
+            KanjiVG から推定する（データが足りなければ恒等）。
     """
 
     def __init__(
@@ -194,6 +205,7 @@ class CharRenderer:
         temperature: float = 0.2,
         instance_variation: float = 0.1,
         japanese_only: bool = False,
+        writing_style: WritingStyle | None = None,
     ) -> None:
         self.kanjivg = KanjiVGStore(kanjivg_dir)
         self.user_db = UserStrokeDB(user_strokes_dir)
@@ -203,9 +215,43 @@ class CharRenderer:
         self.temperature = temperature
         self.instance_variation = instance_variation
         self.japanese_only = japanese_only
+        self.writing_style = (
+            writing_style
+            if writing_style is not None
+            else estimate_writing_style(self.user_db, self.kanjivg)
+        )
+        self.composer = ComponentComposer(load_components(kanjivg_dir), self.user_db, self.kanjivg)
         self.coverage = CharCoverageReport()
+        self._ink_width_cache: dict[str, float | None] = {}
         # 全ての乱数はこの 1 系列から引く（augmenter の seed で全体が再現できる）
         self.rng = augmenter.rng if augmenter is not None else np.random.default_rng()
+
+    def ink_width_ratio(self, char: str) -> float | None:
+        """この字を描く字形のインク幅 / font_size（組版の字送り用）。字形が無ければ None。
+
+        本人サンプル → KanjiVG 参照字形（書き癖つき）の順で、描画と同じ配置計算をして
+        測る（揺らぎ・ML 変形は含まない）。字ごとにキャッシュする。
+        """
+        if char not in self._ink_width_cache:
+            self._ink_width_cache[char] = self._measure_ink_width(char)
+        return self._ink_width_cache[char]
+
+    def _measure_ink_width(self, char: str) -> float | None:
+        sample = self.user_db.best_sample(char)
+        if sample is not None:
+            glyph = _normalize_user_strokes(sample)
+        elif (geometric := symbol_glyph(char)) is not None:
+            glyph = geometric
+        elif (composed := self._composed_glyph(char)) is not None:
+            glyph = composed
+        else:
+            reference, _ = self.kanjivg.load(char)
+            if reference is None:
+                return None
+            glyph = self.writing_style.apply(reference) if is_japanese_char(char) else reference
+        probe = CharPlacement(char, 0.0, 0.0, 1.0)
+        pts = np.concatenate(position_strokes(glyph, probe, self.line_spacing), axis=0)
+        return float(pts[:, 0].max() - pts[:, 0].min())
 
     @property
     def has_reference_source(self) -> bool:
@@ -245,9 +291,11 @@ class CharRenderer:
         smooth = original in _SMOOTH_CHARS or char in _SMOOTH_CHARS
 
         rendered = (
-            self._render_symbol(placement)
+            (char in _USER_FIRST_SYMBOLS and self._render_user_strokes(placement, smooth))
+            or self._render_symbol(placement)
             or self._render_user_strokes(placement, smooth)
             or self._render_latin(placement)
+            or self._render_composed(placement, smooth)
             or self._render_ml(placement, smooth)
             or self._render_kanjivg(placement, smooth)
         )
@@ -288,6 +336,7 @@ class CharRenderer:
             glyph = symbol_glyph(char)
         if glyph is None:
             return None
+        glyph = self._hand_drawn(glyph)
         positioned = self._symbol_distort(position_strokes(glyph, placement, self.line_spacing))
         finish = HARAI if char in _COMMA_CHARS else NONE
         return "geometric", RenderedChar(positioned, [finish] * len(positioned))
@@ -295,22 +344,51 @@ class CharRenderer:
     def _render_user_strokes(
         self, placement: CharPlacement, smooth: bool
     ) -> tuple[str, RenderedChar] | None:
-        sample = self.user_db.best_sample(placement.char)
+        char = placement.char
+        sample = self.user_db.best_sample(char)
+        if sample is None and char in _USER_SAMPLE_ALIASES:
+            sample = self.user_db.best_sample(_USER_SAMPLE_ALIASES[char])
         if sample is None:
             return None
         glyph = _jitter_strokes(_normalize_user_strokes(sample), self.rng)
         positioned = position_strokes(glyph, placement, self.line_spacing)
         if not smooth:
-            positioned = self._distort(positioned, waver_scale(len(positioned)))
+            extent = bbox_span(positioned)
+            distorted = self._distort(positioned, waver_scale(len(positioned)))
+            positioned = _rescale_to_extent(distorted, extent)
         return "user_strokes", RenderedChar(positioned, [NONE] * len(positioned))
 
     def _render_latin(self, placement: CharPlacement) -> tuple[str, RenderedChar] | None:
         glyph = latin_glyph(placement.char)
         if glyph is None:
             return None
-        positioned = position_strokes(glyph, placement, self.line_spacing, logical_latin=True)
+        glyph = self._hand_drawn(glyph)
+        positioned = position_strokes(glyph, placement, self.line_spacing)
         positioned = self._distort(positioned, WAVER_GEOMETRIC)
         return "geometric", RenderedChar(positioned, [NONE] * len(positioned))
+
+    def _composed_glyph(self, char: str) -> list[Stroke] | None:
+        if not (is_japanese_char(char) and _is_ml_deformable(char)):
+            return None
+        return self.composer.compose(char, style=self.writing_style)
+
+    def _render_composed(
+        self, placement: CharPlacement, smooth: bool
+    ) -> tuple[str, RenderedChar] | None:
+        """本人の書いた部品で組み立てた字（本人サンプルの無いかな・漢字）。"""
+        glyph = self._composed_glyph(placement.char)
+        if glyph is None:
+            return None
+        _, kvg_types = self.kanjivg.load(placement.char)
+        return "composed", self._finish_reference_glyph(
+            glyph,
+            kvg_types,
+            placement,
+            smooth=smooth,
+            waver=waver_scale(len(glyph)),
+            deformable=True,
+            styled=True,
+        )
 
     def _render_ml(self, placement: CharPlacement, smooth: bool) -> tuple[str, RenderedChar] | None:
         if self.inference is None or not _is_ml_deformable(placement.char):
@@ -326,14 +404,9 @@ class CharRenderer:
         except Exception:
             logger.warning("ML inference failed for %r", placement.char, exc_info=True)
             return None
-        positioned = position_strokes(raw, placement, self.line_spacing)
-        finishes = _resolve_finishes(kvg_types, positioned)
-        positioned = apply_finishing(positioned, finishes, scale=placement.font_size)
-        positioned = self._instance_variation(positioned, waver)
-        if not smooth:
-            positioned = self._distort(positioned, waver)
-        positioned = _enforce_horizontal_rise(positioned, placement.font_size)
-        return "ml_inference", RenderedChar(positioned, finishes)
+        return "ml_inference", self._finish_reference_glyph(
+            raw, kvg_types, placement, smooth=smooth, waver=waver, deformable=True
+        )
 
     def _render_kanjivg(
         self, placement: CharPlacement, smooth: bool
@@ -341,20 +414,46 @@ class CharRenderer:
         reference, kvg_types = self.kanjivg.load(placement.char)
         if reference is None:
             return None
-        deformable = _is_ml_deformable(placement.char)
-        positioned = position_strokes(reference, placement, self.line_spacing)
-        # 数字は終端加工・右上がり矯正で下線や等号が歪むため無効化する
+        return "kanjivg", self._finish_reference_glyph(
+            reference,
+            kvg_types,
+            placement,
+            smooth=smooth,
+            waver=waver_scale(len(reference)),
+            deformable=_is_ml_deformable(placement.char),
+        )
+
+    def _finish_reference_glyph(
+        self,
+        strokes: list[Stroke],
+        kvg_types: list[str],
+        placement: CharPlacement,
+        *,
+        smooth: bool,
+        waver: float,
+        deformable: bool,
+        styled: bool = False,
+    ) -> RenderedChar:
+        """KanjiVG 由来の字形（ML 変形後を含む）に書き癖を掛けて配置し、筆遣いと揺らぎを乗せる。
+
+        揺らぎで bbox が膨らむと経路ごとに字の大きさが変わるため、
+        最後に配置直後の大きさへ戻す。数字（``deformable=False``）は終端加工・右上がり
+        矯正で下線や等号が歪むため掛けない。``styled=True`` は書き癖を掛け済み（部品合成）。
+        """
+        if deformable and not styled and is_japanese_char(placement.char):
+            strokes = self.writing_style.apply(strokes)
+        positioned = position_strokes(strokes, placement, self.line_spacing)
+        extent = bbox_span(positioned)
         finishes = (
             _resolve_finishes(kvg_types, positioned) if deformable else [NONE] * len(positioned)
         )
-        positioned = apply_finishing(positioned, finishes, scale=placement.font_size)
-        waver = waver_scale(len(reference))
         positioned = self._instance_variation(positioned, waver)
         if not smooth:
             positioned = self._distort(positioned, waver)
+        positioned = _rescale_to_extent(positioned, extent)
         if deformable:
             positioned = _enforce_horizontal_rise(positioned, placement.font_size)
-        return "kanjivg", RenderedChar(positioned, finishes)
+        return RenderedChar(positioned, finishes)
 
     # ------------------------------------------------------------------
     # 揺らぎ
@@ -367,6 +466,10 @@ class CharRenderer:
             return strokes
         strokes = [aug.elastic_distort(s, amplitude=0.002 * waver) for s in strokes]
         return [aug.apply_tremor(s, amplitude=0.01 * waver) for s in strokes]
+
+    def _hand_drawn(self, glyph: list[Stroke]) -> list[Stroke]:
+        """幾何字形（単位系）の定規の直線・鋭い角を、手で引いた線にする。"""
+        return self.augmenter.hand_drawn(glyph) if self.augmenter is not None else glyph
 
     def _symbol_distort(self, strokes: list[Stroke]) -> list[Stroke]:
         """記号に微量の揺らぎを乗せる（点などの極短の画は素のまま）。"""
@@ -402,6 +505,17 @@ class CharRenderer:
             shift = rng.normal(0, strength * 0.04, size=2) * span
             out.append((s - c) @ rotation_matrix(ang) * sc + c + shift)
         return out
+
+
+def _rescale_to_extent(strokes: list[Stroke], extent: float) -> list[Stroke]:
+    """bbox の長辺が ``extent`` になるよう、bbox 中心で等倍率に拡縮する。"""
+    current = bbox_span(strokes)
+    if current < 1e-9 or extent < 1e-9:
+        return strokes
+    pts = np.concatenate(strokes, axis=0)
+    center = (pts.min(axis=0) + pts.max(axis=0)) / 2
+    k = extent / current
+    return [(s - center) * k + center for s in strokes]
 
 
 def _is_digit(char: str) -> bool:

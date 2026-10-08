@@ -1,19 +1,17 @@
-"""文字単位サイズの統一API（種別スケール × 密度補正）。
+"""文字サイズの統一API（字種 × 画数・線の長さ）と字送り。
 
-これまで layout(typesetter) と ui(stroke_renderer) でサイズ倍率が二重管理され
-値も食い違っていた（ひらがな 0.85 と 0.88）。本モジュールを唯一の真実源にして
-両者から import させ、整合性を担保する。
+layout(typesetter) と render(positioning) はサイズ倍率をここから引く（二重管理しない）。
 
-サイズは2軸の積で決まる:
+サイズ（本文フォントサイズ比）は字種と複雑さで決まる。本人の手書きレポートの実測で、
+同じ人の字は「漢字は大きく画数が多いほど大きい・かなは小さく単純な形ほど小さい」:
 
-- 種別スケール (`char_type_scale`): 漢字/かな/半角/小書き/句読点の字種ごとの
-  視覚バランス補正。typesetter.py の値を「正」とする。
-- 密度補正 (`density_scale`): 画数と正規化字形の ink 長から求めた複雑度
-  (`data/char_complexity.json`) を、画数の少ない簡単な字は小さく・多い複雑な字は
-  大きく見せる連続倍率に写す。マップに無い字は 1.0（無補正）。
+- 漢字: 画数で 0.9（1〜3 画）→ 1.1（15 画以上）
+- かな: 字形の総線長で 0.6（ン・く・し）→ 0.88（あ・ぬ・わ）。どのかなも漢字より小さい
+- 英数字 0.8、小書き 0.55、句読点 0.35（字種の代表値 :func:`char_type_scale`）
 
-複雑度マップは layout 配下に置く純粋関数(`stroke_ink_length` 等)で生成され
-(`scripts/compute_char_complexity.py`)、ここではそれを lazy にロードして引くだけ。
+画数・線長は KanjiVG から求めた複雑度マップ（``data/char_complexity.json``、
+``scripts/compute_char_complexity.py`` で生成）を lazy にロードして引く。
+マップに無い字は字種の代表値。
 """
 
 from __future__ import annotations
@@ -32,13 +30,18 @@ logger = logging.getLogger(__name__)
 Point = Sequence[float] | Mapping[str, float]
 Stroke = Sequence[Point]
 
-# --- 複雑度 → 密度補正の写像パラメータ -------------------------------------
+# --- 字サイズの写像パラメータ（実物の手書きレポートの実測に合わせた値）----------
 
-# complexity(0-1) を密度補正へ写す線形係数。complexity 中央 0.5 付近で約 1.0、
-# 簡単字(0)で 0.88、複雑字(1)で 1.12 になるよう設定。両端は下の clamp で頭打ち。
-DENSITY_SCALE_MIN = 0.88
-DENSITY_SCALE_MAX = 1.12
-_DENSITY_SLOPE = DENSITY_SCALE_MAX - DENSITY_SCALE_MIN  # = 0.24
+# 漢字: 画数 → サイズ
+KANJI_SIZE_MIN = 0.9
+KANJI_SIZE_MAX = 1.1
+_KANJI_STROKES_LOW = 3
+_KANJI_STROKES_HIGH = 15
+# かな: 字形の総線長（KanjiVG 正規化座標）→ サイズ
+KANA_SIZE_MIN = 0.6
+KANA_SIZE_MAX = 0.88
+_KANA_INK_LOW = 15.0
+_KANA_INK_HIGH = 38.0
 
 # 複雑度の合成重み（画数とink長の寄与）。書き味の調整で動かす想定の名前付き定数。
 COMPLEXITY_WEIGHT_STROKE = 0.5
@@ -169,191 +172,55 @@ def compute_complexity(
 _SMALL_KANA = set("っゃゅょぁぃぅぇぉァィゥェォッャュョヵヶ")
 _SMALL_PUNCT = set("・、。，．")
 
-# 手書きバランス調整: 画数が少なく視覚的に軽い文字は小さめにする。
-# 旧 typesetter._KANA_SIZE_OVERRIDES をここへ移植（唯一の真実源化）。
-_KANA_SIZE_OVERRIDES: dict[str, float] = {
-    # カタカナ: 画数少・形が小さい文字 → 小さめ
-    "ロ": 0.68,
-    "ハ": 0.78,
-    "ニ": 0.78,
-    "ノ": 0.75,
-    "ヘ": 0.78,
-    "フ": 0.80,
-    "ク": 0.80,
-    "ワ": 0.80,
-    "カ": 0.82,
-    "コ": 0.80,
-    "ン": 0.78,
-    "ソ": 0.78,
-    "リ": 0.78,
-    "ル": 0.80,
-    "レ": 0.78,
-    "イ": 0.80,
-    "ト": 0.78,
-    "チ": 0.82,
-    "ラ": 0.82,
-    # カタカナ: 画数多・形が大きい文字 → やや大きめ
-    "ス": 0.85,
-    "テ": 0.85,
-    "セ": 0.85,
-    "サ": 0.85,
-    "タ": 0.85,
-    "ナ": 0.85,
-    "マ": 0.85,
-    "ミ": 0.82,
-    "ム": 0.85,
-    "メ": 0.82,
-    "モ": 0.85,
-    "ヤ": 0.85,
-    "ユ": 0.82,
-    "ヨ": 0.82,
-    "キ": 0.85,
-    "ケ": 0.82,
-    "シ": 0.82,
-    "ネ": 0.85,
-    "ヌ": 0.85,
-    "オ": 0.85,
-    "エ": 0.82,
-    "ア": 0.85,
-    "ウ": 0.85,
-    "ダ": 0.88,
-    "デ": 0.88,
-    "ド": 0.88,
-    "バ": 0.85,
-    "パ": 0.85,
-    "ガ": 0.88,
-    "ギ": 0.88,
-    "グ": 0.85,
-    "ゲ": 0.85,
-    "ゴ": 0.85,
-    "ザ": 0.88,
-    "ジ": 0.85,
-    "ズ": 0.88,
-    "ゼ": 0.88,
-    "ゾ": 0.85,
-    "ビ": 0.85,
-    "ブ": 0.85,
-    "ベ": 0.82,
-    "ボ": 0.88,
-    "ピ": 0.85,
-    "プ": 0.82,
-    "ペ": 0.82,
-    "ポ": 0.85,
-    "ヒ": 0.78,
-    "ホ": 0.85,
-    # ひらがな: 画数少・形が小さい文字 → 小さめ
-    "の": 0.78,
-    "く": 0.75,
-    "し": 0.78,
-    "へ": 0.78,
-    "つ": 0.80,
-    "り": 0.78,
-    "い": 0.80,
-    "こ": 0.78,
-    "て": 0.72,
-    "に": 0.80,
-    "と": 0.80,
-    "う": 0.80,
-    "か": 0.82,
-    "る": 0.80,
-    "を": 0.80,
-    # ひらがな: 標準〜やや大きめ
-    "あ": 0.85,
-    "お": 0.85,
-    "き": 0.85,
-    "け": 0.82,
-    "さ": 0.82,
-    "す": 0.82,
-    "せ": 0.85,
-    "そ": 0.82,
-    "た": 0.85,
-    "ち": 0.82,
-    "な": 0.85,
-    "ぬ": 0.85,
-    "ね": 0.85,
-    "は": 0.85,
-    "ひ": 0.78,
-    "ふ": 0.85,
-    "ほ": 0.85,
-    "ま": 0.85,
-    "み": 0.82,
-    "む": 0.85,
-    "め": 0.82,
-    "も": 0.82,
-    "や": 0.85,
-    "ゆ": 0.85,
-    "よ": 0.82,
-    "ら": 0.82,
-    "れ": 0.82,
-    "ろ": 0.80,
-    "わ": 0.82,
-    "ん": 0.80,
-    "え": 0.82,
-    # 濁音ひらがな
-    "が": 0.88,
-    "ぎ": 0.88,
-    "ぐ": 0.85,
-    "げ": 0.85,
-    "ご": 0.85,
-    "ざ": 0.88,
-    "じ": 0.85,
-    "ず": 0.85,
-    "ぜ": 0.88,
-    "ぞ": 0.85,
-    "だ": 0.88,
-    "ぢ": 0.85,
-    "づ": 0.85,
-    "で": 0.85,
-    "ど": 0.88,
-    "ば": 0.88,
-    "び": 0.85,
-    "ぶ": 0.88,
-    "べ": 0.85,
-    "ぼ": 0.88,
-    "ぱ": 0.88,
-    "ぴ": 0.85,
-    "ぷ": 0.85,
-    "ぺ": 0.85,
-    "ぽ": 0.88,
-}
-
-# 種別デフォルト倍率（個別テーブルに無い字に適用）
+# 字種の代表値（複雑度マップに無い字に使う）
 _KANJI_SCALE = 1.0
-_HIRAGANA_SCALE = 0.85
-_KATAKANA_SCALE = 0.85
+_KANA_SCALE = 0.8
 _HALFWIDTH_SCALE = 0.8
 _SMALL_KANA_SCALE = 0.55
 _SMALL_PUNCT_SCALE = 0.35
 
 
+# 半角文字の字送り（本文フォントサイズ比、字間は別途加算）。本人の手書きレポートの
+# スキャン実測（Cursor / Measure: 小文字の字送り平均 ≈0.45、大文字のインク幅 ≈0.6〜0.67）に合わせた
+# 字ごとの幅。等幅だと i・l の両側が空き、m・w が詰まって活字のように見える。
+_HALFWIDTH_ADVANCE_DEFAULT = 0.55
+_HALFWIDTH_ADVANCES: dict[str, float] = {
+    **dict.fromkeys("il.,:;'!|", 0.22),
+    **dict.fromkeys("jftrI()[]{}", 0.3),
+    **dict.fromkeys(" J", 0.4),
+    **dict.fromkeys("abcdeghknopqsuvxyz", 0.42),
+    **dict.fromkeys("0123456789", 0.5),
+    **dict.fromkeys("mw", 0.6),
+    **dict.fromkeys("ABCDEFGHKLNOPQRSTUVXYZ", 0.68),
+    **dict.fromkeys("MW", 0.8),
+    **dict.fromkeys("αβγδεζηθικλνξοπρστυχϵς", 0.45),
+    **dict.fromkeys("μφψωϕ", 0.52),
+}
+
+
+def halfwidth_advance(ch: str) -> float:
+    """半角 1 文字の字送り（本文フォントサイズ比、字間を除く）。"""
+    return _HALFWIDTH_ADVANCES.get(ch, _HALFWIDTH_ADVANCE_DEFAULT)
+
+
+def _is_kana(ch: str) -> bool:
+    return 0x3040 <= ord(ch) <= 0x30FF
+
+
 def char_type_scale(ch: str) -> float:
-    """字種に応じたサイズ倍率を返す（個別調整テーブル優先）。
-
-    優先順位: 小書き → 句読点 → 個別テーブル → 字種デフォルト。
-
-    Args:
-        ch: 対象文字（1文字）。
-
-    Returns:
-        サイズ倍率。漢字 1.0 / かな 0.85 / 半角 0.8 / 小書き 0.55 / 句読点 0.35。
-    """
+    """字種の代表サイズ倍率（漢字 1.0 / かな・半角 0.8 / 小書き 0.55 / 句読点 0.35）。"""
     if ch in _SMALL_KANA:
         return _SMALL_KANA_SCALE
     if ch in _SMALL_PUNCT:
         return _SMALL_PUNCT_SCALE
-    if ch in _KANA_SIZE_OVERRIDES:
-        return _KANA_SIZE_OVERRIDES[ch]
-    cp = ord(ch)
-    if 0x3040 <= cp <= 0x309F:
-        return _HIRAGANA_SCALE
-    if 0x30A0 <= cp <= 0x30FF:
-        return _KATAKANA_SCALE
     if is_halfwidth(ch):
         return _HALFWIDTH_SCALE
+    if _is_kana(ch):
+        return _KANA_SCALE
     return _KANJI_SCALE
 
 
-# --- 密度補正（複雑度マップに依存、lazy ロード）----------------------------
+# --- 複雑度マップ（lazy ロード）-------------------------------------------------
 
 _complexity_map: dict[str, dict] | None = None
 _complexity_map_loaded = False
@@ -363,7 +230,7 @@ def _load_complexity_map() -> dict[str, dict]:
     """複雑度マップを初回呼び出し時に1度だけロードしキャッシュする。
 
     マップ未生成（ファイル不在）や破損時も例外を投げず空 dict を返し、
-    密度補正を 1.0 フォールバックさせる（マップが無くても動く堅牢性）。
+    字サイズを字種の代表値へフォールバックさせる（マップが無くても動く堅牢性）。
     """
     global _complexity_map, _complexity_map_loaded
     if _complexity_map_loaded:
@@ -375,42 +242,34 @@ def _load_complexity_map() -> dict[str, dict]:
         _complexity_map = raw if isinstance(raw, dict) else {}
     except (OSError, ValueError):
         logger.warning(
-            "char complexity map not loaded (%s); density_scale falls back to 1.0",
+            "char complexity map not loaded (%s); char sizes fall back to the type defaults",
             _COMPLEXITY_MAP_PATH,
         )
         _complexity_map = {}
     return _complexity_map
 
 
-def density_scale(ch: str) -> float:
-    """複雑度に応じた連続サイズ補正を返す（マップ無し字は 1.0）。
-
-    線形写像 `DENSITY_SCALE_MIN + slope*complexity` を `[MIN, MAX]` でクランプ。
-    複雑度 0.5 付近で約 1.0、簡単字ほど小さく・複雑字ほど大きくなる。
-
-    Args:
-        ch: 対象文字（1文字）。
-
-    Returns:
-        密度補正倍率。clamp(0.88, 1.12)。マップに無い文字は 1.0。
-    """
-    entry = _load_complexity_map().get(ch)
-    if not isinstance(entry, dict) or "complexity" not in entry:
-        return 1.0
-    complexity = float(entry["complexity"])
-    scaled = DENSITY_SCALE_MIN + _DENSITY_SLOPE * complexity
-    return min(DENSITY_SCALE_MAX, max(DENSITY_SCALE_MIN, scaled))
+def _lerp_clamped(x: float, x0: float, x1: float, y0: float, y1: float) -> float:
+    t = min(1.0, max(0.0, (x - x0) / (x1 - x0)))
+    return y0 + (y1 - y0) * t
 
 
 def effective_char_scale(ch: str) -> float:
-    """種別スケール × 密度補正の最終サイズ倍率を返す。
+    """字種と複雑さで決まる文字サイズ倍率（本文フォントサイズ比）。
 
-    typesetter/renderer はこの単一関数を呼ぶことで二重管理を解消する。
-
-    Args:
-        ch: 対象文字（1文字）。
-
-    Returns:
-        `char_type_scale(ch) * density_scale(ch)`。
+    漢字は画数、かなは字形の総線長で連続的に変える（モジュール docstring 参照）。
+    小書き・句読点・半角・複雑度マップに無い字は :func:`char_type_scale`。
     """
-    return char_type_scale(ch) * density_scale(ch)
+    base = char_type_scale(ch)
+    if ch in _SMALL_KANA or ch in _SMALL_PUNCT or is_halfwidth(ch):
+        return base
+    entry = _load_complexity_map().get(ch)
+    if not isinstance(entry, dict):
+        return base
+    if _is_kana(ch):
+        ink = float(entry["ink_len"])
+        return _lerp_clamped(ink, _KANA_INK_LOW, _KANA_INK_HIGH, KANA_SIZE_MIN, KANA_SIZE_MAX)
+    strokes = float(entry["strokes"])
+    return _lerp_clamped(
+        strokes, _KANJI_STROKES_LOW, _KANJI_STROKES_HIGH, KANJI_SIZE_MIN, KANJI_SIZE_MAX
+    )

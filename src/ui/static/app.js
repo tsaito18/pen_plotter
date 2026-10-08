@@ -37,6 +37,7 @@ const PRESETS = [
 
 const COVERAGE_TIERS = [
   { key: "user_strokes", label: "あなたの筆跡", color: "var(--accent)" },
+  { key: "composed", label: "部品から組み立て", color: "#7a9e7e" },
   { key: "ml_inference", label: "ML で変形", color: "var(--pencil)" },
   { key: "kanjivg", label: "KanjiVG 字形", color: "var(--text-2)" },
   { key: "geometric", label: "幾何字形", color: "#c2a46b" },

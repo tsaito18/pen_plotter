@@ -100,7 +100,8 @@ def build_calibration_gcode(
     if strokes and z_values:
         gap = spacing_mm if spacing_mm is not None else _strokes_width(strokes) * 1.6
         for i, z in enumerate(z_values):
-            gen = GCodeGenerator(replace(base_config, finish_lift_z=z))
+            # 抜きの高さを比べるためのものなので、設定によらず最大まで抜く
+            gen = GCodeGenerator(replace(base_config, finish_lift_z=z, finish_strength=1.0))
             offset = np.array([i * gap, 0.0], dtype=np.float64)
             for stroke, finish in zip(strokes, finishes):
                 lines.extend(gen.stroke_to_gcode(stroke + offset, finish=finish))

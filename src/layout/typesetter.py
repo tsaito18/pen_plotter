@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from src.layout.char_metrics import effective_char_scale
+from src.layout.char_metrics import effective_char_scale, halfwidth_advance
 from src.layout.line_breaking import break_paragraph_by_width, is_halfwidth
 from src.layout.math_layout import (
     CHAR_WIDTH_RATIO,
@@ -48,6 +48,12 @@ _HEADING_X: dict[int, float] = {1: 15.0, 2: 25.0, 3: 35.0}
 _BODY_X: dict[int, float] = {1: 25.0, 2: 35.0, 3: 45.0}
 _HEADING_FONT_SCALES: dict[int, float] = {1: 1.15, 2: 1.08, 3: 1.0}
 _KANJI_ADVANCE_SCALE = 1.08
+# インク幅で字送りを決めるときの字間（隣の字とのインクの隙間、本文サイズ比）。
+# 本人の手書きレポートと同じ行（33 字）の長さが字の大きさ比で一致する値（実測 34 字幅）。
+_INK_GAP = 0.32
+# 全角括弧は外側（括弧の外の字との間）を広めに空ける（実測: 内側 ≈0.25 字・外側 ≈0.7 字）
+_BRACKET_OUTER_GAP = 0.25
+_FULLWIDTH_BRACKETS = frozenset("（）「」『』【】〈〉《》〔〕［］｛｝")
 # 本文の字間トラッキング（font_size 比）。字種に依らず一律に加える。
 _LETTER_SPACING_SCALE = 0.05
 # 見出し・インデント付き本文の右端（用紙右端からの距離 mm）
@@ -66,6 +72,11 @@ _ZERO_WIDTH_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
 _INLINE_MATH_PLACEHOLDER_BASE = 0xE000
 
 
+def _is_ink_spaced(ch: str) -> bool:
+    """インク幅で字送りを決める字（かな・漢字・全角括弧）。句読点は従来の字送り。"""
+    return _is_kanji(ch) or 0x3040 <= ord(ch) <= 0x30FF or ch in _FULLWIDTH_BRACKETS
+
+
 def _is_kanji(ch: str) -> bool:
     cp = ord(ch)
     return (
@@ -77,12 +88,19 @@ def _is_kanji(ch: str) -> bool:
     )
 
 
+# 全角化する半角句読点（直前が空白以外の半角文字なら対象外）
+_FULLWIDTH_TARGET_RE = re.compile(r"(?<![!-~])[,.]")
+
+
 def normalize_body_punctuation(text: str) -> str:
-    """本文の句読点を全角「，」「．」に統一する（数式内の ``.`` ``,`` は変えない）。"""
+    """本文の句読点を全角「，」「．」に統一する。
+
+    数式内と、半角文字の直後の ``.`` ``,``（小数点・桁区切り・英文）は半角のまま残す。
+    """
 
     def _normalize(seg: str) -> str:
-        seg = seg.replace(",", "，").replace("、", "，")
-        return seg.replace(".", "．").replace("。", "．")
+        seg = _FULLWIDTH_TARGET_RE.sub(lambda m: "，" if m.group(0) == "," else "．", seg)
+        return seg.replace("、", "，").replace("。", "．")
 
     result: list[str] = []
     last_end = 0
@@ -225,34 +243,65 @@ def _collapse_tables(paragraphs: list[str | int]) -> list[str | int | _Table]:
 
 
 class Typesetter:
+    """テキストをページ上の配置要素へ組む。
+
+    Args:
+        page_config: 用紙・余白・行間。
+        font_size: 本文のフォントサイズ(mm)。
+        augmenter: 配置の揺らぎ。
+        ink_width: 字形のインク幅 / その字のフォントサイズ を返す関数（分からなければ None）。
+            与えると、かな・漢字・全角括弧の字送りを「インク幅 + 一定の隙間」にする
+            （固定の字送りだと細い字の両側が空き、太い字どうしが接する）。
+    """
+
     def __init__(
         self,
         page_config: PageConfig,
         font_size: float | None = None,
         augmenter: HandwritingAugmenter | None = None,
+        ink_width: Callable[[str], float | None] | None = None,
     ) -> None:
         self.config = page_config
         self.layout = PageLayout(page_config)
         self.font_size = font_size if font_size is not None else page_config.line_spacing * 0.9
         self.augmenter = augmenter
+        self.ink_width = ink_width
 
     # --- 字送り ---
 
     def body_char_advance(self, ch: str) -> float:
         """本文 1 文字の字送り(mm)。"""
-        letter_spacing = self.font_size * _LETTER_SPACING_SCALE
-        if is_halfwidth(ch):
-            return self.font_size * 0.55 + letter_spacing
-        if _is_kanji(ch):
-            return self.font_size * _KANJI_ADVANCE_SCALE + letter_spacing
-        return self.font_size * (0.45 + 0.55 * effective_char_scale(ch)) + letter_spacing
+        return self._advance(ch, self.font_size)
 
     def _char_advance(self, ch: str, is_heading: bool, line_font_size: float) -> float:
         if is_heading:
-            return (
-                line_font_size * effective_char_scale(ch) + line_font_size * _LETTER_SPACING_SCALE
-            )
+            ink = self._ink_advance(ch, line_font_size)
+            if ink is not None:
+                return ink
+            em = halfwidth_advance(ch) if is_halfwidth(ch) else effective_char_scale(ch)
+            return line_font_size * (em + _LETTER_SPACING_SCALE)
         return self.body_char_advance(ch)
+
+    def _advance(self, ch: str, font_size: float) -> float:
+        letter_spacing = font_size * _LETTER_SPACING_SCALE
+        if is_halfwidth(ch):
+            return font_size * halfwidth_advance(ch) + letter_spacing
+        ink = self._ink_advance(ch, font_size)
+        if ink is not None:
+            return ink
+        if _is_kanji(ch):
+            return font_size * _KANJI_ADVANCE_SCALE + letter_spacing
+        return font_size * (0.45 + 0.55 * effective_char_scale(ch)) + letter_spacing
+
+    def _ink_advance(self, ch: str, font_size: float) -> float | None:
+        """インク幅 + 一定の隙間の字送り。対象外の字・インク幅が分からない字は None。"""
+        if self.ink_width is None or not _is_ink_spaced(ch):
+            return None
+        ratio = self.ink_width(ch)
+        if ratio is None:
+            return None
+        gap = _INK_GAP + (_BRACKET_OUTER_GAP if ch in _FULLWIDTH_BRACKETS else 0.0)
+        return font_size * (effective_char_scale(ch) * ratio + gap)
 
     def _line_right_x(self, area: ContentArea, is_heading: bool, body_level: int) -> float:
         if is_heading or body_level > 0:
@@ -473,7 +522,7 @@ class Typesetter:
                 advance = self._char_advance(ch, is_heading, line_font_size)
                 neutral_remaining -= advance
                 if aug is None:
-                    out.append(CharPlacement(ch, x, y, char_font_size))
+                    out.append(CharPlacement(ch, x, y, char_font_size, advance=advance))
                     x += advance
                     prev_halfwidth = cur_halfwidth
                     continue
@@ -490,7 +539,12 @@ class Typesetter:
                     width = min(width, max(advance, line_right_x - x - neutral_remaining))
                 out.append(
                     CharPlacement(
-                        ch, x + spacing_jitter * spacing_factor, line_y + baseline, size, slant
+                        ch,
+                        x + spacing_jitter * spacing_factor,
+                        line_y + baseline,
+                        size,
+                        slant,
+                        advance=width,
                     )
                 )
                 prev_halfwidth = cur_halfwidth

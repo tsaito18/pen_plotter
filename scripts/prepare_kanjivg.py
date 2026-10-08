@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import json
 import logging
 import re
 import shutil
@@ -14,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.collector.data_format import StrokePoint, StrokeSample
-from src.collector.kanjivg_parser import KanjiVGParser
+from src.collector.kanjivg_parser import KanjiVGParser, parse_svg_path
 from src.collector.stroke_recorder import StrokeRecorder
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,14 @@ _WINDOWS_FORBIDDEN = set(r'\/:*?"<>|')
 # 正規表現パーサー（parse_svg_with_types）に委譲する。
 _KANJI_BLOCK_RE = re.compile(r"<kanji\b[^>]*>.*?</kanji>", re.DOTALL)
 _KANJI_ID_RE = re.compile(r"kanji_([0-9a-fA-F]+)")
+
+# 部品表（部首などの部品 → 画番号）。出力ディレクトリ直下に置く（src/glyphs/compose.py が読む）
+COMPONENTS_FILE = "components.json"
+_GROUP_TAG_RE = re.compile(r"<g\b[^>]*>|</g>|<path\b[^>]*>")
+_ELEMENT_RE = re.compile(r'kvg:element="([^"]+)"')
+_POSITION_RE = re.compile(r'kvg:position="([^"]+)"')
+_PART_RE = re.compile(r"kvg:part=")
+_D_RE = re.compile(r'\bd="([^"]*)"')
 
 
 def _is_valid_filename_char(character: str) -> bool:
@@ -123,6 +132,45 @@ def _strokes_to_sample(
     )
 
 
+def extract_components(block_text: str) -> dict | None:
+    """``<kanji>`` ブロックから部品表 ``{"strokes": 画数, "parts": [[部品, 位置, [画番号]]]}``。
+
+    画番号は変換後の StrokeSample と同じ数え方（2 点未満の画は捨てて詰める）。
+    2 画以上の部品だけを載せ、字そのもの（最上位）と分割部品（``kvg:part``）は除く。
+    位置（left/right/top/...）は部品自身か、最も近い祖先のものを使う。
+    """
+    stack: list[dict] = []
+    parts: list[list] = []
+    n_strokes = 0
+    for tag in _GROUP_TAG_RE.findall(block_text):
+        if tag.startswith("<path"):
+            d = _D_RE.search(tag)
+            if d is not None and len(parse_svg_path(d.group(1))) >= 2:
+                for frame in stack:
+                    frame["strokes"].append(n_strokes)
+                n_strokes += 1
+        elif tag == "</g>":
+            frame = stack.pop()
+            if stack and frame["element"] and not frame["part"] and len(frame["strokes"]) >= 2:
+                parts.append([frame["element"], frame["position"], frame["strokes"]])
+        else:
+            element = _ELEMENT_RE.search(tag)
+            position = _POSITION_RE.search(tag)
+            inherited = stack[-1]["position"] if len(stack) > 1 else ""
+            stack.append(
+                {
+                    "element": element.group(1) if element else "",
+                    "position": position.group(1) if position else inherited,
+                    "part": _PART_RE.search(tag) is not None,
+                    "strokes": [],
+                }
+            )
+    if not parts:
+        return None
+    parts.sort(key=lambda part: (part[2][0], -len(part[2])))
+    return {"strokes": n_strokes, "parts": parts}
+
+
 def convert_single_svg(
     svg_path: Path,
     output_dir: Path,
@@ -207,6 +255,7 @@ def convert_xml_to_samples(
     parser = KanjiVGParser()
     recorder = StrokeRecorder(target_size=target_size, output_dir=output_dir)
     count = 0
+    components: dict[str, dict] = {}
 
     for block in _KANJI_BLOCK_RE.finditer(xml_text):
         block_text = block.group(0)
@@ -235,11 +284,35 @@ def convert_xml_to_samples(
         char_dir.mkdir(parents=True, exist_ok=True)
         sample.save(char_dir / f"{character}_0.json")
         count += 1
+        if (table := extract_components(block_text)) is not None:
+            components[character] = table
 
         if count % 1000 == 0:
             logger.info("変換中: %d 文字完了...", count)
 
+    _save_components(components, output_dir)
     return count
+
+
+def _save_components(components: dict[str, dict], output_dir: Path) -> None:
+    path = output_dir / COMPONENTS_FILE
+    path.write_text(json.dumps(components, ensure_ascii=False, separators=(",", ":")), "utf-8")
+    logger.info("部品表を保存: %s（%d 字）", path, len(components))
+
+
+def write_components_only(xml_path: Path, output_dir: Path) -> int:
+    """字形 JSON は変えずに部品表だけを書き出す（既存の data/strokes に追加するとき）。"""
+    components: dict[str, dict] = {}
+    for block in _KANJI_BLOCK_RE.finditer(Path(xml_path).read_text(encoding="utf-8")):
+        id_match = _KANJI_ID_RE.search(block.group(0))
+        if not id_match:
+            continue
+        character = chr(int(id_match.group(1), 16))
+        if (table := extract_components(block.group(0))) is not None:
+            components[character] = table
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _save_components(components, output_dir)
+    return len(components)
 
 
 def main() -> None:
@@ -254,6 +327,11 @@ def main() -> None:
     )
     argp.add_argument("--download", action="store_true", help="KanjiVGデータをダウンロードして変換")
     argp.add_argument(
+        "--components-only",
+        action="store_true",
+        help="字形 JSON は変えずに部品表（components.json）だけを書き出す",
+    )
+    argp.add_argument(
         "--target-size", type=float, default=10.0, help="正規化ターゲットサイズ (default: 10.0)"
     )
     argp.add_argument(
@@ -266,7 +344,10 @@ def main() -> None:
     args = argp.parse_args()
     logging.basicConfig(level=logging.INFO)
 
-    if args.download:
+    if args.components_only:
+        xml_path = args.xml_path or download_kanjivg(args.output_dir / "kanjivg_raw")
+        write_components_only(xml_path, args.output_dir)
+    elif args.download:
         xml_path = download_kanjivg(args.output_dir / "kanjivg_raw")
         count = convert_xml_to_samples(xml_path, args.output_dir, args.target_size, args.num_points)
         logger.info("変換完了: %d 文字", count)

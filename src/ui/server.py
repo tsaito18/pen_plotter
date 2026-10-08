@@ -130,6 +130,14 @@ SECTIONS: tuple[Section, ...] = (
                 info="近い画を細い線で続ける。Z 一定なので実機でも点線にならない",
             ),
             Control(
+                "finish_strength",
+                "払い・はねの抜き",
+                0.0,
+                1.0,
+                0.05,
+                info="画の終わりを細く抜く。0=鉛筆の手書きどおり同じ太さ（推奨）、上げると筆ペン風",
+            ),
+            Control(
                 "pressure_variation",
                 "筆圧の濃淡",
                 0.0,

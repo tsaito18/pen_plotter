@@ -86,9 +86,6 @@ class PlotterPipeline:
         self.augmenter = HandwritingAugmenter(
             AugmentConfig().scaled(self.settings.messiness), seed=seed
         )
-        self.typesetter = Typesetter(
-            self.page_config, font_size=self.settings.font_size, augmenter=self.augmenter
-        )
         user_dir = resolve_character_root(user_strokes_dir, profile)
         inference = None
         if checkpoint_path is not None and Path(checkpoint_path).exists():
@@ -102,6 +99,13 @@ class PlotterPipeline:
             temperature=self.settings.temperature,
             instance_variation=self.settings.instance_variation,
             japanese_only=japanese_only,
+        )
+        # 字送りは実際に描く字形のインク幅から決める（字間を一定に保つ）
+        self.typesetter = Typesetter(
+            self.page_config,
+            font_size=self.settings.font_size,
+            augmenter=self.augmenter,
+            ink_width=self.renderer.ink_width_ratio,
         )
         self.generator = GCodeGenerator(self.plotter_config)
 

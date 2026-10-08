@@ -9,11 +9,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from itertools import pairwise
 
 import numpy as np
 
 from src.geometry import Stroke
 from src.handwriting.pink_noise import PinkNoise1D
+
+# 幾何字形の手書き化（:meth:`HandwritingAugmenter.hand_drawn`）。長さは画の大きさ比。
+_POLYLINE_MAX_VERTICES = 8  # これ以下の点数の画を「直線の折れ線」とみなす
+_VERTEX_JITTER = 0.02
+_CORNER_CUT = 0.12  # 角の両側を区間長のこの割合で切る
+_CORNER_ITERATIONS = 3  # 鋭い角（Z の 135° 折れ）は 1 回目で均等に割れないため 3 回
+_BOW = 0.012
+
+
+def _cut_corners(points: np.ndarray, ratio: float) -> np.ndarray:
+    """Chaikin のコーナーカット 1 回（始点・終点は動かさない）。"""
+    if len(points) < 3:
+        return points
+    a, b = points[:-1], points[1:]
+    q = (1 - ratio) * a + ratio * b
+    r = ratio * a + (1 - ratio) * b
+    # 内側の各頂点を「手前の区間の終わり寄り r」と「次の区間の始まり寄り q」の 2 点に置き換える
+    inner = np.stack([r[:-1], q[1:]], axis=1).reshape(-1, 2)
+    return np.vstack([points[:1], inner, points[-1:]])
+
+
+def _densify(points: np.ndarray, spacing: float) -> np.ndarray:
+    """区間を ``spacing`` 以下の間隔に線形補間で細分する（元の点は残す）。"""
+    parts = [points[:1]]
+    for a, b in pairwise(points):
+        n = max(1, int(np.ceil(np.linalg.norm(b - a) / spacing)))
+        t = np.linspace(0, 1, n + 1)[1:, None]
+        parts.append(a + (b - a) * t)
+    return np.vstack(parts)
 
 
 @dataclass
@@ -23,7 +53,7 @@ class AugmentConfig:
     baseline_drift: float = 0.3
     size_variation: float = 0.05
     slant_variation: float = 0.02
-    spacing_variation: float = 0.2
+    spacing_variation: float = 0.5
     line_density_variation: float = 0.05
     char_density_variation: float = 0.02
     enabled: bool = True
@@ -116,6 +146,37 @@ class HandwritingAugmenter:
         return 1.0 + self.rng.uniform(-v, v)
 
     # --- 字形の微小変形 ---
+
+    def hand_drawn(self, strokes: list[Stroke], amount: float = 1.0) -> list[Stroke]:
+        """幾何字形（定規の直線・鋭い角）を手で引いた線にする。
+
+        1. 頂点の少ない折れ線（直線の組み合わせ）は頂点をわずかにずらし、角を丸める
+           （Chaikin のコーナーカット）。ペンは角で一瞬止まって向きを変えるので完全な
+           尖りにならない。
+        2. どの画も中ほどを緩く膨らませる（両端は固定するので画どうしの接点は保つ）。
+
+        揺らぎ量は画ごとの大きさ比なので、点などの小さな画は小さくしか動かない。
+        """
+        if not self.enabled or amount <= 0:
+            return strokes
+        out: list[Stroke] = []
+        for stroke in strokes:
+            if len(stroke) < 2:
+                out.append(stroke)
+                continue
+            span = float((stroke.max(axis=0) - stroke.min(axis=0)).max())
+            s = np.asarray(stroke, dtype=np.float64)
+            if len(s) <= _POLYLINE_MAX_VERTICES:
+                s = s + self.rng.normal(0, _VERTEX_JITTER * amount * span, size=s.shape)
+                for _ in range(_CORNER_ITERATIONS):
+                    s = _cut_corners(s, _CORNER_CUT)
+            s = _densify(s, max(span, 1e-6) / 30)
+            t = np.linspace(0.0, 1.0, len(s))[:, None]
+            bow = self.rng.normal(0, _BOW * amount * span, size=2)
+            wobble = self.rng.normal(0, _BOW * 0.4 * amount * span, size=2)
+            s = s + np.sin(np.pi * t) * bow + np.sin(2 * np.pi * t) * wobble
+            out.append(s)
+        return out
 
     def elastic_distort(self, stroke: Stroke, amplitude: float = 0.002) -> Stroke:
         """少数の制御点で補間した滑らかな弾性変形。``amplitude`` は bbox 比。"""

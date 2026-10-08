@@ -9,7 +9,6 @@ from src.layout.char_metrics import (
     char_ink_length,
     char_type_scale,
     compute_complexity,
-    density_scale,
     effective_char_scale,
     normalize_robust,
 )
@@ -120,17 +119,20 @@ def test_fraction_layout_stacks_numerator_above_denominator():
 
 def test_char_type_scale():
     assert char_type_scale("漢") == 1.0
-    assert char_type_scale("ぬ") == 0.85
-    assert char_type_scale("ロ") == 0.68  # 個別調整
+    assert char_type_scale("ぬ") == char_type_scale("ロ") == 0.8  # 字種の代表値（個別表なし）
     assert char_type_scale("a") == 0.8
-    assert char_type_scale("っ") == 0.55  # 小書きは個別調整より優先
+    assert char_type_scale("っ") == 0.55
     assert char_type_scale("、") == 0.35
 
 
-def test_density_scale_is_bounded_and_defaults_to_one():
-    assert density_scale("\ue000") == 1.0
-    assert 0.88 <= density_scale("一") <= density_scale("驚") <= 1.12
-    assert effective_char_scale("あ") == pytest.approx(char_type_scale("あ") * density_scale("あ"))
+def test_char_size_follows_kind_and_complexity():
+    """漢字は大きく画数が多いほど大きい。かなは小さく、単純な形ほど小さい（実物の傾向）。"""
+    s = effective_char_scale
+    assert s("一") < s("国") < s("験") <= 1.1
+    assert 0.6 <= s("ン") < s("と") < s("あ") <= 0.88 < s("一")  # どのかなも漢字より小さい
+    assert s("く") < s("わ")
+    assert s("a") == 0.8 and s("っ") == 0.55 and s("、") == 0.35
+    assert s("\ue000") == char_type_scale("\ue000")  # 複雑度データの無い字は字種の代表値
 
 
 def test_complexity_helpers():
@@ -144,8 +146,10 @@ def test_complexity_helpers():
 # --- Typesetter: 本文 ---
 
 
-def test_normalize_body_punctuation_skips_math():
-    assert normalize_body_punctuation("a,b.c、d。 $1.5, 2$") == "a，b．c，d． $1.5, 2$"
+def test_normalize_body_punctuation_skips_math_and_halfwidth_text():
+    text = "あ,い.う、え。 0.1 uF, 1,000 Fig. 2 $1.5, 2$"
+    # 和文の後は全角、小数点・英文の後（直前が半角文字）は半角のまま
+    assert normalize_body_punctuation(text) == "あ，い．う，え． 0.1 uF, 1,000 Fig. 2 $1.5, 2$"
 
 
 def test_text_wraps_and_paginates():
@@ -160,6 +164,27 @@ def test_text_wraps_and_paginates():
 def test_advance_depends_on_char_kind():
     ts = _typesetter()
     assert ts.body_char_advance("a") < ts.body_char_advance("あ") < ts.body_char_advance("漢")
+    # 英字は字ごとの幅（実物の手書き実測で、平均は全角の約半分）
+    assert ts.body_char_advance("i") < ts.body_char_advance("a") < ts.body_char_advance("m")
+    assert ts.body_char_advance("a") < 0.5 * ts.body_char_advance("漢")
+    assert ts.body_char_advance("a") < ts.body_char_advance("Z") < ts.body_char_advance("M")
+    assert ts.body_char_advance("Z") > 0.6 * ts.body_char_advance("漢")  # 実測: 大文字 ≈0.6〜0.67
+    assert ts.body_char_advance("ω") < 0.6 * ts.body_char_advance("漢")  # ギリシャ文字も欧文幅
+
+
+def test_ink_aware_advance_keeps_the_gap_between_glyphs_even():
+    """字送り = 字形のインク幅 + 一定の隙間。細い字で空き、太い字で詰まるのを防ぐ。"""
+    widths = {"り": 0.5, "漢": 0.95, "あ": 0.8}
+    ts = Typesetter(PageConfig(), font_size=FS, ink_width=widths.get)
+    ink = {c: w * FS * effective_char_scale(c) for c, w in widths.items()}
+    gaps = {c: ts.body_char_advance(c) - ink[c] for c in widths}
+    assert max(gaps.values()) - min(gaps.values()) < 1e-9
+    assert ts.body_char_advance("り") < ts.body_char_advance("漢")
+    line = ts.typeset("漢りあ")[0]
+    assert [p.advance for p in line] == pytest.approx([ts.body_char_advance(c) for c in "漢りあ"])
+    assert line[1].x == pytest.approx(line[0].x + line[0].advance)
+    # インク幅の分からない字は従来の字送り
+    assert ts.body_char_advance("無") == _typesetter().body_char_advance("無")
 
 
 def test_paragraph_indent_rules():
