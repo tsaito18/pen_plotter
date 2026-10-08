@@ -4,7 +4,7 @@ Windows でデスクトップショートカットや「python scripts/run_plott
 として起動するための薄いラッパー。pythonpath にプロジェクトルートを追加して
 src.plotter_gui.app.MainWindow.main() を呼ぶだけ。
 
-通常の送信経路は Gradio Web UI の WebSerial 送信。Tkinter GUI は
+通常の送信経路は Web UI の WebSerial 送信。Tkinter GUI は
 WebSerial が使えない環境向けの予備として残す。
 """
 

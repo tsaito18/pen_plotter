@@ -92,6 +92,24 @@ def test_connection_keeps_pen_down_with_constant_light_contact():
     assert _z(_draws(gcode)[-1]) == CFG.pen_down_z  # 次の画で接触を戻す
 
 
+def test_generate_indexed_maps_each_stroke_to_its_gcode_lines():
+    a = np.array([[0.0, 0.0], [5.0, 0.0]])
+    link = np.array([[5.0, 0.0], [5.0, 1.0]])
+    b = np.array([[5.0, 1.0], [0.0, 1.0]])
+    strokes, finishes = [SQUARE, a, link, b, WAVY], [NONE, TOME, CONNECT, TOME, HARAI]
+    gen = GCodeGenerator()
+    lines, spans = gen.generate_indexed(strokes, finishes=finishes)
+    assert lines == gen.generate(strokes, finishes=finishes)
+    assert len(spans) == len(strokes)
+    for (start, end), stroke in zip(spans, strokes):
+        assert start < end
+        # 画の最後の行は終点への描画
+        x, y = stroke[-1]
+        assert lines[end - 1].startswith(f"G1 X{x:.2f} Y{y:.2f}")
+    assert [s for s, _ in spans] == sorted(s for s, _ in spans)
+    assert spans[0][0] > lines.index("$H") and spans[-1][1] < len(lines)
+
+
 def test_simplify_collapses_collinear_points_but_keeps_curves():
     assert len(simplify_stroke(LONG_LINE, 0.05)) == 2
     t = np.linspace(0, np.pi, 50)

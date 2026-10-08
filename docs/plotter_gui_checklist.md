@@ -1,7 +1,7 @@
 # xDraw A4 Tkinter 送信 GUI 実機チェックリスト (Legacy)
 
-通常の送信経路は Gradio Web UI の WebSerial 送信。手順は
-`docs/gradio_webserial_plotter.md` を参照する。この Tkinter GUI は WebSerial が使えない環境向けの
+通常の送信経路は Web UI の WebSerial 送信。手順は
+`docs/web_ui.md` を参照する。この Tkinter GUI は WebSerial が使えない環境向けの
 予備として残す。
 
 Windows ネイティブ Python (3.12+) 環境で以下を確認する。
@@ -56,5 +56,5 @@ WSL では Tkinter が起動しないので必ず Windows で実行すること�
 - [ ] **harai_speed_factor**（既定 0.5＝ゆっくり抜く）／**hane_speed_factor**（既定 1.3＝速く跳ねる）を
       実際の筆致と照らして微調整
 - [ ] 芯が折れる場合は finish_lift_z を上げる（持ち上げを浅く）か芯を硬め（HB→2H）に
-- [ ] 確定値で Gradio プレビューと実機の細りが一致するか確認（プレビュー線幅は同じ
+- [ ] 確定値で Web UI のプレビューと実機の細りが一致するか確認（プレビュー線幅は同じ
       `contact_profile` から算出され連動している）
