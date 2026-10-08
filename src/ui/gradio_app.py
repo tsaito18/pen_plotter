@@ -142,6 +142,7 @@ def format_coverage(report: CharCoverageReport) -> str:
     """描画経路ごとの文字数を Markdown で要約する（未収録には警告を付ける）。"""
     tiers_def = [
         ("ユーザー筆跡", report.user_strokes, ""),
+        ("部品合成", report.composed, ""),
         ("ML推論", report.ml_inference, ""),
         ("KanjiVG", report.kanjivg, ""),
         ("幾何生成", report.geometric, ""),

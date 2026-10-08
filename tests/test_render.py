@@ -140,6 +140,86 @@ def test_reference_glyphs_take_on_the_users_style(kanjivg_dir: Path):
     assert _angle(plain.strokes[0]) == pytest.approx(2.0, abs=0.5)  # 下限保証の 2° のみ
 
 
+# --- 部品合成 ---
+
+
+def _box(x0: float, y0: float, x1: float, y1: float) -> list[list[tuple[float, float]]]:
+    """「口」を 3 画で（左縦 → 上と右の折れ → 下）。座標は呼び出し側の向きのまま。"""
+    from tests.conftest import line
+
+    return [
+        line(x0, y1, x0, y0),
+        line(x0, y1, x1, y1) + line(x1, y1, x1, y0)[1:],
+        line(x0, y0, x1, y0),
+    ]
+
+
+@pytest.fixture
+def parts_world(tmp_path: Path) -> tuple[Path, Path]:
+    """KanjiVG（Y-UP）に「吅」「品」と部品表、本人は「吅」だけ書いた（Y-DOWN）。"""
+    import json
+
+    from src.glyphs.compose import COMPONENTS_FILE
+    from tests.conftest import write_sample
+
+    kvg, user = tmp_path / "kvg", tmp_path / "user"
+    write_sample(kvg, "吅", _box(1, 3, 4, 7) + _box(6, 3, 9, 7))
+    write_sample(kvg, "品", _box(3, 6, 7, 9) + _box(1, 1, 4, 5) + _box(6, 1, 9, 5))
+    table = {
+        "吅": {"strokes": 6, "parts": [["口", "left", [0, 1, 2]], ["口", "right", [3, 4, 5]]]},
+        "品": {
+            "strokes": 9,
+            "parts": [
+                ["口", "top", [0, 1, 2]],
+                ["口", "left", [3, 4, 5]],
+                ["口", "right", [6, 7, 8]],
+            ],
+        },
+    }
+    (kvg / COMPONENTS_FILE).write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
+    # 本人の「吅」: 右下がりに傾いた手書き（Y-DOWN）
+    flip = [[(x * 10, 100 - y * 10 + x) for x, y in s] for s in _box(1, 3, 4, 7) + _box(6, 3, 9, 7)]
+    write_sample(user, "吅", flip)
+    return kvg, user
+
+
+def test_unwritten_char_is_built_from_the_users_own_parts(parts_world):
+    from src.glyphs.compose import ComponentComposer, load_components
+
+    kvg, user = parts_world
+    store = KanjiVGStore(kvg)
+    composer = ComponentComposer(load_components(kvg), UserStrokeDB(user), store)
+    built = composer.compose("品")
+    assert built is not None and len(built) == 9
+    reference, _ = store.load("品")
+    # 各部品は KanjiVG の部品の位置・大きさに入り、線は本人のもの（参照そのものではない）
+    for got, ref in zip(built, reference, strict=True):
+        assert np.allclose(_bbox([got]), _bbox([ref]), atol=0.6)
+    assert not np.allclose(built[3], reference[3], atol=0.05)
+    assert composer.compose("吅") is None  # 本人が書いた字は自分自身からは組み立てない
+    assert composer.compose("無") is None
+
+
+def test_parts_written_in_a_different_stroke_order_are_not_used(parts_world):
+    from src.glyphs.compose import ComponentComposer, load_components
+    from tests.conftest import write_sample
+
+    kvg, user = parts_world
+    shuffled = _box(1, 3, 4, 7)[::-1] + _box(6, 3, 9, 7)[::-1]  # 書き順が逆
+    write_sample(user, "吅", [[(x * 10, 100 - y * 10) for x, y in s] for s in shuffled], index=0)
+    composer = ComponentComposer(load_components(kvg), UserStrokeDB(user), KanjiVGStore(kvg))
+    assert composer.compose("品") is None  # 形の合わない部品は使わず、従来の経路に任せる
+
+
+def test_renderer_uses_composed_glyphs_for_unwritten_chars(parts_world):
+    kvg, user = parts_world
+    r = _renderer(kanjivg_dir=kvg, user_strokes_dir=user)
+    r.render(_at("品"))
+    r.render(_at("吅"))
+    assert r.coverage.composed == ["品"] and r.coverage.user_strokes == ["吅"]
+    assert r.ink_width_ratio("品") is not None
+
+
 # --- 配置 ---
 
 
@@ -237,6 +317,12 @@ def test_brackets_prefer_the_users_own_sample(tmp_path: Path):
     assert r.coverage.geometric == ["）"]
 
 
+def test_glyph_is_centered_in_the_slot_the_typesetter_reserved():
+    box = [np.array([[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]])]
+    x0, _, x1, _ = _bbox(position_strokes(box, _at("り", advance=8.0), LS))
+    assert (x0 + x1) / 2 == pytest.approx(10.0 + 4.0)
+
+
 def test_slant_rotates_about_glyph_center():
     stroke = [np.array([[0.5, 0.0], [0.5, 1.0]])]
     upright = position_strokes(stroke, _at("丨"), LS)[0]
@@ -281,9 +367,11 @@ def test_route_priority_user_then_ml_then_kanjivg(kanjivg_dir, user_strokes_root
 
 def test_kanjivg_route_applies_brush_finishes(kanjivg_dir):
     rendered = _renderer(kanjivg_dir=kanjivg_dir).render(_at("人"))
-    assert rendered.finishes == [HARAI, HARAI]
+    assert rendered.finishes == [HARAI, HARAI]  # 筆法は実機の Z リフトとプレビューの線幅に使う
     raw, _ = KanjiVGStore(kanjivg_dir).load("人")
-    assert len(rendered.strokes[0]) > len(raw[0])  # 払いの延長
+    placed = position_strokes(raw, _at("人"), LS)
+    # 払いを接線方向へ伸ばさない（本人の払いは KanjiVG と同じかやや短い。伸ばすと字が尖る）
+    assert np.allclose(rendered.strokes[0][-1], placed[0][-1], atol=1e-6)
     digit = _renderer(kanjivg_dir=kanjivg_dir).render(_at("2"))
     assert set(digit.finishes) == {NONE}
 

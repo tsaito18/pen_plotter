@@ -34,7 +34,7 @@ src/pipeline.py  テキスト→組版→ストローク→プレビュー/G-cod
 src/settings.py  生成設定 Settings（UI・CLI・パイプラインの既定値の単一ソース）
 src/diagnostics.py レイアウト診断（字形欠損・文字かぶり）
 src/render/      配置要素→手書きストローク（char_renderer: 経路選択, positioning, math_image: 数式の細線化, preview）
-src/glyphs/      字形ソース（geometric: 記号/英字の幾何字形, sources: KanjiVG・ユーザー筆跡の読み込み）
+src/glyphs/      字形ソース（geometric: 記号/英字の幾何字形, sources: KanjiVG・ユーザー筆跡, style: 書き癖の推定, compose: 部品合成）
 src/layout/      組版（typesetter, placement: 配置要素の型, math_layout, table_layout, line_breaking, char_metrics）
 src/handwriting/ 手書きの揺らぎ（augmentation, pink_noise）と筆遣い（finishing: とめ/はね/払い/連綿/接触率）
 src/model/       ML（deformers, style_encoder, aligner, data, training, inference）— torch 依存はここだけ
@@ -43,7 +43,7 @@ src/comm/, src/plotter_gui/  GRBL シリアル通信・Tkinter 送信 GUI
 src/collector/   手書きサンプル収集（iPad UI, KanjiVG パーサー, プロファイル, 訓練ジョブ）
 src/geometry.py, src/resources.py  共通の型・幾何関数 / 同梱データのパス解決
 ```
-- 文字の描画経路（`render/char_renderer.py`）: 数式 → 幾何字形（記号・句読点・ギリシャ文字）→ ユーザー筆跡 → 幾何英字 → ML変形（CJKのみ）→ KanjiVG参照
+- 文字の描画経路（`render/char_renderer.py`）: 数式 → 幾何字形（記号・句読点・ギリシャ文字）→ ユーザー筆跡 → 幾何英字 → 部品合成（本人の書いた部品で組み立て、CJKのみ）→ ML変形（CJKのみ）→ KanjiVG参照
 - 組版結果は `CharPlacement`（文字 / 罫線 `line_segment` / 数式 `math: MathSpec`）の列。数式は1式=1要素
 - 乱数: 生成時の揺らぎ（配置・字形・ML温度ノイズ）は全て `PlotterPipeline(seed=...)` の1系列から引く。`np.random` のグローバル状態には依存しない（訓練時のデータ拡張のみグローバル乱数）
 
@@ -85,7 +85,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 ### スクリプト一覧
 | スクリプト | 用途 |
 |-----------|------|
-| `scripts/prepare_kanjivg.py --download` | KanjiVGデータ取得・変換（6,699文字） |
+| `scripts/prepare_kanjivg.py --download` | KanjiVGデータ取得・変換（6,699文字）＋部品表 `components.json`。既存データに部品表だけ足すときは `--components-only` |
 | `scripts/train.py pretrain` | ユーザーデータ直接訓練（UserDeformationTrainer → pretrain_checkpoint.pt） |
 | `scripts/train.py finetune` | ファインチューニング（StyleEncoderのみ → finetuned.pt） |
 | `scripts/collect_strokes.py` | ガイド付き手書きサンプル収集（381文字セット） |
@@ -143,7 +143,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - Phase 9 進行中: 少量サンプル対応（Contrastive StyleEncoder + TransformerDeformer実装済み、訓練・推論パイプライン統合済み）
 - 訓練: ユーザーデータのみ（381文字/925サンプル）、CASIA不使用
 - ストロークアライメント（Hungarian + MHD + マージ/スプリット検出）実装済み — 訓練時use_aligner=True対応
-- 190テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
+- 195テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -198,6 +198,9 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - レポート用紙実測レイアウト: 罫線7.14mm、余白48/34/5/5mm、font_size 4.5mm
 - **文字サイズ（2026-10）**: 字種と複雑さの規則で決める（`layout/char_metrics.effective_char_scale` が単一ソース）。漢字は画数で 0.9（1〜3画）→1.1（15画以上）、かなは字形の総線長で 0.6（ン・く・し）→0.88（あ・ぬ・わ）でどのかなも漢字より小さい、英数字0.8、小書き0.55（周りの字の下端に揃える）、句読点0.35。本人の手書きレポートの実測（単純なかなほど小さい・漢字は大きい）に合わせた。旧来の字ごとの手調整表は廃止。払いの延長・揺らぎの後に配置直後の大きさへ戻すので、描画経路（本人サンプル/ML/KanjiVG）で大きさが変わらない
 - **本人の書き癖の転写（2026-10）**: 本人サンプルとKanjiVGを画の順番で対応させると、横画は一貫して+6.9°右上がり、縦画は-2.3°（上が右へ傾く）。`glyphs/style.estimate_writing_style` がこの角度差の中央値を推定し（0.6秒、学習不要）、`WritingStyle` の2x2変換として本人サンプルの無いかな・漢字（ML/KanjiVG経路）に掛ける。**現行MLの出力はKanjiVGとほぼ同一で書き癖を転写できていない**ことが比較で判明したため
+- **部品合成（2026-10）**: 本人サンプルの無い字を、本人が書いた字の部品（部首など）で組み立てる（`glyphs/compose.py`）。KanjiVG の部品表 `components.json`（`prepare_kanjivg.py` が出力、`data/strokes/` 直下）で「遮=辶+庶…」を引き、同じ部品を含む本人の字（KanjiVGと画数が同じサンプル）から画を切り出して KanjiVG の部品位置へはめ込む。継ぎはぎで崩れないよう、①3画以上の部品だけ ②はめ込んだ画がKanjiVGの画と形・向きで近い（平均0.06・最悪の画0.1以下、字の長辺比）③字に占める大きさが元の字と2倍以上違わない部品だけを使い、本人の部品で描ける画が半分未満なら組み立てない（ML/KanjiVG経路へ）。実物レポートで本人サンプルの無い漢字の約半数が組み立て対象。部品は本人の傾きを含むので書き癖変換は骨格（部品の配置と残りの画）にだけ掛ける
+- **字間（2026-10）**: かな・漢字・全角括弧の字送りは「字形のインク幅 + 一定の隙間（本文サイズの0.32）」（`Typesetter(ink_width=...)`、インク幅は `CharRenderer.ink_width_ratio` が描画と同じ配置計算で測る）。固定字送りだと細い字（り・い）の両側が空き、画数の多い漢字どうしが接していた。隙間は実物の同じ行の長さ（字の大きさ比）が一致する値。全角括弧は外側を0.25広げる。字形は `CharPlacement.advance`（予約幅）の中央に置く
+- **払いの延長を廃止（2026-10）**: 払い・はねを接線方向へ伸ばす加工（旧 `apply_finishing`）は、本人の払いがKanjiVGと同じかやや短い（実測: 払い0.93倍・はね1.00倍）のに字を尖らせていたので削除。筆法（harai/hane）は実機のZリフトとプレビュー線幅にだけ使う
 - **幾何字形の手書き化（2026-10）**: サンプルの無い英字・記号（Z など）は定規の直線・鋭い角で機械的だった。`HandwritingAugmenter.hand_drawn` が頂点をわずかにずらし、角を丸め（Chaikin 3回・カット0.12）、画の中ほどを緩く膨らませる。毎回少し違う形になる
 - 数式レイアウト統合: インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線, ^/_ブレースなし記法
 - **表（Markdownパイプ表）**: `| a | b |`＋区切り`|---|---|`＋データ行を `table_layout.detect_pipe_table()` で検出し、`typesetter._place_table()` が罫線(line_segment)＋手書きセル文字に組版（ブロック数式と同じ「複数行消費＋次ページ送り」方式、行レコード `Line(kind="table")`）。列幅は中身の最大文字数から決め本文幅に収める。**本文幅の中央寄せ**。横罫線は用紙の罫線(line_positions)に一致。表の直後の `: タイトル` 行はキャプションとして表の下（表の直前なら上）に中央寄せ描画

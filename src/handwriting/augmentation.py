@@ -53,7 +53,7 @@ class AugmentConfig:
     baseline_drift: float = 0.3
     size_variation: float = 0.05
     slant_variation: float = 0.02
-    spacing_variation: float = 0.2
+    spacing_variation: float = 0.5
     line_density_variation: float = 0.05
     char_density_variation: float = 0.02
     enabled: bool = True

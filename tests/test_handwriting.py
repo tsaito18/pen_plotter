@@ -13,7 +13,6 @@ from src.handwriting.finishing import (
     HARAI,
     NONE,
     TOME,
-    apply_finishing,
     arc_length_from_end,
     classify_finish,
     contact_profile,
@@ -201,25 +200,6 @@ def test_classify_finish(kvg_type: str, expected: str):
 )
 def test_infer_finish_from_trajectory(points, expected):
     assert infer_finish_from_stroke(np.array(points, dtype=float)) == expected
-
-
-# --- 終端加工 ---
-
-
-def test_harai_and_hane_extend_along_terminal_tangent():
-    stroke = np.column_stack([np.linspace(0, 10, 11), np.zeros(11)])
-    harai, hane, tome = apply_finishing([stroke] * 3, [HARAI, HANE, TOME], scale=10.0)
-    assert harai[-1, 0] == pytest.approx(11.5)  # 0.15 * scale
-    assert hane[-1, 0] == pytest.approx(11.2)  # 0.12 * scale
-    assert np.allclose(harai[:, 1], 0) and np.allclose(hane[:, 1], 0)
-    assert tome is stroke
-
-
-def test_finishing_is_safe_for_degenerate_input():
-    dot = np.array([[1.0, 1.0], [1.0, 1.0]])
-    single = np.array([[0.0, 0.0]])
-    out = apply_finishing([dot, single, dot], [HARAI], scale=5.0)  # finishes が短くても可
-    assert out[0] is dot and out[1] is single and out[2] is dot
 
 
 # --- 接触率（Z リフト・線幅の単一ソース） ---

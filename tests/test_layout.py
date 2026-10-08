@@ -172,6 +172,21 @@ def test_advance_depends_on_char_kind():
     assert ts.body_char_advance("ω") < 0.6 * ts.body_char_advance("漢")  # ギリシャ文字も欧文幅
 
 
+def test_ink_aware_advance_keeps_the_gap_between_glyphs_even():
+    """字送り = 字形のインク幅 + 一定の隙間。細い字で空き、太い字で詰まるのを防ぐ。"""
+    widths = {"り": 0.5, "漢": 0.95, "あ": 0.8}
+    ts = Typesetter(PageConfig(), font_size=FS, ink_width=widths.get)
+    ink = {c: w * FS * effective_char_scale(c) for c, w in widths.items()}
+    gaps = {c: ts.body_char_advance(c) - ink[c] for c in widths}
+    assert max(gaps.values()) - min(gaps.values()) < 1e-9
+    assert ts.body_char_advance("り") < ts.body_char_advance("漢")
+    line = ts.typeset("漢りあ")[0]
+    assert [p.advance for p in line] == pytest.approx([ts.body_char_advance(c) for c in "漢りあ"])
+    assert line[1].x == pytest.approx(line[0].x + line[0].advance)
+    # インク幅の分からない字は従来の字送り
+    assert ts.body_char_advance("無") == _typesetter().body_char_advance("無")
+
+
 def test_paragraph_indent_rules():
     ts = _typesetter()
     page = ts.typeset("最初\n二段落目\n\\noindent 字下げなし")[0]

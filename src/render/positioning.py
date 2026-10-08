@@ -103,7 +103,8 @@ def position_strokes(
 
     rendered_w = ranges[0] * scale
     rendered_h = ranges[1] * scale
-    x_offset = placement.x + (cell_width - rendered_w) / 2
+    slot = placement.advance if placement.advance is not None else cell_width
+    x_offset = placement.x + (slot - rendered_w) / 2
     # 小書き仮名は行ボックス中央だと浮くため、周りの字の下端に揃える
     if char_type_scale(char) < 0.6:
         y_offset = placement.y + (line_spacing - _body_size(placement)) / 2
@@ -210,7 +211,7 @@ def _position_bracket(
     """
     char = placement.char
     body = _body_size(placement)
-    cell = _cell_width(placement)
+    cell = placement.advance if placement.advance is not None else _cell_width(placement)
     center_y = placement.y + line_spacing / 2
     opening = char in _OPENING_BRACKETS
     if char in _CORNER_BRACKETS:
