@@ -28,18 +28,23 @@ WIDTH_MIN = 0.15
 INK_COLOR = "#1a1a1a"
 
 
-def stroke_widths(stroke: Stroke, finish: str, config: PlotterConfig) -> list[float]:
-    """各セグメント（``N-1`` 本）の線幅。接触率に比例する（2 点未満は空）。"""
+def stroke_contact(stroke: Stroke, finish: str, config: PlotterConfig) -> np.ndarray:
+    """各セグメント（``N-1`` 本）の接触率 ∈(0,1]。G-code の Z 補間と同じ式（2 点未満は空）。"""
     pts = np.asarray(stroke, dtype=float)
     if len(pts) < 2:
-        return []
-    floor = 1.0 - config.finish_strength
+        return np.zeros(0)
+    floor = 1.0 - config.finish_strength  # 抜きの強さ 0 なら終端も完全接触
     contact = contact_profile(
         finish, arc_length_from_end(pts), config.finish_lift_length_mm, floor, floor
     )
     contact = contact * pressure_modulation(pts, config.pressure_variation)
     contact = contact * entry_modulation(pts, config.entry_length_mm, config.entry_taper)
-    seg_contact = (contact[:-1] + contact[1:]) / 2.0
+    return (contact[:-1] + contact[1:]) / 2.0
+
+
+def stroke_widths(stroke: Stroke, finish: str, config: PlotterConfig) -> list[float]:
+    """各セグメント（``N-1`` 本）の線幅。接触率に比例する（2 点未満は空）。"""
+    seg_contact = stroke_contact(stroke, finish, config)
     return (WIDTH_MIN + (WIDTH_MAX - WIDTH_MIN) * seg_contact).tolist()
 
 

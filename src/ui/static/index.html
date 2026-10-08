@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pen Plotter — 手書きスタジオ</title>
+  <meta name="description" content="原稿を書き、あなたの筆跡で清書し、そのままペンプロッタで紙に描く。">
+  <meta name="theme-color" content="#f1efea" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121210" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e0442a'/%3E%3Cpath d='M8 23c4-1 6-5 8-9s4-6 8-6' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Shippori+Mincho:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script>
+    // 初回描画前にテーマを当てる（ちらつき防止）
+    try {
+      const t = localStorage.getItem("pp.theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.6 7.6"/><circle cx="11" cy="11" r="2"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+      <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.5-6.3L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.3L3 16"/><path d="M3 21v-5h5"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M4 3h16"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12.5-7.5z"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.5 5v14"/><path d="M15.5 5v14"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+      <symbol id="i-octagon" viewBox="0 0 24 24"><path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86z"/><path d="M12 8v5"/><path d="M12 16.5h.01"/></symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v5"/></symbol>
+      <symbol id="i-unplug" viewBox="0 0 24 24"><path d="M19 5l3-3"/><path d="M2 22l3-3"/><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4z"/><path d="M7.5 13.5L10 11"/><path d="M10.5 16.5L13 14"/><path d="M12 6l6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0z"/></symbol>
+      <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+      <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M10 13h4M7 16h10"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+      <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+      <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+      <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></symbol>
+      <symbol id="i-text" viewBox="0 0 24 24"><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+      <symbol id="i-unlock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.8-1.2"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+      <symbol id="i-paper" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6z"/><path d="M9 11h8M9 15h8M9 19h5"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="app" id="app" data-view="paper">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Pen Plotter ホーム">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path class="brand-stroke" d="M7 23c4-1 6-5 8-9s4-6 9-6"/></svg>
+        </span>
+        <span class="brand-name">Pen Plotter</span>
+        <span class="brand-sub">手書きスタジオ</span>
+      </a>
+
+      <nav class="flow" aria-label="作業の流れ">
+        <ol>
+          <li><button class="flow-step" data-step="write" type="button"><span class="flow-num">1</span><span class="flow-label">書く</span></button></li>
+          <li><button class="flow-step" data-step="render" type="button"><span class="flow-num">2</span><span class="flow-label">清書</span></button></li>
+          <li><button class="flow-step" data-step="plot" type="button"><span class="flow-num">3</span><span class="flow-label">描く</span></button></li>
+        </ol>
+      </nav>
+
+      <div class="topbar-end">
+        <button class="machine-pill" id="machinePill" type="button" data-status="disconnected">
+          <span class="machine-dot" aria-hidden="true"></span>
+          <span class="machine-text"><span class="machine-name">xDraw A4</span><span class="machine-state" id="machineState">未接続</span></span>
+        </button>
+        <button class="icon-btn" id="themeBtn" type="button" aria-label="テーマを切り替え" data-tip="テーマ">
+          <svg class="icon icon-sun"><use href="#i-sun"/></svg><svg class="icon icon-moon"><use href="#i-moon"/></svg>
+        </button>
+        <button class="icon-btn" id="shortcutsBtn" type="button" aria-label="キーボードショートカット" data-tip="ショートカット ?">
+          <svg class="icon"><use href="#i-keyboard"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <!-- ============ 原稿 ============ -->
+      <section class="pane pane-editor" id="paneEditor" aria-labelledby="editorTitle">
+        <div class="pane-head">
+          <h2 class="pane-title" id="editorTitle"><span class="pane-kicker">01</span>原稿</h2>
+          <div class="pane-tools">
+            <div class="menu" id="examplesMenu">
+              <button class="tool-btn" type="button" aria-haspopup="true" aria-expanded="false"><svg class="icon"><use href="#i-text"/></svg>例文</button>
+              <div class="menu-pop" role="menu"></div>
+            </div>
+            <button class="tool-btn" id="syntaxBtn" type="button" aria-expanded="false" aria-controls="syntaxPanel"><svg class="icon"><use href="#i-book"/></svg>書式</button>
+          </div>
+        </div>
+
+        <div class="syntax-panel" id="syntaxPanel" hidden>
+          <div class="syntax-grid" id="syntaxGrid"></div>
+        </div>
+
+        <div class="editor" id="editorBox">
+          <pre class="editor-layer" id="editorLayer" aria-hidden="true"></pre>
+          <textarea class="editor-input" id="textInput" spellcheck="false" aria-label="原稿テキスト"
+            placeholder="ここに原稿を書きます。&#10;&#10;# 見出し&#10;本文の中に $V = IR$ のような数式も。&#10;&#10;入力に合わせて右の用紙に下書きが現れます。"></textarea>
+        </div>
+
+        <div class="pane-foot">
+          <div class="stats" aria-live="polite">
+            <span><b id="statChars">0</b>字</span>
+            <span><b id="statPages">0</b>ページ</span>
+          </div>
+          <button class="ghost-btn" id="clearBtn" type="button"><svg class="icon"><use href="#i-trash"/></svg>消去</button>
+        </div>
+      </section>
+
+      <!-- ============ 用紙 ============ -->
+      <section class="stage" id="stage" aria-label="用紙プレビュー">
+        <canvas class="stage-canvas" id="paperCanvas" role="img" aria-label="用紙のプレビュー"></canvas>
+
+        <div class="stage-top">
+          <div class="mode-chip" id="modeChip" data-mode="empty"><span class="mode-dot"></span><span id="modeText">白紙</span></div>
+          <div class="pages" id="pageTabs" role="tablist" aria-label="ページ"></div>
+          <div class="zoom" role="group" aria-label="表示倍率">
+            <button class="icon-btn sm" id="zoomOut" type="button" aria-label="縮小"><svg class="icon"><use href="#i-minus"/></svg></button>
+            <button class="zoom-val" id="zoomFit" type="button" aria-label="用紙全体を表示"><span id="zoomText">100%</span></button>
+            <button class="icon-btn sm" id="zoomIn" type="button" aria-label="拡大"><svg class="icon"><use href="#i-plus"/></svg></button>
+          </div>
+        </div>
+
+        <div class="stage-empty" id="stageEmpty">
+          <p class="stage-empty-title">書き始めると、ここに下書きが現れます</p>
+          <p class="stage-empty-sub">左の原稿欄に入力するか、<button class="link-btn" id="emptyExample" type="button">例文を入れてみる</button></p>
+        </div>
+
+        <div class="render-progress" id="renderProgress" hidden>
+          <div class="rp-track"><div class="rp-fill" id="rpFill"></div></div>
+          <div class="rp-text"><span id="rpText">清書しています</span><span id="rpPct">0%</span></div>
+        </div>
+
+        <div class="dock" id="dock">
+          <button class="btn btn-primary btn-lg" id="renderBtn" type="button" disabled>
+            <svg class="icon"><use href="#i-sparkle"/></svg><span id="renderLabel">清書する</span><kbd class="kbd-hint">⌘↵</kbd>
+          </button>
+          <button class="btn btn-quiet" id="rerollBtn" type="button" hidden data-tip="同じ原稿を別の書きぶりで ⇧⌘↵">
+            <svg class="icon"><use href="#i-shuffle"/></svg><span>書き直す</span>
+          </button>
+          <button class="btn btn-quiet" id="downloadBtn" type="button" hidden data-tip="G-code を保存">
+            <svg class="icon"><use href="#i-download"/></svg><span>G-code</span>
+          </button>
+          <span class="dock-sep" id="dockSep" hidden></span>
+          <button class="btn btn-ink btn-lg" id="plotBtn" type="button" hidden>
+            <svg class="icon"><use href="#i-pen"/></svg><span id="plotLabel">プロッタで描く</span><svg class="icon icon-trail"><use href="#i-arrow"/></svg>
+          </button>
+          <div class="dock-run" id="dockRun" hidden>
+            <div class="dock-run-meta"><span id="dockRunText">描画中</span><span class="dock-run-eta" id="dockRunEta"></span></div>
+            <div class="dock-run-track"><div class="dock-run-fill" id="dockRunFill"></div></div>
+          </div>
+          <button class="btn btn-quiet" id="dockPause" type="button" hidden><svg class="icon"><use href="#i-pause"/></svg><span>一時停止</span></button>
+          <button class="btn btn-danger" id="dockEstop" type="button" hidden data-tip="緊急停止（ソフトリセット）"><svg class="icon"><use href="#i-octagon"/></svg><span>緊急停止</span></button>
+        </div>
+      </section>
+
+      <!-- ============ インスペクタ ============ -->
+      <aside class="pane pane-inspector" id="paneInspector" aria-label="設定とプロッタ">
+        <div class="seg" role="tablist" aria-label="パネル">
+          <button class="seg-btn" role="tab" id="tabStyle" aria-selected="true" aria-controls="panelStyle" type="button"><svg class="icon"><use href="#i-sliders"/></svg>仕上がり</button>
+          <button class="seg-btn" role="tab" id="tabPlot" aria-selected="false" aria-controls="panelPlot" type="button"><svg class="icon"><use href="#i-pen"/></svg>プロッタ<span class="seg-badge" id="plotBadge" hidden></span></button>
+          <span class="seg-glider" aria-hidden="true"></span>
+        </div>
+
+        <div class="panel" id="panelStyle" role="tabpanel" aria-labelledby="tabStyle">
+          <div class="card coverage" id="coverageCard" hidden>
+            <div class="card-head"><h3 class="card-title">字形の出どころ</h3><span class="card-meta" id="coverageMeta"></span></div>
+            <div class="coverage-bar" id="coverageBar"></div>
+            <ul class="coverage-legend" id="coverageLegend"></ul>
+            <p class="coverage-missing" id="coverageMissing" hidden></p>
+          </div>
+
+          <div class="field-group">
+            <div class="group-head"><h3 class="group-title">書き手</h3></div>
+            <label class="select-field" id="profileField" hidden>
+              <span class="field-label">筆跡プロファイル</span>
+              <span class="select-wrap"><select id="profileSelect"></select><svg class="icon"><use href="#i-chevron"/></svg></span>
+            </label>
+            <div class="presets" id="presets" role="radiogroup" aria-label="仕上がりの雰囲気"></div>
+            <label class="switch-row">
+              <span><span class="field-label">日本語だけ描く</span><span class="field-info">英数字・数式・記号を省く</span></span>
+              <input type="checkbox" class="switch" id="japaneseOnly">
+            </label>
+            <div class="seed-row">
+              <label for="seedInput"><span class="field-label">書きぶり番号</span><span class="field-info">同じ番号なら、何度清書しても同じ字形</span></label>
+              <span class="seed-box">
+                <input class="seed-val" id="seedInput" type="text" inputmode="numeric" autocomplete="off" aria-label="書きぶり番号">
+                <button class="icon-btn sm" id="seedDice" type="button" aria-label="別の番号にする" data-tip="別の番号"><svg class="icon"><use href="#i-shuffle"/></svg></button>
+              </span>
+            </div>
+          </div>
+
+          <div id="sections"></div>
+
+          <div class="validation" id="validation" role="alert" hidden></div>
+          <button class="ghost-btn reset-btn" id="resetBtn" type="button">既定値に戻す</button>
+        </div>
+
+        <div class="panel" id="panelPlot" role="tabpanel" aria-labelledby="tabPlot" hidden>
+          <div class="card machine-card" id="machineCard" data-status="disconnected">
+            <div class="machine-hero">
+              <div class="machine-figure" aria-hidden="true">
+                <svg viewBox="0 0 120 80">
+                  <rect class="mf-bed" x="10" y="16" width="100" height="56" rx="4"/>
+                  <rect class="mf-paper" x="34" y="22" width="52" height="46" rx="1"/>
+                  <path class="mf-rail" d="M14 30h92"/>
+                  <g class="mf-carriage"><rect x="52" y="24" width="16" height="12" rx="2"/><path d="M60 36v8"/></g>
+                  <path class="mf-ink" d="M44 52c6-4 10 2 16-2s8-6 14-2"/>
+                </svg>
+              </div>
+              <div class="machine-info">
+                <div class="machine-title">xDraw A4</div>
+                <div class="machine-sub" id="machineSub">USB で接続してください</div>
+              </div>
+            </div>
+            <div class="unsupported" id="unsupported" hidden></div>
+            <div class="btn-row">
+              <button class="btn btn-primary grow" id="connectBtn" type="button"><svg class="icon"><use href="#i-plug"/></svg><span>接続する</span></button>
+              <button class="btn btn-quiet grow" id="disconnectBtn" type="button" hidden><svg class="icon"><use href="#i-unplug"/></svg><span>切断</span></button>
+            </div>
+            <button class="link-btn small" id="anyPortBtn" type="button">一覧に出ないときは、すべてのポートから選ぶ</button>
+            <div class="machine-controls" id="machineControls">
+              <button class="mc-btn" id="homeBtn" type="button"><svg class="icon"><use href="#i-home"/></svg><span>原点復帰</span></button>
+              <button class="mc-btn" id="penUpBtn" type="button"><svg class="icon"><use href="#i-up"/></svg><span>ペン上</span></button>
+              <button class="mc-btn" id="penDownBtn" type="button"><svg class="icon"><use href="#i-down"/></svg><span>ペン下</span></button>
+            </div>
+          </div>
+
+          <div class="card job-card" id="jobCard">
+            <div class="card-head">
+              <h3 class="card-title">描くもの</h3>
+              <span class="card-meta" id="jobEstimate"></span>
+            </div>
+            <div class="job-source" id="jobSource"></div>
+            <div class="job-pages" id="jobPages" role="group" aria-label="描くページ"></div>
+            <div class="btn-row">
+              <label class="btn btn-quiet small file-btn"><svg class="icon"><use href="#i-upload"/></svg><span>G-code を開く</span><input type="file" id="fileInput" accept=".gcode,.nc,.txt" multiple hidden></label>
+              <button class="link-btn small" id="useRenderBtn" type="button" hidden>清書した原稿に戻す</button>
+            </div>
+          </div>
+
+          <div class="card run-card" id="runCard">
+            <div class="run-meter">
+              <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
+                <circle class="ring-bg" cx="50" cy="50" r="44"/>
+                <circle class="ring-fg" id="ringFg" cx="50" cy="50" r="44" pathLength="100"/>
+              </svg>
+              <div class="ring-label"><span class="ring-pct" id="ringPct">0</span><span class="ring-unit">%</span></div>
+            </div>
+            <div class="run-info">
+              <div class="run-title" id="runTitle">準備ができたら開始</div>
+              <div class="run-sub" id="runSub">用紙を左上に合わせてセットしてください</div>
+              <div class="run-sub mono" id="runLines"></div>
+            </div>
+            <div class="run-actions">
+              <button class="btn btn-ink btn-lg grow" id="startBtn" type="button"><svg class="icon"><use href="#i-play"/></svg><span>描画を開始</span></button>
+              <button class="btn btn-quiet grow" id="pauseBtn" type="button" hidden><svg class="icon"><use href="#i-pause"/></svg><span>一時停止</span></button>
+              <button class="btn btn-quiet grow" id="resumeBtn" type="button" hidden><svg class="icon"><use href="#i-play"/></svg><span>再開</span></button>
+              <button class="btn btn-quiet" id="stopBtn" type="button" hidden><svg class="icon"><use href="#i-stop"/></svg><span>停止</span></button>
+            </div>
+            <button class="btn btn-danger wide" id="estopBtn" type="button" hidden><svg class="icon"><use href="#i-octagon"/></svg><span>緊急停止</span></button>
+          </div>
+
+          <details class="card log-card" id="logCard">
+            <summary><svg class="icon"><use href="#i-terminal"/></svg><span>通信ログ</span><span class="log-count" id="logCount">0</span><svg class="icon chev"><use href="#i-chevron"/></svg></summary>
+            <div class="log" id="log" role="log" aria-live="polite"></div>
+            <button class="ghost-btn small" id="copyLog" type="button"><svg class="icon"><use href="#i-copy"/></svg>コピー</button>
+          </details>
+        </div>
+      </aside>
+    </main>
+
+    <nav class="mobile-nav" aria-label="表示切替">
+      <button type="button" data-view="editor"><svg class="icon"><use href="#i-text"/></svg>原稿</button>
+      <button type="button" data-view="paper"><svg class="icon"><use href="#i-paper"/></svg>用紙</button>
+      <button type="button" data-view="inspector"><svg class="icon"><use href="#i-sliders"/></svg>設定</button>
+    </nav>
+  </div>
+
+  <dialog class="modal" id="paperDialog" aria-labelledby="paperDialogTitle">
+    <div class="modal-body">
+      <div class="paper-swap" aria-hidden="true">
+        <div class="sheet sheet-out"><span class="sheet-lines"></span><span class="sheet-check"><svg class="icon"><use href="#i-check"/></svg></span><b id="paperDoneNo">1</b></div>
+        <svg class="icon swap-arrow"><use href="#i-arrow"/></svg>
+        <div class="sheet sheet-in"><b id="paperNextNo">2</b></div>
+      </div>
+      <h2 class="modal-title" id="paperDialogTitle">用紙を交換してください</h2>
+      <ol class="steps">
+        <li>描き終えた <b id="paperDoneText">1 ページ目</b> を外す</li>
+        <li>新しい用紙を、前と同じ位置（左上の角）に合わせて置く</li>
+        <li>「続ける」で <b id="paperNextText">2 ページ目</b> を描き始めます</li>
+      </ol>
+      <div class="modal-actions">
+        <button class="btn btn-quiet" id="paperStop" type="button">ここで終える</button>
+        <button class="btn btn-ink btn-lg" id="paperContinue" type="button" autofocus><svg class="icon"><use href="#i-play"/></svg>続ける<kbd class="kbd-hint">↵</kbd></button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="modal" id="shortcutsDialog" aria-labelledby="shortcutsTitle">
+    <div class="modal-body">
+      <h2 class="modal-title" id="shortcutsTitle">キーボードショートカット</h2>
+      <dl class="shortcuts">
+        <div><dt><kbd>⌘</kbd><kbd>↵</kbd></dt><dd>清書する</dd></div>
+        <div><dt><kbd>⇧</kbd><kbd>⌘</kbd><kbd>↵</kbd></dt><dd>別の書きぶりで書き直す</dd></div>
+        <div><dt><kbd>⌘</kbd><kbd>S</kbd></dt><dd>G-code を保存</dd></div>
+        <div><dt><kbd>Space</kbd></dt><dd>描画の一時停止 / 再開</dd></div>
+        <div><dt><kbd>←</kbd><kbd>→</kbd></dt><dd>ページを移動</dd></div>
+        <div><dt><kbd>+</kbd><kbd>−</kbd><kbd>0</kbd></dt><dd>拡大・縮小・全体表示</dd></div>
+        <div><dt>ドラッグ / <kbd>⌘</kbd>+ホイール</dt><dd>用紙を動かす / 拡大縮小</dd></div>
+        <div><dt><kbd>?</kbd></dt><dd>この一覧</dd></div>
+      </dl>
+      <p class="modal-note">Windows では <kbd>⌘</kbd> の代わりに <kbd>Ctrl</kbd>。</p>
+      <div class="modal-actions"><button class="btn btn-quiet" type="button" data-close>閉じる</button></div>
+    </div>
+  </dialog>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>

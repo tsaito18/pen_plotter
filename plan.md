@@ -23,7 +23,7 @@
 │                                                           │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐  │
 │  │ サンプル収集  │  │  ML訓練       │  │  Web UI        │  │
-│  │ (iPad連携)   │→│  (PyTorch)    │  │  (Gradio)      │  │
+│  │ (iPad連携)   │→│  (PyTorch)    │  │  (Web UI)      │  │
 │  └─────────────┘  └──────┬───────┘  └───────┬────────┘  │
 │                          │                   │            │
 │                  ┌───────▼───────────────────▼─────────┐ │
@@ -225,7 +225,7 @@ pen_plotter/
 │   │   └── grbl_controller.py
 │   └── ui/                 # ユーザーインターフェース
 │       ├── web_app.py
-│       ├── gradio_app.py
+│       ├── server.py, static/
 │       ├── stroke_renderer.py
 │       └── preview_renderer.py
 ├── data/
@@ -321,7 +321,7 @@ pen_plotter/
 - [x] `src/ui/web_app.py` — PlotterPipeline（薄いオーケストレータ）
 - [x] `src/ui/stroke_renderer.py` — StrokeRenderer（文字→ストローク生成、直接ストローク使用）
 - [x] `src/ui/preview_renderer.py` — PreviewRenderer（レポート用紙背景プレビュー）
-- [x] `src/ui/gradio_app.py` — Gradio Web UI（タブUI・設定パネル・プログレス・ヘルプ・例文）
+- [x] `src/ui/server.py`・`src/ui/static/` — Web UI（書く→清書→描くの 1 画面、WebSerial 送信）※旧 Gradio 版を置換
 - [x] 直接ストローク使用（収集済み文字は実ストロークをサンプル単位でランダム選択）
 - [x] ML推論フォールバック（未収集文字のみStrokeDeformer使用）
 - [x] 数式レイアウト統合（インライン/ブロック、ギリシャ文字、分数線）

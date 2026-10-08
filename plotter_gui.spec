@@ -38,7 +38,8 @@ a = Analysis(
         # GUI のみで使う依存だけを含める。
         'torch',
         'torchvision',
-        'gradio',
+        'fastapi',
+        'uvicorn',
         'scipy',
     ],
     win_no_prefer_redirects=False,
