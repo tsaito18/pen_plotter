@@ -8,7 +8,7 @@
 - Python 3.11+ (venvは3.12で作成、IPEX互換性のため)
 - PyTorch (ML) — XPU版でIntel Arc GPU対応予定
 - Matplotlib (プレビュー)
-- Gradio (Web UI)
+- Web UI: FastAPI + uvicorn（API）、素の HTML/CSS/JS（ES Modules・ビルド不要）、WebSerial でプロッタ送信
 - xDraw A4 ペンプロッタ（GRBL互換 DrawCore ファームウェア）
 - パッケージマネージャー: uv
 
@@ -29,7 +29,7 @@
 
 ### ディレクトリ構成（依存は上から下へ。下の層は上の層を import しない）
 ```
-src/ui/          Gradio Web UI（gradio_app.py、静的コンテンツ content.py・assets/）
+src/ui/          Web UI（server.py: FastAPI API, static/: 画面・用紙ビューア・WebSerial 送信, content.py: 例文・書式早見表）
 src/pipeline.py  テキスト→組版→ストローク→プレビュー/G-code（PlotterPipeline）
 src/settings.py  生成設定 Settings（UI・CLI・パイプラインの既定値の単一ソース）
 src/diagnostics.py レイアウト診断（字形欠損・文字かぶり）
@@ -89,7 +89,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 | `scripts/train.py pretrain` | ユーザーデータ直接訓練（UserDeformationTrainer → pretrain_checkpoint.pt） |
 | `scripts/train.py finetune` | ファインチューニング（StyleEncoderのみ → finetuned.pt） |
 | `scripts/collect_strokes.py` | ガイド付き手書きサンプル収集（381文字セット） |
-| `scripts/run_ui.py` | Gradio Web UI起動 |
+| `scripts/run_ui.py` | Web UI（手書きスタジオ）起動。手順は docs/web_ui.md |
 | `scripts/compare_handwriting.py` | 固定seedの手書きページPNG（改善前後のA/B比較） |
 | `scripts/preview_chars.py` | ML変形の品質確認グリッド（参照字形×サンプル） |
 | `scripts/diagnose_layout.py` | レイアウト診断（字形欠損・文字かぶり） |
@@ -139,11 +139,11 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - Phase 4 完了: 組版エンジン（ページレイアウト・禁則処理・数式・表）
 - Phase 5 完了: サンプル収集基盤（データ形式・KanjiVGパーサー・iPad Web UI・ストローク正規化）
 - Phase 6 完了: MLモデル V2→V3移行完了（V2 LSTM+MDN断念、V3 StrokeDeformer採用）
-- Phase 7 部分完了: V3スタイル転写動作、組版改善、幾何バリエーション、リアルさ改善（太さ変化・密度変動・段落インデント・局所曲率・クランプ±1.2）、数式レイアウト統合（インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線）、直接ストローク使用・ストローク合成・弾性変形・tremor、Web UI改善（Gradio タブUI・設定パネル・プログレス・文字カバレッジ・ヘルプ・例文）、アライメントキャッシュ
+- Phase 7 部分完了: V3スタイル転写動作、組版改善、幾何バリエーション、リアルさ改善（太さ変化・密度変動・段落インデント・局所曲率・クランプ±1.2）、数式レイアウト統合（インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線）、直接ストローク使用・ストローク合成・弾性変形・tremor、Web UI（2026-10 に Gradio から自前 UI へ全面刷新: 書く→清書→描くの 1 画面、ライブ下書き、清書と同一ストロークの G-code、WebSerial 送信）、アライメントキャッシュ
 - Phase 9 進行中: 少量サンプル対応（Contrastive StyleEncoder + TransformerDeformer実装済み、訓練・推論パイプライン統合済み）
 - 訓練: ユーザーデータのみ（381文字/925サンプル）、CASIA不使用
 - ストロークアライメント（Hungarian + MHD + マージ/スプリット検出）実装済み — 訓練時use_aligner=True対応
-- 170テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
+- 175テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -198,7 +198,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - 数式レイアウト統合: インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線, ^/_ブレースなし記法
 - **表（Markdownパイプ表）**: `| a | b |`＋区切り`|---|---|`＋データ行を `table_layout.detect_pipe_table()` で検出し、`typesetter._place_table()` が罫線(line_segment)＋手書きセル文字に組版（ブロック数式と同じ「複数行消費＋次ページ送り」方式、行レコード `Line(kind="table")`）。列幅は中身の最大文字数から決め本文幅に収める。**本文幅の中央寄せ**。横罫線は用紙の罫線(line_positions)に一致。表の直後の `: タイトル` 行はキャプションとして表の下（表の直前なら上）に中央寄せ描画
 - セクション見出し: #/##/### → 階層インデント（15/25/35/45/55mm）
-- **入力書式の総まとめ**: [docs/書式リファレンス.md](docs/書式リファレンス.md)（見出し・数式・表・キャプション・記号・スライダー）。アプリ内ヘルプ（`ui/content.HELP_MARKDOWN`）とも同期
+- **入力書式の総まとめ**: [docs/書式リファレンス.md](docs/書式リファレンス.md)（見出し・数式・表・キャプション・記号・スライダー）。アプリ内の書式早見表（`ui/content.SYNTAX`）とも同期
 - マルチページプレビュー + 手書きページ番号
 - レポート用紙背景プレビュー（data/report_paper.jpg自動ロード）
 - リファクタリング済み（2026-09）: パッケージを層構造に再編（render/glyphs/handwriting/pipeline/settings）、V1/V2(LSTM+MDN)の死蔵コードと旧互換シムを削除、テストを振る舞い中心に整理。固定seedのG-code出力がリファクタ前とバイト一致することを確認済み
@@ -222,5 +222,6 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - ホーミング: `$H`（左上角に移動）→ `G92 X0 Y297 Z0`（左上角を紙座標(0,297)に設定）
 - 紙座標: (0,0)=左下、(210,297)=右上
 - G-code送信: Windows側で `python scripts/run_plotter_gui.py` または `python -m src.plotter_gui` で GUI を起動（src/plotter_gui/）。CH340 自動検出・ホーミング・ペンテスト・進捗表示・緊急停止が GUI 操作で可能。実機チェックリストは docs/plotter_gui_checklist.md
+- **Web UI（手書きスタジオ, 2026-10）**: `scripts/run_ui.py` → `http://localhost:7860`。Gradio を廃し FastAPI＋素の JS で全面刷新。`/api/layout`（組版のみ＝入力中のライブ下書き・設定検証）、`/api/render`（NDJSON で進捗→結果。ページごとのストローク＋**同じストロークから作った G-code**＋行範囲 spans。gzip すると進捗が溜まるのでこの応答だけ無圧縮）。seed（書きぶり番号）で再現。送信は `static/plotter.js`（stop-and-wait、一時停止はペンを上げた直後、停止はペン上げ、緊急停止は `!`+0x18、ページ間で用紙交換）。用紙ビューア `static/paper.js` は base 層＋追記型インク層のキャッシュで描画（毎フレーム全画を描くと送信ループが詰まる）。手順は docs/web_ui.md
 - 開発サーバー(192.168.86.100)からの .gcode 取得は、当面は手動 scp。GUI への取込みは Phase 2 で予定
 - Extension ソース: git@github.com:tsaito18/xdraw_inkscape_extension.git

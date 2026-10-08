@@ -1,6 +1,8 @@
-"""Web UI の静的コンテンツ（例文・ヘルプ・HTML 断片・ブラウザ側 JS）。"""
+"""Web UI の静的コンテンツ（例文・書式早見表）。docs/書式リファレンス.md と同期する。"""
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 EXAMPLE_REPORT_HEADER = """\
 # 物理学実験レポート
@@ -52,97 +54,24 @@ EXAMPLES: dict[str, str] = {
     "表サンプル": EXAMPLE_TABLE,
 }
 
-HELP_MARKDOWN = """\
-### 書式リファレンス
 
-| 書式 | 入力例 | 説明 |
-|------|--------|------|
-| 見出し | `# 大見出し` / `## 中見出し` | 最大3段階 |
-| インライン数式 | `$V = IR$` | 文中に数式を挿入 |
-| ブロック数式 | `$$E = mc^2$$` | 独立行に数式を配置 |
-| 分数 | `$\\frac{a}{b}$` | 分子/分母を上下に配置 |
-| 上付き・下付き | `$x^2$` / `$f_0$` | 指数・添字 |
-| ギリシャ文字 | `$\\alpha$` `$\\beta$` `$\\omega$` | 主要なギリシャ文字に対応 |
-| 表 | `\\| 列1 \\| 列2 \\|`<br>`\\|---\\|---\\|`<br>`\\| a \\| b \\|` | パイプ表（2行目の区切り必須）。中央寄せで描画 |
-| 表キャプション | 表の直後に `: 表1 タイトル` | 表の下に中央寄せで配置 |
-| 段落区切り | 空行 | 空行で段落を分割 |
-| 段落字下げなし | `\\noindent 本文` | 段落先頭の字下げを抑止 |
+@dataclass(frozen=True)
+class SyntaxRow:
+    """書式早見表の 1 行（エディタの「書式」パネル）。"""
 
-### 対応文字
+    name: str
+    example: str
+    note: str
 
-ひらがな・カタカナ・漢字（常用）・英数字・数式記号
 
-手書きサンプルが収集済みの文字はユーザー筆跡で描画され、それ以外は KanjiVG データをベースに生成されます。プレビュー後「文字カバレッジ」で各文字の描画方式を確認できます。
-
-### ヒント
-
-- 設定パネルでフォントサイズや余白を調整できます
-- 温度を上げると文字の揺らぎが増し、下げると整った字になります
-- G-code 生成は全ページ分が自動ダウンロードされます（初回はブラウザの許可ダイアログを承認してください）
-- 設定を変更したらプレビューを再生成してください（黄色の警告が出ます）
-"""
-
-STALE_BANNER_HTML = """\
-<div style="padding:8px 12px;background:#fff7e6;border-left:4px solid #faad14;border-radius:4px;color:#874d00;">設定が変更されました。プレビューを再生成してください。</div>"""
-
-FONT_HEAD = """\
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
-"""
-
-WEBSERIAL_STATUS_HTML = """\
-<div class="pp-status-card" id="webserial-status-panel">
-  <div class="pp-status-head">
-    <span id="webserial-status-badge" class="pp-badge pp-badge--idle">初期化中</span>
-    <span id="webserial-status-value" class="pp-status-detail">初期化中</span>
-  </div>
-</div>
-"""
-
-WEBSERIAL_PROGRESS_HTML = """\
-<div class="pp-progress-card" id="webserial-progress-panel">
-  <div class="pp-progress-track">
-    <div id="webserial-progress-bar" class="pp-progress-fill"></div>
-  </div>
-  <div id="webserial-progress-text" class="pp-progress-text">0 / 0 行 (0%)</div>
-  <div id="webserial-current-line" class="pp-current-line">現在行: -</div>
-  <div id="webserial-paper-change"
-       style="display:none; margin-top:8px; padding:10px 12px; border-radius:8px;
-              background:#fff7e6; border:1px solid #ffd591; color:#874d00; font-weight:600;">
-  </div>
-</div>
-"""
-
-WEBSERIAL_PREVIEW_HTML = """\
-<canvas id="webserial-preview-canvas" class="pp-preview-canvas"></canvas>
-<div id="webserial-preview-info" class="pp-preview-info">対象なし</div>
-"""
-
-WEBSERIAL_LOG_HTML = """\
-<div id="webserial-log-entries" class="pp-log">
-</div>
-"""
-
-# Gradio の gr.Files が JS に渡す FileData[] を順にダウンロードする（Chrome の複数
-# ダウンロード許可は初回のみ。400ms 間隔でクリックする）。
-TRIGGER_MULTI_DOWNLOAD_JS = r"""
-(files) => {
-    if (!files) { return; }
-    const list = Array.isArray(files) ? files : [files];
-    list.forEach((f, i) => {
-        if (!f) { return; }
-        const url = f.url || f.path || (typeof f === 'string' ? f : null);
-        if (!url) { return; }
-        const name = f.orig_name || (typeof url === 'string' ? url.split('/').pop() : 'file');
-        setTimeout(() => {
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = name;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }, i * 400);
-    });
-}
-"""
+SYNTAX: tuple[SyntaxRow, ...] = (
+    SyntaxRow("見出し", "# 大見出し\n## 中見出し", "3 段階まで。段ごとに字下げ"),
+    SyntaxRow("インライン数式", "$V = IR$", "単純な式は本文と同じ手書き"),
+    SyntaxRow("ブロック数式", "$$E = mc^2$$", "独立した行に中央寄せ"),
+    SyntaxRow("分数・添字", "$\\frac{a}{b}$  $x^2$  $f_0$", "上付き・下付き・分数"),
+    SyntaxRow("ギリシャ文字", "$\\alpha$ $\\omega$", "主要なギリシャ文字"),
+    SyntaxRow("表", "| 列1 | 列2 |\n|---|---|\n| a | b |", "2 行目の区切りが必須。中央寄せ"),
+    SyntaxRow("表キャプション", ": 表1 タイトル", "表の直後なら下、直前なら上に配置"),
+    SyntaxRow("段落", "（空行）", "空行で段落を分け、先頭を字下げ"),
+    SyntaxRow("字下げなし", "\\noindent 本文", "段落先頭の字下げを抑止"),
+)

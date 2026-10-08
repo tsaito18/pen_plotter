@@ -71,16 +71,3 @@ def test_train_cli_runs_pretrain(user_strokes_root: Path, kanjivg_dir: Path, tmp
     assert len(losses) == 1 and (tmp_path / "pretrain_checkpoint.pt").exists()
     with pytest.raises(SystemExit):
         main(["finetune", "--checkpoint", str(tmp_path / "none.pt"), "--ref-dir", str(tmp_path)])
-
-
-def test_web_ui_builds(kanjivg_dir: Path, user_strokes_root: Path):
-    pytest.importorskip("gradio")
-    from src.render.char_renderer import CharCoverageReport
-    from src.ui.gradio_app import APP_CSS, app_head, create_app, format_coverage
-
-    app = create_app(kanjivg_dir=kanjivg_dir, user_strokes_dir=user_strokes_root)
-    assert app is not None and "penPlotterWebSerial" in app_head() and ".pp-" in APP_CSS
-    report = CharCoverageReport(kanjivg=["人", "人"], missing_glyphs=["無"], skipped=[" "])
-    summary = format_coverage(report)
-    assert "全4文字 (描画: 2, スキップ: 1)" in summary and "⚠️" in summary
-    assert format_coverage(CharCoverageReport()) == ""

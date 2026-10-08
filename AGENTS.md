@@ -16,7 +16,7 @@
 - Python 3.11+
 - パッケージ管理: `uv`
 - ML: PyTorch
-- UI: Gradio、Tkinter
+- UI: Web UI（FastAPI + 素の HTML/CSS/JS、WebSerial 送信）、Tkinter（予備の送信 GUI）
 - プレビュー: Matplotlib
 - 実機: xDraw A4 ペンプロッタ、GRBL 互換 DrawCore firmware
 - テスト: pytest
@@ -40,7 +40,7 @@ make preview
 ```sh
 pytest
 pytest -m "not slow and not hardware"
-pytest tests/test_gcode_generator.py
+pytest tests/test_gcode.py
 ruff check src/ tests/ scripts/
 ruff format src/ tests/ scripts/
 python scripts/run_ui.py
@@ -60,7 +60,7 @@ Windows 用 exe を作る場合は `docs/plotter_gui_build.md` を確認して�
 
 依存は上から下へ（下の層は上の層を import しない）。
 
-- `src/ui/`: Gradio Web UI（`gradio_app.py`、静的コンテンツ `content.py`・`assets/`）
+- `src/ui/`: Web UI（`server.py`＝FastAPI の API、`static/`＝画面・用紙ビューア・WebSerial 送信、`content.py`＝例文・書式早見表）
 - `src/pipeline.py`: テキスト→組版→ストローク→プレビュー/G-code（`PlotterPipeline`）
 - `src/settings.py`: 生成設定 `Settings`（UI・CLI・パイプラインの既定値の単一ソース）
 - `src/diagnostics.py`: レイアウト診断（字形欠損・文字かぶり）
@@ -176,7 +176,7 @@ ruff check src/ tests/ scripts/
 
 ## よく触る入口
 
-- Web UI: `scripts/run_ui.py`, `src/ui/gradio_app.py`
+- Web UI: `scripts/run_ui.py`, `src/ui/server.py`, `src/ui/static/`
 - 生成パイプライン: `src/pipeline.py`, `src/settings.py`
 - 文字の描画: `src/render/char_renderer.py`, `src/render/positioning.py`, `src/glyphs/geometric.py`
 - プレビュー: `src/render/preview.py`

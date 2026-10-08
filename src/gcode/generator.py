@@ -179,7 +179,21 @@ class GCodeGenerator:
                 短い場合、不足分は ``"none"`` 扱い。
             vary_speed: S字フィードレート変調の有効化。
         """
+        return self.generate_indexed(strokes, finishes, vary_speed)[0]
+
+    def generate_indexed(
+        self,
+        strokes: list[Stroke],
+        finishes: list[str] | None = None,
+        vary_speed: bool = True,
+    ) -> tuple[list[str], list[tuple[int, int]]]:
+        """:meth:`generate` と同じ G-code と、各ストロークが占める行範囲 ``[start, end)``。
+
+        送信進捗（何行目まで送ったか）をストローク単位の描画進捗へ対応付けるのに使う。
+        2 点未満で行を出さないストロークは ``start == end``。
+        """
         lines = self.header()
+        spans: list[tuple[int, int]] = []
 
         def _finish_at(idx: int) -> str:
             return finishes[idx] if finishes is not None and idx < len(finishes) else NONE
@@ -188,6 +202,7 @@ class GCodeGenerator:
             finish = _finish_at(i)
             # 連綿: つなぎ画、またはつなぎ画の直後の画は、ペンを上げず継続する
             continue_from_prev = finish == CONNECT or (i > 0 and _finish_at(i - 1) == CONNECT)
+            start = len(lines)
             lines.extend(
                 self.stroke_to_gcode(
                     stroke,
@@ -196,8 +211,9 @@ class GCodeGenerator:
                     continue_from_prev=continue_from_prev,
                 )
             )
+            spans.append((start, len(lines)))
         lines.extend(self.footer())
-        return lines
+        return lines, spans
 
     def save(self, gcode_lines: list[str], filepath: str | Path) -> None:
         """G-codeをファイルに保存"""

@@ -16,7 +16,13 @@ from src.layout.placement import CharPlacement, MathSpec
 from src.render.char_renderer import CharRenderer, _enforce_horizontal_rise, waver_scale
 from src.render.math_image import formula_aspect, formula_ink_em, render_latex_to_strokes
 from src.render.positioning import position_strokes
-from src.render.preview import render_page_preview, stroke_widths
+from src.render.preview import (
+    WIDTH_MAX,
+    WIDTH_MIN,
+    render_page_preview,
+    stroke_contact,
+    stroke_widths,
+)
 
 LS = 8.0
 
@@ -229,6 +235,16 @@ def test_preview_width_tapers_like_the_z_lift():
     assert len(set(tome)) == 1
     assert harai[-1] < harai[0] and hane[-1] < hane[0]
     assert stroke_widths(stroke[:1], HARAI, cfg) == []
+
+
+def test_preview_width_is_the_contact_ratio_scaled():
+    cfg = PlotterConfig()
+    stroke = np.column_stack([np.linspace(0, 10, 50), np.zeros(50)])
+    contact = stroke_contact(stroke, HARAI, cfg)
+    assert contact.shape == (49,) and contact.max() == 1.0 and contact[-1] < 1.0
+    expected = WIDTH_MIN + (WIDTH_MAX - WIDTH_MIN) * contact
+    assert np.allclose(stroke_widths(stroke, HARAI, cfg), expected)
+    assert stroke_contact(stroke[:1], HARAI, cfg).shape == (0,)
 
 
 def test_render_page_preview_writes_png(tmp_path: Path):
