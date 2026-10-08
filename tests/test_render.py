@@ -471,11 +471,14 @@ def test_inline_math_renders_inside_its_box():
 
 
 def test_preview_width_tapers_like_the_z_lift():
-    cfg = PlotterConfig()
+    cfg = PlotterConfig(finish_strength=1.0)
     stroke = np.column_stack([np.linspace(0, 10, 50), np.zeros(50)])
     tome, harai, hane = (stroke_widths(stroke, f, cfg) for f in (TOME, HARAI, HANE))
     assert len(set(tome)) == 1
     assert harai[-1] < harai[0] and hane[-1] < hane[0]
+    half = stroke_widths(stroke, HARAI, PlotterConfig(finish_strength=0.5))
+    assert harai[-1] < half[-1] < half[0]  # 強さに比例して抜ける
+    assert len(set(stroke_widths(stroke, HARAI, PlotterConfig()))) == 1  # 既定は抜かない
     assert stroke_widths(stroke[:1], HARAI, cfg) == []
 
 

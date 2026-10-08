@@ -93,6 +93,14 @@ _SLIDER_SECTIONS: dict[str, list[_SliderSpec]] = {
             "始筆を軽く入れて立ち上げる筆の入り。実機は始筆がかすれ得るため0推奨",
         ),
         _SliderSpec(
+            "finish_strength",
+            0.0,
+            1.0,
+            0.05,
+            "払い・はねの抜き",
+            "画の終わりを細く抜く。0=鉛筆の手書きどおり同じ太さ（推奨）、大=筆ペン風",
+        ),
+        _SliderSpec(
             "connection_strength",
             0.0,
             1.0,

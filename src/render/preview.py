@@ -33,7 +33,10 @@ def stroke_widths(stroke: Stroke, finish: str, config: PlotterConfig) -> list[fl
     pts = np.asarray(stroke, dtype=float)
     if len(pts) < 2:
         return []
-    contact = contact_profile(finish, arc_length_from_end(pts), config.finish_lift_length_mm)
+    floor = 1.0 - config.finish_strength
+    contact = contact_profile(
+        finish, arc_length_from_end(pts), config.finish_lift_length_mm, floor, floor
+    )
     contact = contact * pressure_modulation(pts, config.pressure_variation)
     contact = contact * entry_modulation(pts, config.entry_length_mm, config.entry_taper)
     seg_contact = (contact[:-1] + contact[1:]) / 2.0

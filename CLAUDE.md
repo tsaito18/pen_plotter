@@ -143,7 +143,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - Phase 9 進行中: 少量サンプル対応（Contrastive StyleEncoder + TransformerDeformer実装済み、訓練・推論パイプライン統合済み）
 - 訓練: ユーザーデータのみ（381文字/925サンプル）、CASIA不使用
 - ストロークアライメント（Hungarian + MHD + マージ/スプリット検出）実装済み — 訓練時use_aligner=True対応
-- 195テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
+- 197テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -200,7 +200,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - **本人の書き癖の転写（2026-10）**: 本人サンプルとKanjiVGを画の順番で対応させると、横画は一貫して+6.9°右上がり、縦画は-2.3°（上が右へ傾く）。`glyphs/style.estimate_writing_style` がこの角度差の中央値を推定し（0.6秒、学習不要）、`WritingStyle` の2x2変換として本人サンプルの無いかな・漢字（ML/KanjiVG経路）に掛ける。**現行MLの出力はKanjiVGとほぼ同一で書き癖を転写できていない**ことが比較で判明したため
 - **部品合成（2026-10）**: 本人サンプルの無い字を、本人が書いた字の部品（部首など）で組み立てる（`glyphs/compose.py`）。KanjiVG の部品表 `components.json`（`prepare_kanjivg.py` が出力、`data/strokes/` 直下）で「遮=辶+庶…」を引き、同じ部品を含む本人の字（KanjiVGと画数が同じサンプル）から画を切り出して KanjiVG の部品位置へはめ込む。継ぎはぎで崩れないよう、①3画以上の部品だけ ②はめ込んだ画がKanjiVGの画と形・向きで近い（平均0.06・最悪の画0.1以下、字の長辺比）③字に占める大きさが元の字と2倍以上違わない部品だけを使い、本人の部品で描ける画が半分未満なら組み立てない（ML/KanjiVG経路へ）。実物レポートで本人サンプルの無い漢字の約半数が組み立て対象。部品は本人の傾きを含むので書き癖変換は骨格（部品の配置と残りの画）にだけ掛ける
 - **字間（2026-10）**: かな・漢字・全角括弧の字送りは「字形のインク幅 + 一定の隙間（本文サイズの0.32）」（`Typesetter(ink_width=...)`、インク幅は `CharRenderer.ink_width_ratio` が描画と同じ配置計算で測る）。固定字送りだと細い字（り・い）の両側が空き、画数の多い漢字どうしが接していた。隙間は実物の同じ行の長さ（字の大きさ比）が一致する値。全角括弧は外側を0.25広げる。字形は `CharPlacement.advance`（予約幅）の中央に置く
-- **払いの延長を廃止（2026-10）**: 払い・はねを接線方向へ伸ばす加工（旧 `apply_finishing`）は、本人の払いがKanjiVGと同じかやや短い（実測: 払い0.93倍・はね1.00倍）のに字を尖らせていたので削除。筆法（harai/hane）は実機のZリフトとプレビュー線幅にだけ使う
+- **払いの延長を廃止（2026-10）**: 払い・はねを接線方向へ伸ばす加工（旧 `apply_finishing`）は、本人の払いがKanjiVGと同じかやや短い（実測: 払い0.93倍・はね1.00倍）のに字を尖らせていたので削除。筆法（harai/hane）は「払い・はねの抜き」（既定0）を上げたときの実機Zリフトとプレビュー線幅にだけ使う
 - **幾何字形の手書き化（2026-10）**: サンプルの無い英字・記号（Z など）は定規の直線・鋭い角で機械的だった。`HandwritingAugmenter.hand_drawn` が頂点をわずかにずらし、角を丸め（Chaikin 3回・カット0.12）、画の中ほどを緩く膨らませる。毎回少し違う形になる
 - 数式レイアウト統合: インライン$...$, ブロック$$...$$, ギリシャ文字, 分数線, ^/_ブレースなし記法
 - **表（Markdownパイプ表）**: `| a | b |`＋区切り`|---|---|`＋データ行を `table_layout.detect_pipe_table()` で検出し、`typesetter._place_table()` が罫線(line_segment)＋手書きセル文字に組版（ブロック数式と同じ「複数行消費＋次ページ送り」方式、行レコード `Line(kind="table")`）。列幅は中身の最大文字数から決め本文幅に収める。**本文幅の中央寄せ**。横罫線は用紙の罫線(line_positions)に一致。表の直後の `: タイトル` 行はキャプションとして表の下（表の直前なら上）に中央寄せ描画
@@ -225,7 +225,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - 機種: xDraw A4（iDraw互換、Inkscape extension制御）
 - USB: CH340（VID:PID=1A86:7523/8040）、115200bps
 - ペン制御: Z軸（ダウン: Z5 F5000、アップ: Z0.5 F5000）※M3/M5ではない
-- **筆遣いの終端Zリフト**: 払い・はねの終端区間で Z を接触(pen_down_z=5.0=最大筆圧)→半浮き(finish_lift_z=2.6)へ漸減し、シャーペンの接触圧を抜いて線を尻すぼみにする（`G1 XYZ`同時補間）。とめ＝変化なし。実機計測で芯の浮き始め≈2.7、それ以上下げても線は変わらず上がりが過大になるだけなので finish_lift_z=2.6（浮き始め直下＝最小リフト）。リフト区間は `contact_profile` が全長の `max_lift_fraction`(=0.5)で頭打ちし、短い画で全体が薄くなるのを防ぐ。接触率は `handwriting/finishing.contact_profile()` が単一ソースで、G-codeのZ補間とプレビュー線幅(`render/preview.stroke_widths`)が連動。パラメータは `PlotterConfig`（finish_lift_z, finish_lift_length_mm, harai/hane_speed_factor）で実機キャリブ。手順は docs/plotter_gui_checklist.md
+- **筆遣いの終端Zリフト**（**2026-10 から既定オフ**: `Settings.finish_strength`=0。本人の手書きレポートのスキャンでは鉛筆の払い・はねは先まで同じ太さで、先細りは筆ペン風に浮く。しかも本人サンプル経路には掛からずKanjiVG由来の字だけ細くなっていた。スライダー「払い・はねの抜き」で 0〜1、キャリブレーションG-codeは常に最大）: 払い・はねの終端区間で Z を接触(pen_down_z=5.0=最大筆圧)→半浮き(finish_lift_z=2.6)へ漸減し、シャーペンの接触圧を抜いて線を尻すぼみにする（`G1 XYZ`同時補間）。とめ＝変化なし。実機計測で芯の浮き始め≈2.7、それ以上下げても線は変わらず上がりが過大になるだけなので finish_lift_z=2.6（浮き始め直下＝最小リフト）。リフト区間は `contact_profile` が全長の `max_lift_fraction`(=0.5)で頭打ちし、短い画で全体が薄くなるのを防ぐ。接触率は `handwriting/finishing.contact_profile()` が単一ソースで、G-codeのZ補間とプレビュー線幅(`render/preview.stroke_widths`)が連動。パラメータは `PlotterConfig`（finish_lift_z, finish_lift_length_mm, harai/hane_speed_factor）で実機キャリブ。手順は docs/plotter_gui_checklist.md
 - ホーミング: `$H`（左上角に移動）→ `G92 X0 Y297 Z0`（左上角を紙座標(0,297)に設定）
 - 紙座標: (0,0)=左下、(210,297)=右上
 - G-code送信: Windows側で `python scripts/run_plotter_gui.py` または `python -m src.plotter_gui` で GUI を起動（src/plotter_gui/）。CH340 自動検出・ホーミング・ペンテスト・進捗表示・緊急停止が GUI 操作で可能。実機チェックリストは docs/plotter_gui_checklist.md

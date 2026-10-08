@@ -36,6 +36,8 @@ def test_settings_defaults_are_valid_and_roundtrip():
     assert restored.font_size == 6.0 and restored.plot_page_numbers is False
     assert Settings.from_dict({"font_size": "abc"}).font_size == s.font_size
     assert Settings.from_dict(None) == s
+    assert s.plotter_config().finish_strength == 0.0  # 払い・はねは既定で抜かない（鉛筆の線）
+    assert Settings(finish_strength=0.7).plotter_config().finish_strength == 0.7
 
 
 @pytest.mark.parametrize(
