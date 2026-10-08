@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import fields
 from pathlib import Path
 
@@ -32,7 +33,7 @@ def _render(client: TestClient, **body: object) -> list[dict]:
 def test_index_serves_the_app_shell_and_assets(client: TestClient):
     html = client.get("/").text
     assert '<script type="module"' in html and "Pen Plotter" in html
-    for asset in ["app.js", "plotter.js", "paper.js", "editor.js", "styles.css"]:
+    for asset in ["app.js", "plotter.js", "paper.js", "editor.js", "base.css", "studio.css"]:
         assert client.get(f"/static/{asset}").status_code == 200, asset
 
 
@@ -106,3 +107,108 @@ def test_paper_background_is_served_when_available(client: TestClient):
     assert response.status_code in (200, 404)
     if response.status_code == 200:
         assert response.headers["content-type"] == "image/jpeg"
+
+
+# --- 筆跡（収集・見直し・学習）---
+
+POINTS = [
+    [
+        {"x": 100 + 20 * k, "y": 100 + 15 * k, "pressure": 0.5, "timestamp": 300.0 * k}
+        for k in range(8)
+    ]
+]
+
+
+@pytest.fixture
+def studio(tmp_path: Path, kanjivg_dir: Path, user_strokes_root: Path) -> TestClient:
+    root = tmp_path / "strokes"
+    shutil.copytree(user_strokes_root, root)
+    models = tmp_path / "models"
+    (models / "runs").mkdir(parents=True)
+    (models / "finetuned.pt").write_bytes(b"x")
+    (models / "runs" / "user_train.pt").write_bytes(b"x")
+    app = create_app(kanjivg_dir=kanjivg_dir, user_strokes_dir=root, models_dir=models)
+    return TestClient(app)
+
+
+def test_collect_page_and_shared_assets(client: TestClient):
+    html = client.get("/collect").text
+    assert '<script type="module"' in html and "collect.js" in html
+    for asset in ["collect.js", "pad.js", "common.js", "base.css", "collect.css", "icons.svg"]:
+        assert client.get(f"/static/{asset}").status_code == 200, asset
+
+
+def test_collect_roundtrip_with_trash_and_undo(studio: TestClient):
+    taro = {"profile": "taro"}
+    char = studio.get("/api/collect/next", params=taro).json()["char"]
+    saved = studio.post("/api/collect/samples", json={**taro, "character": char, "strokes": POINTS})
+    assert saved.status_code == 200 and saved.json()["count"] == 1
+    (sample,) = studio.get("/api/collect/samples", params={**taro, "char": char}).json()
+    target = {**taro, "char": char, "file": sample["filename"]}
+    assert studio.delete("/api/collect/samples", params=target).json()["remaining"] == 0
+    restore = {**taro, "char": char, "files": [sample["filename"]]}
+    assert studio.post("/api/collect/samples/restore", json=restore).json()["restored"] == 1
+    meta = {
+        **taro,
+        "char": char,
+        "file": sample["filename"],
+        "key": "ignore_anomaly",
+        "value": True,
+    }
+    assert studio.post("/api/collect/samples/metadata", json=meta).status_code == 200
+    assert studio.post("/api/collect/undo", json=taro).json()["character"] == char
+    stats = studio.get("/api/collect/stats", params=taro).json()
+    assert stats["char_counts"]["十"] == 2
+    assert set(studio.get("/api/collect/issues", params=taro).json()) == {"anomalies", "mismatches"}
+    assert studio.get("/api/glyph", params={"char": "十"}).json()["strokes"]
+
+
+@pytest.mark.parametrize(
+    "body", [{"profile": "taro", "character": "../"}, {"profile": "../x", "character": "あ"}]
+)
+def test_collect_rejects_unsafe_paths(studio: TestClient, body: dict):
+    assert studio.post("/api/collect/samples", json={**body, "strokes": POINTS}).status_code == 400
+
+
+def test_profiles_are_shared_with_the_studio(studio: TestClient):
+    assert studio.post("/api/profiles", json={"id": "hana"}).status_code == 200
+    assert studio.post("/api/profiles", json={"id": "a b"}).status_code == 400
+    ids = [p["id"] for p in studio.get("/api/bootstrap").json()["profiles"]]
+    assert ids == ["hana", "taro"]
+
+
+def test_studio_requests_reach_the_collector_queue(studio: TestClient):
+    studio.post("/api/collect/queue", json={"profile": "taro", "chars": "一人一"})
+    assert studio.get("/api/collect/queue", params={"profile": "taro"}).json()["chars"] == [
+        "一",
+        "人",
+    ]
+    body = {"profile": "taro", "character": "人", "strokes": POINTS}
+    studio.post("/api/collect/samples", json=body)
+    assert studio.get("/api/collect/queue", params={"profile": "taro"}).json()["chars"] == ["一"]
+
+
+def test_char_preview_uses_the_studio_handwriting(studio: TestClient):
+    params = {"profile": "taro", "char": "十", "n": 3}
+    data = studio.get("/api/collect/preview", params=params).json()
+    assert data["source"] == "user_strokes" and len(data["variants"]) == 3
+    assert all(v and all(len(s) >= 4 for s in v) for v in data["variants"])
+
+
+def test_models_are_listed_and_switched_inside_the_models_dir(studio: TestClient):
+    data = studio.get("/api/models").json()
+    assert {m["name"] for m in data["models"]} == {"finetuned.pt", "runs/user_train.pt"}
+    assert data["active"] is None
+    assert studio.post("/api/models/use", json={"name": "runs/user_train.pt"}).status_code == 200
+    assert studio.get("/api/models").json()["active"] == "runs/user_train.pt"
+    assert studio.get("/api/bootstrap").json()["sources"]["ml"] is True
+    for bad in ["../x.pt", "/etc/passwd", "missing.pt"]:
+        assert studio.post("/api/models/use", json={"name": bad}).status_code == 400
+    assert studio.post("/api/models/use", json={"name": None}).json()["active"] is None
+
+
+@pytest.mark.parametrize("output", ["../evil", "/tmp/evil", "a/../../b"])
+def test_training_writes_only_inside_the_models_dir(studio: TestClient, output: str):
+    body = {"profile": "taro", "output": output}
+    assert studio.post("/api/training/start", json=body).status_code == 400
+    assert studio.get("/api/training").json()["state"] == "idle"

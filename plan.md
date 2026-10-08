@@ -192,8 +192,7 @@ pen_plotter/
 ├── Makefile
 ├── src/
 │   ├── collector/          # サンプル収集
-│   │   ├── ipad_sync.py
-│   │   ├── templates/collector.html
+│   │   ├── service.py          # 保存・見直し・収集順（Web UI の /collect から使う）
 │   │   ├── stroke_recorder.py
 │   │   ├── data_format.py
 │   │   └── kanjivg_parser.py
@@ -292,7 +291,7 @@ pen_plotter/
 ### Phase 5: 手書きサンプル収集 ✅
 **目標**: ユーザーの筆跡をストロークデータとして取得・保存
 
-- [x] `src/collector/ipad_sync.py` — iPad向けWeb UI（横画面対応、KanjiVGお手本表示、自動進行、優先度順収集）
+- [x] `src/collector/ipad_sync.py` — iPad向けWeb UI（横画面対応、KanjiVGお手本表示、自動進行、優先度順収集）※2026-10 に Web UI の `/collect`（`collector/service.py`）へ統合
 - [x] `src/collector/stroke_recorder.py` — ストロークの正規化・保存
 - [x] `src/collector/data_format.py` — JSON形式定義
 - [x] KanjiVGデータのダウンロード・パース（6,699文字変換済み）

@@ -35,7 +35,12 @@ def list_profiles(root_dir: Path) -> list[StrokeProfile]:
 
     profiles: list[StrokeProfile] = []
     for profile_dir in sorted(root_dir.iterdir()):
-        if not profile_dir.is_dir() or profile_dir.name == "default":
+        # .trash（削除したサンプル）や .state（収集の依頼）は管理用でプロファイルではない
+        if (
+            not profile_dir.is_dir()
+            or profile_dir.name in {"default"}
+            or profile_dir.name.startswith(".")
+        ):
             continue
         if list(profile_dir.glob("*.json")):
             continue

@@ -3,18 +3,13 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from src.collector.data_format import StrokePoint, StrokeSample
-from src.collector.ipad_sync import GUIDED_CHARS, StrokeCollectorApp, select_next_char
 from src.collector.kanjivg_parser import KanjiVGParser, parse_svg_path
 from src.collector.profiles import (
     list_profiles,
@@ -22,6 +17,7 @@ from src.collector.profiles import (
     resolve_training_dirs,
     validate_profile_id,
 )
+from src.collector.service import GUIDED_CHARS, CollectorService, select_next_char, validate_char
 from src.collector.stroke_recorder import StrokeRecorder
 from src.collector.training_jobs import TrainingCancelled, TrainingJobManager
 
@@ -152,48 +148,89 @@ def test_next_char_prioritizes_unwritten_chars():
     assert select_next_char(counts, target_samples=3) == GUIDED_CHARS[-1]
 
 
-class _Server:
-    def __init__(self, root: Path) -> None:
-        self.app = StrokeCollectorApp(output_dir=root, port=0, person_id="taro")
-        threading.Thread(target=self.app.serve, daemon=True).start()
-        for _ in range(50):
-            if self.app.port:
-                break
-            time.sleep(0.02)
-
-    def request(self, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
-        url = f"http://127.0.0.1:{self.app.port}{urllib.parse.quote(path, safe='/?=&')}"
-        data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                return resp.status, json.loads(resp.read())
-        except urllib.error.HTTPError as err:
-            return err.code, {}
+def _points(n: int = 6) -> list[list[dict]]:
+    return [
+        [
+            {"x": 100 + 20 * k, "y": 100 + 15 * k, "pressure": 0.5, "timestamp": 300.0 * k}
+            for k in range(n)
+        ]
+    ]
 
 
-def test_collector_http_workflow(tmp_path: Path):
-    server = _Server(tmp_path)
-    stroke = {"character": "あ", "strokes": [[{"x": 0, "y": 0, "pressure": 1, "timestamp": 0}]]}
-    assert server.request("POST", "/api/stroke", stroke)[0] == 200
-    assert server.request("POST", "/api/stroke", stroke)[0] == 200
+@pytest.fixture
+def service(tmp_path: Path, kanjivg_dir: Path) -> CollectorService:
+    return CollectorService(tmp_path / "strokes", kanjivg_dir=kanjivg_dir)
 
-    status, samples = server.request("GET", "/api/samples?char=あ")
-    assert status == 200 and len(samples) == 2
-    filename = samples[0]["filename"]
-    meta = {"char": "あ", "file": filename, "key": "ignored", "value": True}
-    assert server.request("POST", "/api/samples/metadata", meta)[0] == 200
 
-    status, undone = server.request("POST", "/api/undo-last")
-    assert status == 200 and undone["character"] == "あ"
-    assert server.request("DELETE", "/api/samples?char=あ")[0] == 200
-    assert server.request("POST", "/api/undo-last")[0] == 404
+def test_profiles_are_chosen_per_request(service: CollectorService):
+    service.create_profile("taro")
+    service.create_profile("hana")
+    service.save("taro", "あ", _points())
+    assert service.counts("taro")["あ"] == 1 and service.counts("hana")["あ"] == 0
+    assert [(p.id, p.sample_count) for p in service.profiles()] == [("hana", 0), ("taro", 1)]
+    with pytest.raises(ValueError):
+        service.save("../x", "あ", _points())
 
-    status, progress = server.request("GET", "/api/progress")
-    assert status == 200 and progress["current_char"] in GUIDED_CHARS
-    assert server.request("GET", "/api/stats")[0] == 200
-    assert "canvas" in server.app.build_html().lower()
+
+@pytest.mark.parametrize("bad", ["", "ab", "/", ".", "\\", " ", "\n"])
+def test_characters_are_validated_as_single_safe_glyphs(service: CollectorService, bad: str):
+    with pytest.raises(ValueError):
+        validate_char(bad)
+    with pytest.raises(ValueError):
+        service.save("taro", bad, _points())
+
+
+def test_next_char_follows_the_previewed_char_and_rounds(service: CollectorService):
+    first = service.next_char("taro")
+    assert first["char"] in GUIDED_CHARS and first["next"] != first["char"]
+    service.save("taro", first["char"], _points())
+    second = service.next_char("taro", prefer=first["next"])
+    assert second["char"] == first["next"] and second["count"] == 0
+    forced = service.char_info("taro", "鬱")  # 収集セット外の字も書ける
+    assert (forced["char"], forced["count"], forced["target"]) == ("鬱", 0, 3)
+
+
+def test_deleted_samples_go_to_trash_and_can_be_restored(service: CollectorService):
+    a = service.save("taro", "い", _points())["filename"]
+    b = service.save("taro", "い", _points())["filename"]
+    assert service.delete("taro", "い", a) == 1
+    assert [s["filename"] for s in service.samples("taro", "い")] == [b]
+    assert service.restore("taro", "い", [a]) == 1
+    trashed = service.delete_all("taro", "い")
+    assert sorted(trashed) == sorted([a, b]) and service.counts("taro")["い"] == 0
+    assert [p.id for p in service.profiles()] == ["taro"]  # ゴミ箱はプロファイル扱いしない
+    assert service.restore("taro", "い", trashed) == 2
+    with pytest.raises(ValueError):
+        service.delete("taro", "い", "../../evil.json")
+
+
+def test_undo_last_removes_the_newest_sample(service: CollectorService):
+    service.save("taro", "う", _points())
+    service.save("taro", "え", _points())
+    assert service.undo_last("taro")["character"] == "え"
+    assert service.counts("taro")["え"] == 0
+    service.undo_last("taro")
+    assert service.undo_last("taro") is None
+
+
+def test_stats_issues_and_glyph(service: CollectorService):
+    service.save("taro", "あ", _points())
+    service.save("taro", "あ", [[{"x": 0, "y": 0, "pressure": 1, "timestamp": 0}]])
+    stats = service.stats("taro")
+    unique = list(dict.fromkeys(GUIDED_CHARS))
+    assert list(stats["char_counts"])[: len(unique)] == unique
+    assert stats["total_samples"] == 2 and stats["tiers"]["tier1"]["total"] > 0
+    issues = service.issues("taro")
+    assert issues["anomalies"] and issues["anomalies"][0]["character"] == "あ"
+    assert service.glyph("十") and service.glyph("鬱") == []
+
+
+def test_queue_is_consumed_by_saving(service: CollectorService):
+    service.set_queue("taro", "人十人あ")
+    assert service.queue("taro") == ["人", "十", "あ"]
+    service.save("taro", "十", _points())
+    assert service.queue("taro") == ["人", "あ"]
+    assert service.revision > 0
 
 
 # --- 訓練ジョブ ---

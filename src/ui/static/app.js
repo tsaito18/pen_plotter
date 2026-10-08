@@ -1,31 +1,10 @@
 // Pen Plotter — 手書きスタジオ
 // 書く（原稿＋ライブ下書き）→ 清書（手書きストローク＋同一の G-code）→ 描く（WebSerial でプロッタへ）。
 
+import { $, MOD, STORAGE, api, bindTheme, debounce, el, escapeHtml, formatDuration, isMac, toast, toastUndo } from "./common.js";
 import { Editor } from "./editor.js";
 import { PaperView } from "./paper.js";
 import { Plotter, estimateLineSeconds, normalizeGcode, parseGcode, unsupportedReason } from "./plotter.js";
-
-const $ = (id) => document.getElementById(id);
-const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
-const MOD = isMac ? "⌘" : "Ctrl";
-
-const STORAGE = {
-  get(key, fallback = null) {
-    try {
-      const v = localStorage.getItem(`pp.${key}`);
-      return v === null ? fallback : JSON.parse(v);
-    } catch {
-      return fallback;
-    }
-  },
-  set(key, value) {
-    try {
-      localStorage.setItem(`pp.${key}`, JSON.stringify(value));
-    } catch {
-      // 保存できなくても動作は続ける
-    }
-  },
-};
 
 // 仕上がりの雰囲気（筆跡 3 軸の組み合わせ）
 const PRESETS = [
@@ -59,6 +38,8 @@ const store = {
   selected: new Set(),
   lastOutcome: null,
   knownPort: null,
+  model: null,
+  teach: "",
 };
 
 const plotter = new Plotter();
@@ -72,53 +53,11 @@ function randomSeed() {
 }
 
 function inputKey() {
-  return JSON.stringify([editor.value, store.settings, store.profile, store.japaneseOnly, store.seed]);
+  return JSON.stringify([editor.value, store.settings, store.profile, store.japaneseOnly, store.seed, store.model]);
 }
 
 const isFresh = () => Boolean(store.render && store.render.key === inputKey());
 const hasText = () => editor.value.trim().length > 0;
-
-function formatDuration(seconds) {
-  if (!Number.isFinite(seconds)) return "";
-  if (seconds < 60) return "1分未満";
-  const m = Math.round(seconds / 60);
-  if (m < 60) return `${m}分`;
-  return `${Math.floor(m / 60)}時間${m % 60 ? `${m % 60}分` : ""}`;
-}
-
-function toast(message, kind = "info", timeout = 3400) {
-  const icons = { ok: "i-check", warn: "i-alert", error: "i-alert", info: "i-sparkle" };
-  const node = document.createElement("div");
-  node.className = `toast ${kind}`;
-  node.innerHTML = `<svg class="icon"><use href="#${icons[kind] || icons.info}"/></svg><span></span>`;
-  node.querySelector("span").textContent = message;
-  $("toasts").append(node);
-  window.setTimeout(() => {
-    node.classList.add("is-leaving");
-    node.addEventListener("animationend", () => node.remove(), { once: true });
-  }, timeout);
-}
-
-function debounce(fn, ms) {
-  let timer;
-  return (...args) => {
-    window.clearTimeout(timer);
-    timer = window.setTimeout(() => fn(...args), ms);
-  };
-}
-
-function el(tag, attrs = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === "class") node.className = v;
-    else if (k === "text") node.textContent = v;
-    else if (k === "html") node.innerHTML = v;
-    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
-    else node.setAttribute(k, v);
-  }
-  for (const c of [].concat(children)) if (c) node.append(c);
-  return node;
-}
 
 // ------------------------------------------------------------------ 起動
 
@@ -258,25 +197,6 @@ function bindEditor() {
   $("emptyExample").addEventListener("click", () => insertExample(store.boot.examples[0]));
 }
 
-function toastUndo(message, undo) {
-  const node = document.createElement("div");
-  node.className = "toast";
-  node.innerHTML = '<svg class="icon"><use href="#i-trash"/></svg><span></span>';
-  node.querySelector("span").textContent = message;
-  const btn = el("button", { class: "link-btn", type: "button", text: "元に戻す" });
-  btn.style.color = "inherit";
-  btn.addEventListener("click", () => {
-    undo();
-    node.remove();
-  });
-  node.append(btn);
-  $("toasts").append(node);
-  window.setTimeout(() => {
-    node.classList.add("is-leaving");
-    node.addEventListener("animationend", () => node.remove(), { once: true });
-  }, 6000);
-}
-
 function updateStats() {
   const chars = editor.value.replace(/\s/g, "").length;
   $("statChars").textContent = chars.toLocaleString();
@@ -314,7 +234,6 @@ function showValidation(errors) {
   box.innerHTML = errors.length ? `<ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul>` : "";
 }
 
-const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 // ------------------------------------------------------------------ 清書
 
@@ -410,6 +329,13 @@ function showCoverage(coverage) {
     dot.style.background = t.color;
     legend.append(el("li", {}, [dot, el("span", { text: t.label }), el("b", { text: n.toLocaleString() })]));
   }
+  // 自分の筆跡で書けなかった字（記号・英数字は除く）を「書いて教える」候補に
+  const teachable = [...new Set([...(coverage.ml_inference?.chars || ""), ...(coverage.kanjivg?.chars || ""), ...(coverage.missing_glyphs?.chars || "")])]
+    .filter((c) => /[\u3040-\u30ff\u3400-\u9fff]/.test(c));
+  store.teach = teachable.join("");
+  $("teach").hidden = !teachable.length || !store.boot.collect || !store.profile;
+  $("teachCount").textContent = teachable.length;
+  $("teachChars").textContent = teachable.length > 40 ? `${teachable.slice(0, 40).join("")}…` : teachable.join("");
   const missing = coverage.missing_glyphs?.chars || "";
   $("coverageMissing").hidden = !missing;
   $("coverageMissing").textContent = missing ? `字形が無く空白になった字: ${missing}` : "";
@@ -472,7 +398,7 @@ function buildSections() {
       if (openState[section.id]) group.classList.add("is-open");
       const head = el("button", { class: "group-head", type: "button", "aria-expanded": String(Boolean(openState[section.id])) }, [
         el("h3", { class: "group-title", text: section.title }),
-        el("span", { html: '<svg class="icon"><use href="#i-chevron"/></svg>' }),
+        el("span", { html: '<svg class="icon"><use href="/static/icons.svg#i-chevron"/></svg>' }),
       ]);
       head.addEventListener("click", () => {
         const open = group.classList.toggle("is-open");
@@ -565,6 +491,51 @@ function buildProfile() {
     STORAGE.set("profile", store.profile);
     refreshAll();
   });
+  loadModels();
+  $("modelSelect").addEventListener("change", async (e) => {
+    const name = e.target.value || null;
+    try {
+      const { active } = await api("/api/models/use", { method: "POST", body: { name } });
+      store.model = active;
+      toast(active ? `清書に「${active}」を使います` : "ML を使わずに清書します", "ok", 2400);
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    refreshAll();
+  });
+  $("teachBtn").addEventListener("click", teachMissing);
+}
+
+/** 学習済みモデルの一覧（筆跡画面の「学習」で増える）。 */
+async function loadModels() {
+  if (!store.boot.collect) return;
+  try {
+    const { models, active } = await api("/api/models");
+    store.model = active;
+    $("modelField").hidden = models.length === 0;
+    $("modelSelect").replaceChildren(
+      ...models.map((m) => el("option", { value: m.name, text: m.name })),
+      el("option", { value: "", text: "ML を使わない" }),
+    );
+    $("modelSelect").value = active || "";
+  } catch {
+    $("modelField").hidden = true;
+  }
+}
+
+/** 清書でまだ自分の筆跡を使えなかった字を、筆跡画面の「依頼」に送る。 */
+async function teachMissing() {
+  const chars = store.teach || "";
+  if (!chars || !store.profile) return;
+  try {
+    await api("/api/collect/queue", { method: "POST", body: { profile: store.profile, chars } });
+    toast(`${[...chars].length} 字を筆跡画面に送りました。iPad で「筆跡」を開くと書けます`, "ok", 6000, {
+      label: "ここで開く",
+      run: () => window.open("/collect?queue=1#write", "_blank"),
+    });
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 function bindInspector() {
@@ -766,7 +737,7 @@ function updateDock() {
     $("dockRunEta").textContent = p ? `残り ${formatDuration(p.remaining)}` : "";
     const paused = plotter.status === "paused" || plotter.status === "paper";
     $("dockPause").querySelector("span").textContent = paused ? "再開" : "一時停止";
-    $("dockPause").querySelector("use").setAttribute("href", paused ? "#i-play" : "#i-pause");
+    $("dockPause").querySelector("use").setAttribute("href", paused ? "/static/icons.svg#i-play" : "/static/icons.svg#i-pause");
   }
 }
 
@@ -1026,13 +997,13 @@ function updatePlotPanel() {
   const fromUpload = store.source === "upload" && store.upload;
   const src = $("jobSource");
   if (fromUpload) {
-    src.innerHTML = `<svg class="icon"><use href="#i-file"/></svg><span></span>`;
+    src.innerHTML = `<svg class="icon"><use href="/static/icons.svg#i-file"/></svg><span></span>`;
     src.querySelector("span").innerHTML = `${escapeHtml(store.upload.name)}<small>読み込んだ G-code・${pages.length}ページ</small>`;
   } else if (store.render) {
     const stale = !isFresh();
-    src.innerHTML = `<svg class="icon"><use href="#i-sparkle"/></svg><span>清書 No.${store.render.seed}<small>${pages.length}ページ${stale ? "・原稿の変更は未反映" : ""}</small></span>`;
+    src.innerHTML = `<svg class="icon"><use href="/static/icons.svg#i-sparkle"/></svg><span>清書 No.${store.render.seed}<small>${pages.length}ページ${stale ? "・原稿の変更は未反映" : ""}</small></span>`;
   } else {
-    src.innerHTML = `<svg class="icon"><use href="#i-paper"/></svg><span>まだありません<small>原稿を清書するか、G-code を開いてください</small></span>`;
+    src.innerHTML = `<svg class="icon"><use href="/static/icons.svg#i-paper"/></svg><span>まだありません<small>原稿を清書するか、G-code を開いてください</small></span>`;
   }
   $("useRenderBtn").hidden = !(fromUpload && store.render);
   renderJobThumbs(pages, running);
@@ -1172,17 +1143,7 @@ function bindKeyboard() {
   });
   $("shortcutsBtn").addEventListener("click", () => $("shortcutsDialog").showModal());
   $("shortcutsDialog").querySelector("[data-close]").addEventListener("click", () => $("shortcutsDialog").close());
-  $("themeBtn").addEventListener("click", () => {
-    const root = document.documentElement;
-    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-    root.dataset.theme = dark ? "light" : "dark";
-    try {
-      localStorage.setItem("pp.theme", root.dataset.theme);
-    } catch {
-      // 保存できなくても切り替えは効く
-    }
-    paper.invalidate();
-  });
+  bindTheme($("themeBtn"), () => paper.invalidate());
   window.addEventListener("beforeunload", (e) => {
     if (plotter.running) {
       e.preventDefault();

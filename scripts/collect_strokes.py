@@ -1,4 +1,8 @@
-"""手書きストローク収集サーバーを起動するスクリプト。"""
+"""筆跡の収集画面を起動する（Web UI の ``/collect``。スタジオと同じサーバー）。
+
+旧来のオプション（--output-dir / --person-id / --port / --kanjivg-dir）はそのまま使える。
+プロファイルは画面で選ぶ（--person-id は最初に選ばれるプロファイルの作成だけ行う）。
+"""
 
 from __future__ import annotations
 
@@ -8,44 +12,30 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.collector.ipad_sync import StrokeCollectorApp
+from scripts.run_ui import serve
+from src.collector.profiles import ensure_profile
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="手書きストローク収集 Web UI")
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="筆跡の収集（Web UI の /collect）")
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("data/user_strokes"),
-        help="プロファイルを格納するルートディレクトリ (default: data/user_strokes)",
+        help="プロファイルのルート (default: data/user_strokes)",
     )
-    parser.add_argument(
-        "--person-id",
-        type=str,
-        default="taiga",
-        help="起動時に選択する人物プロファイル ID (default: taiga)",
-    )
-    parser.add_argument("--port", type=int, default=8080, help="ポート番号 (default: 8080)")
-    parser.add_argument(
-        "--kanjivg-dir",
-        type=Path,
-        default=Path("data/strokes"),
-        help="KanjiVGストロークデータのディレクトリ (default: data/strokes)",
-    )
-    args = parser.parse_args()
-
-    kanjivg_dir = args.kanjivg_dir if args.kanjivg_dir.exists() else None
-    app = StrokeCollectorApp(
-        output_dir=args.output_dir,
-        port=args.port,
-        kanjivg_dir=kanjivg_dir,
-        person_id=args.person_id,
-    )
-    print(f"収集サーバー起動: http://localhost:{args.port}/")
-    print(f"保存先: {args.output_dir / args.person_id}")
-    print("iPad/PCのブラウザでアクセスし、文字を書いて送信してください。")
-    print("Ctrl+C で終了")
-    app.serve()
+    parser.add_argument("--person-id", default="taiga", help="作成しておくプロファイル ID")
+    parser.add_argument("--port", type=int, default=7860, help="ポート番号 (default: 7860)")
+    parser.add_argument("--kanjivg-dir", type=Path, default=Path("data/strokes"))
+    parser.add_argument("--checkpoint", type=Path, default=Path("data/models/finetuned.pt"))
+    parser.add_argument("--models-dir", type=Path, default=Path("data/models"))
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--open", action="store_true", help="起動後にブラウザを開く")
+    args = parser.parse_args(argv)
+    ensure_profile(args.output_dir, args.person_id)
+    args.user_strokes_dir = args.output_dir
+    args.page = "/collect"
+    serve(args)
 
 
 if __name__ == "__main__":

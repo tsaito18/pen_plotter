@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>筆跡 — Pen Plotter</title>
+  <meta name="description" content="あなたの筆跡を集め、見直し、学習させる。">
+  <meta name="theme-color" content="#f1efea" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121210" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e0442a'/%3E%3Cpath d='M8 23c4-1 6-5 8-9s4-6 8-6' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Shippori+Mincho:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="/static/base.css">
+  <link rel="stylesheet" href="/static/collect.css">
+  <script>
+    try {
+      const t = localStorage.getItem("pp.theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+  <script type="module" src="/static/collect.js"></script>
+</head>
+<body>
+  <div class="app collect" id="app" data-mode="write">
+    <header class="topbar">
+      <div class="topbar-start">
+        <a class="brand" href="/" aria-label="Pen Plotter スタジオへ">
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path class="brand-stroke" d="M7 23c4-1 6-5 8-9s4-6 9-6"/></svg></span>
+          <span class="brand-name">Pen Plotter</span>
+        </a>
+        <nav class="apps" aria-label="画面">
+          <a href="/">スタジオ</a>
+          <a href="/collect" aria-current="page">筆跡</a>
+        </nav>
+      </div>
+
+      <div class="seg modes" role="tablist" aria-label="筆跡の作業" data-active="write">
+        <button class="seg-btn" role="tab" data-mode="write" aria-selected="true" type="button"><svg class="icon"><use href="/static/icons.svg#i-pen"/></svg>集める</button>
+        <button class="seg-btn" role="tab" data-mode="review" aria-selected="false" type="button"><svg class="icon"><use href="/static/icons.svg#i-grid"/></svg>見直す<span class="seg-count" id="issueCount" hidden></span></button>
+        <button class="seg-btn" role="tab" data-mode="train" aria-selected="false" type="button"><svg class="icon"><use href="/static/icons.svg#i-brain"/></svg>学習</button>
+        <span class="seg-glider" aria-hidden="true"></span>
+      </div>
+
+      <div class="topbar-end">
+        <div class="menu profile-menu" id="profileMenu">
+          <button class="profile-pill" type="button" aria-haspopup="true" aria-expanded="false">
+            <span class="avatar" id="profileAvatar">?</span>
+            <span class="profile-text"><span class="profile-label">書き手</span><span class="profile-name" id="profileName">—</span></span>
+            <svg class="icon"><use href="/static/icons.svg#i-chevron"/></svg>
+          </button>
+          <div class="menu-pop" role="menu">
+            <div class="menu-head">書き手を選ぶ</div>
+            <div id="profileList"></div>
+            <form class="profile-new" id="profileForm" autocomplete="off">
+              <input id="profileInput" placeholder="新しい人の ID（英数字）" pattern="[A-Za-z0-9_\-]+" aria-label="新しいプロファイル ID">
+              <button class="btn btn-quiet small" type="submit"><svg class="icon"><use href="/static/icons.svg#i-plus"/></svg>追加</button>
+            </form>
+          </div>
+        </div>
+        <button class="icon-btn" id="themeBtn" type="button" aria-label="テーマを切り替え">
+          <svg class="icon icon-sun"><use href="/static/icons.svg#i-sun"/></svg><svg class="icon icon-moon"><use href="/static/icons.svg#i-moon"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="views">
+      <!-- ================= 集める ================= -->
+      <section class="view write" id="viewWrite" aria-label="筆跡を集める">
+        <aside class="rail">
+          <div class="request" id="request" hidden>
+            <div class="request-text"><b id="requestCount">0</b> <span id="requestLead">字、スタジオから「書いて教えて」</span></div>
+            <div class="request-chars" id="requestChars"></div>
+            <div class="request-actions">
+              <button class="btn btn-primary small" id="requestStart" type="button">この字から書く</button>
+              <button class="btn btn-quiet small" id="requestStop" type="button" hidden>ふだんの順に戻る</button>
+              <button class="link-btn small" id="requestClear" type="button">取り下げる</button>
+            </div>
+          </div>
+
+          <div class="subject" id="subject">
+            <div class="subject-head">
+              <span class="chip" id="subjectTier">—</span>
+              <span class="dots" id="subjectDots" aria-label="サンプル数"></span>
+            </div>
+            <div class="subject-body">
+              <div class="subject-char" id="subjectChar" aria-live="polite">　</div>
+              <button class="subject-guide" id="guideBtn" type="button" aria-label="書き順をもう一度見る">
+                <canvas id="guideCanvas"></canvas>
+                <span class="guide-replay"><svg class="icon"><use href="/static/icons.svg#i-play"/></svg>書き順</span>
+              </button>
+            </div>
+            <div class="subject-foot">
+              <span id="subjectInfo">お手本 — 画</span>
+              <span class="subject-next">次 <b id="nextChar">—</b></span>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn-primary btn-xl" id="saveBtn" type="button" disabled>
+              <svg class="icon"><use href="/static/icons.svg#i-check"/></svg><span>保存して次へ</span><kbd class="kbd-hint">↵</kbd>
+            </button>
+            <div class="actions-row">
+              <button class="btn btn-quiet" id="undoBtn" type="button" disabled><svg class="icon"><use href="/static/icons.svg#i-undo"/></svg>1画戻す</button>
+              <button class="btn btn-quiet" id="clearBtn" type="button" disabled><svg class="icon"><use href="/static/icons.svg#i-x"/></svg>書き直す</button>
+              <button class="btn btn-quiet" id="skipBtn" type="button"><svg class="icon"><use href="/static/icons.svg#i-right"/></svg>飛ばす</button>
+            </div>
+          </div>
+
+          <ul class="tips" aria-label="操作のこつ">
+            <li><kbd>↵</kbd>保存して次へ</li>
+            <li><span class="gesture">２本指タップ</span>1画戻す</li>
+            <li><kbd>→</kbd>飛ばす</li>
+          </ul>
+
+          <div class="tally">
+            <div class="tally-bar"><span id="tallyFill"></span></div>
+            <div class="tally-text">
+              <span><b id="tallyDone">0</b> / <span id="tallyTotal">381</span> 字そろった</span>
+              <span>今回 <b id="tallySession">0</b> 字</span>
+            </div>
+          </div>
+        </aside>
+
+        <div class="stage-pad">
+          <div class="pad-frame">
+            <div class="pad" id="pad">
+              <div class="pad-grid" aria-hidden="true"></div>
+              <div class="pad-hint" id="padHint">
+                <svg class="icon"><use href="/static/icons.svg#i-pen"/></svg>
+                <span>Apple Pencil で、ふだんどおりに書いてください</span>
+              </div>
+            </div>
+            <div class="fly" id="fly" aria-hidden="true"></div>
+            <form class="welcome" id="welcome" hidden autocomplete="off">
+              <p class="welcome-kicker">はじめに</p>
+              <h2 class="welcome-title">あなたの字を、<br>教えてください。</h2>
+              <p class="welcome-text">ここで書いた字が、スタジオの清書とプロッタの線になります。まず書き手の名前（英数字）を決めましょう。</p>
+              <div class="welcome-row">
+                <input id="welcomeInput" placeholder="例: taiga" pattern="[A-Za-z0-9_\-]+" aria-label="書き手の ID" required>
+                <button class="btn btn-primary" type="submit">始める<svg class="icon"><use href="/static/icons.svg#i-arrow"/></svg></button>
+              </div>
+            </form>
+          </div>
+          <div class="pad-bar">
+            <span class="stroke-chip" id="strokeChip" data-state="idle"><span id="strokeText">0 画</span></span>
+            <label class="mini-switch"><input type="checkbox" class="switch" id="ghostToggle"><span>お手本を敷く</span></label>
+            <label class="mini-switch" id="touchToggleWrap"><input type="checkbox" class="switch" id="touchToggle"><span>指でも書く</span></label>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 見直す ================= -->
+      <section class="view review" id="viewReview" aria-label="筆跡を見直す" hidden>
+        <div class="review-head">
+          <div class="figures">
+            <div class="figure"><b id="figDone">0</b><span>/ <span id="figTotal">381</span> 字そろった</span></div>
+            <div class="figure"><b id="figSamples">0</b><span>サンプル</span></div>
+            <div class="figure warn"><b id="figIssues">0</b><span>要確認</span></div>
+          </div>
+          <div class="tiers" id="tiers"></div>
+        </div>
+        <div class="review-tools">
+          <div class="chips" role="radiogroup" aria-label="絞り込み" id="filters">
+            <button type="button" role="radio" data-filter="all" aria-checked="true">すべて</button>
+            <button type="button" role="radio" data-filter="todo" aria-checked="false">まだ</button>
+            <button type="button" role="radio" data-filter="done" aria-checked="false">そろった</button>
+            <button type="button" role="radio" data-filter="issues" aria-checked="false">要確認</button>
+          </div>
+          <label class="search"><svg class="icon"><use href="/static/icons.svg#i-search"/></svg><input id="searchInput" placeholder="字をさがす" maxlength="1" aria-label="字をさがす"></label>
+          <div class="legend" aria-hidden="true"><i class="l0"></i>まだ<i class="l1"></i>途中<i class="l3"></i>そろった</div>
+        </div>
+        <div class="review-body" id="reviewBody">
+          <div class="cells" id="cells"></div>
+          <div class="issues" id="issues" hidden></div>
+        </div>
+
+        <aside class="drawer" id="drawer" aria-label="字の詳細" hidden>
+          <div class="drawer-head">
+            <div class="drawer-char" id="drawerChar">　</div>
+            <div class="drawer-meta"><span class="chip" id="drawerTier"></span><span id="drawerCount"></span></div>
+            <button class="icon-btn" id="drawerClose" type="button" aria-label="閉じる"><svg class="icon"><use href="/static/icons.svg#i-x"/></svg></button>
+          </div>
+          <div class="drawer-actions">
+            <button class="btn btn-primary grow" id="drawerWrite" type="button"><svg class="icon"><use href="/static/icons.svg#i-pen"/></svg>この字を書く</button>
+            <button class="btn btn-danger" id="drawerDeleteAll" type="button"><svg class="icon"><use href="/static/icons.svg#i-trash"/></svg>全部消す</button>
+          </div>
+          <h4 class="drawer-title">清書では</h4>
+          <div class="preview" id="drawerPreview"></div>
+          <h4 class="drawer-title">あなたのサンプル</h4>
+          <div class="samples" id="drawerSamples"></div>
+        </aside>
+        <div class="scrim" id="scrim" hidden></div>
+      </section>
+
+      <!-- ================= 学習 ================= -->
+      <section class="view train" id="viewTrain" aria-label="学習" hidden>
+        <div class="train-grid">
+          <div class="card train-card">
+            <div class="card-head"><h3 class="card-title">学習させる</h3><span class="card-meta" id="trainProfile"></span></div>
+            <p class="train-lead">集めた筆跡から、あなたの書き癖をモデルに覚えさせます。終わったら「このモデルを使う」でスタジオの清書に反映されます。</p>
+            <div class="field-row">
+              <span class="field-label">データ</span>
+              <div class="seg mini" id="trainDataset" data-active="current">
+                <button class="seg-btn" type="button" data-value="current" aria-selected="true">この人だけ</button>
+                <button class="seg-btn" type="button" data-value="all" aria-selected="false">全員</button>
+                <span class="seg-glider" aria-hidden="true"></span>
+              </div>
+            </div>
+            <div class="field-row">
+              <span class="field-label">方法</span>
+              <div class="seg mini" id="trainKind" data-active="user_train">
+                <button class="seg-btn" type="button" data-value="user_train" aria-selected="true">はじめから</button>
+                <button class="seg-btn" type="button" data-value="finetune" aria-selected="false">微調整</button>
+                <span class="seg-glider" aria-hidden="true"></span>
+              </div>
+            </div>
+            <details class="advanced">
+              <summary>詳細設定<svg class="icon"><use href="/static/icons.svg#i-chevron"/></svg></summary>
+              <div class="adv-grid">
+                <label><span>エポック数</span><input type="number" id="trainEpochs" min="1" placeholder="80"></label>
+                <label><span>バッチサイズ</span><input type="number" id="trainBatch" min="1" placeholder="256"></label>
+                <label><span>学習率</span><input type="number" id="trainLr" step="0.0001" min="0" placeholder="0.001"></label>
+                <label><span>変形モデル</span><select id="trainDeformer"><option value="twostage">twostage（推奨）</option><option value="transformer">transformer</option><option value="offset">offset</option></select></label>
+                <label><span>デバイス</span><input id="trainDevice" placeholder="自動（cuda / xpu / cpu）"></label>
+                <label><span>保存名</span><input id="trainOutput" placeholder="自動（日時）"></label>
+                <label class="wide" id="trainBaseWrap" hidden><span>微調整の元モデル</span><select id="trainBase"></select></label>
+              </div>
+            </details>
+            <div class="btn-row">
+              <button class="btn btn-ink btn-lg grow" id="trainStart" type="button"><svg class="icon"><use href="/static/icons.svg#i-play"/></svg>学習を始める</button>
+              <button class="btn btn-quiet" id="trainCancel" type="button" hidden><svg class="icon"><use href="/static/icons.svg#i-stop"/></svg>止める</button>
+            </div>
+          </div>
+
+          <div class="card status-card" id="statusCard" data-state="idle">
+            <div class="status-top">
+              <div class="run-meter">
+                <svg class="ring" viewBox="0 0 100 100" aria-hidden="true"><circle class="ring-bg" cx="50" cy="50" r="44"/><circle class="ring-fg" id="trainRing" cx="50" cy="50" r="44" pathLength="100"/></svg>
+                <div class="ring-label"><span class="ring-pct" id="trainPct">0</span><span class="ring-unit">%</span></div>
+              </div>
+              <div>
+                <div class="run-title" id="trainTitle">待機中</div>
+                <div class="run-sub" id="trainSub">学習を始めると、ここに進み具合が出ます</div>
+              </div>
+            </div>
+            <div class="loss">
+              <div class="loss-head"><span>損失（下がるほど覚えた）</span><b id="trainLoss">—</b></div>
+              <svg class="spark" id="spark" viewBox="0 0 300 64" preserveAspectRatio="none" aria-hidden="true"><path class="spark-area" id="sparkArea"/><path class="spark-line" id="sparkLine"/></svg>
+            </div>
+            <div class="btn-row" id="useNewWrap" hidden>
+              <button class="btn btn-primary grow" id="useNew" type="button"><svg class="icon"><use href="/static/icons.svg#i-sparkle"/></svg>このモデルを使う</button>
+            </div>
+            <details class="log-card inline">
+              <summary><svg class="icon"><use href="/static/icons.svg#i-terminal"/></svg><span>ログ</span><svg class="icon chev"><use href="/static/icons.svg#i-chevron"/></svg></summary>
+              <pre class="log" id="trainLog"></pre>
+            </details>
+          </div>
+
+          <div class="card models-card">
+            <div class="card-head"><h3 class="card-title">モデル</h3><span class="card-meta" id="modelsMeta"></span></div>
+            <ul class="models" id="models"></ul>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>

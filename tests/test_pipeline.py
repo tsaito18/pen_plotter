@@ -142,3 +142,16 @@ def test_diagnose_detects_horizontal_math_overlap():
     after = CharPlacement("字", 15, 50, 5)
     (overlap,) = diagnose_placements([[math, after]], line_spacing=8)
     assert overlap.kind == "horizontal" and overlap.amount_mm == pytest.approx(15)
+
+
+def test_style_revision_reloads_the_ml_style(tiny_checkpoint: Path, kanjivg_dir, user_strokes_root):
+    from src.pipeline import _load_inference
+
+    _load_inference.cache_clear()
+    kwargs = {"checkpoint_path": tiny_checkpoint, "kanjivg_dir": kanjivg_dir}
+    kwargs["user_strokes_dir"] = user_strokes_root
+    PlotterPipeline(**kwargs, style_revision=0)
+    PlotterPipeline(**kwargs, style_revision=0)
+    assert _load_inference.cache_info().misses == 1
+    PlotterPipeline(**kwargs, style_revision=1)  # 筆跡が増えたらスタイルを推定し直す
+    assert _load_inference.cache_info().misses == 2
