@@ -9,7 +9,6 @@ from src.layout.char_metrics import (
     char_ink_length,
     char_type_scale,
     compute_complexity,
-    density_scale,
     effective_char_scale,
     normalize_robust,
 )
@@ -120,17 +119,20 @@ def test_fraction_layout_stacks_numerator_above_denominator():
 
 def test_char_type_scale():
     assert char_type_scale("漢") == 1.0
-    assert char_type_scale("ぬ") == 0.85
-    assert char_type_scale("ロ") == 0.68  # 個別調整
+    assert char_type_scale("ぬ") == char_type_scale("ロ") == 0.8  # 字種の代表値（個別表なし）
     assert char_type_scale("a") == 0.8
-    assert char_type_scale("っ") == 0.55  # 小書きは個別調整より優先
+    assert char_type_scale("っ") == 0.55
     assert char_type_scale("、") == 0.35
 
 
-def test_density_scale_is_bounded_and_defaults_to_one():
-    assert density_scale("\ue000") == 1.0
-    assert 0.88 <= density_scale("一") <= density_scale("驚") <= 1.12
-    assert effective_char_scale("あ") == pytest.approx(char_type_scale("あ") * density_scale("あ"))
+def test_char_size_follows_kind_and_complexity():
+    """漢字は大きく画数が多いほど大きい。かなは小さく、単純な形ほど小さい（実物の傾向）。"""
+    s = effective_char_scale
+    assert s("一") < s("国") < s("験") <= 1.1
+    assert 0.6 <= s("ン") < s("と") < s("あ") <= 0.88 < s("一")  # どのかなも漢字より小さい
+    assert s("く") < s("わ")
+    assert s("a") == 0.8 and s("っ") == 0.55 and s("、") == 0.35
+    assert s("\ue000") == char_type_scale("\ue000")  # 複雑度データの無い字は字種の代表値
 
 
 def test_complexity_helpers():
@@ -165,6 +167,8 @@ def test_advance_depends_on_char_kind():
     # 英字は字ごとの幅（実物の手書き実測で、平均は全角の約半分）
     assert ts.body_char_advance("i") < ts.body_char_advance("a") < ts.body_char_advance("m")
     assert ts.body_char_advance("a") < 0.5 * ts.body_char_advance("漢")
+    assert ts.body_char_advance("a") < ts.body_char_advance("Z") < ts.body_char_advance("M")
+    assert ts.body_char_advance("Z") > 0.6 * ts.body_char_advance("漢")  # 実測: 大文字 ≈0.6〜0.67
     assert ts.body_char_advance("ω") < 0.6 * ts.body_char_advance("漢")  # ギリシャ文字も欧文幅
 
 

@@ -86,6 +86,7 @@ def test_kanjivg_store_loads_strokes_with_types(kanjivg_dir: Path):
     strokes, types = store.load("人")
     assert len(strokes) == 2 and types == ["㇒", "㇏"]
     assert store.load("無") == (None, [])
+    assert store.load("/") == store.load("..") == (None, [])  # パスとして不正な字
     assert KanjiVGStore(None).load("人") == (None, [])
 
 
@@ -94,6 +95,49 @@ def test_user_db_prefers_the_most_careful_sample(user_strokes_root: Path):
     assert "十" in db and len(db) == 2
     assert len(db.best_sample("十")[0]) == 30  # 点数の多いサンプル
     assert db.best_sample("無") is None
+
+
+# --- 書き癖 ---
+
+
+def _angle(stroke: np.ndarray) -> float:
+    d = stroke[-1] - stroke[0]
+    return float(np.degrees(np.arctan2(d[1], d[0])))
+
+
+def test_writing_style_tilts_horizontals_and_verticals_separately():
+    from src.glyphs.style import WritingStyle
+
+    h = np.array([[0.0, 0.5], [1.0, 0.5]])
+    v = np.array([[0.5, 1.0], [0.5, 0.0]])
+    out_h, out_v = WritingStyle(horizontal_rise_deg=7.0, vertical_lean_deg=-2.0).apply([h, v])
+    assert _angle(out_h) == pytest.approx(7.0)  # 横画は右上がり
+    assert _angle(out_v) == pytest.approx(-92.0)  # 縦画は上が右へ傾く
+    assert WritingStyle().apply([h])[0] is h  # 恒等
+
+
+def test_writing_style_is_estimated_from_the_users_samples(tmp_path: Path, kanjivg_dir: Path):
+    from src.glyphs.style import WritingStyle, estimate_writing_style
+    from tests.conftest import line, write_sample
+
+    rise = np.tan(np.radians(7.0)) * 80  # 筆跡は Y-DOWN なので右上がり = y が減る
+    for i in range(3):
+        write_sample(tmp_path, "十", [line(10, 50, 90, 50 - rise), line(50, 10, 52, 90)], index=i)
+    style = estimate_writing_style(UserStrokeDB(tmp_path), KanjiVGStore(kanjivg_dir), min_pairs=3)
+    assert style.horizontal_rise_deg == pytest.approx(7.0, abs=0.5)
+    assert style.vertical_lean_deg == pytest.approx(1.4, abs=0.5)  # 下端が右へずれた縦画
+    empty = estimate_writing_style(UserStrokeDB(None), KanjiVGStore(kanjivg_dir))
+    assert empty == WritingStyle()  # データが足りなければ変えない
+
+
+def test_reference_glyphs_take_on_the_users_style(kanjivg_dir: Path):
+    from src.glyphs.style import WritingStyle
+
+    plain = _renderer(kanjivg_dir=kanjivg_dir, writing_style=WritingStyle()).render(_at("一"))
+    styled = _renderer(kanjivg_dir=kanjivg_dir, writing_style=WritingStyle(7.0, 0.0))
+    (stroke,) = styled.render(_at("一")).strokes
+    assert _angle(stroke) == pytest.approx(7.0, abs=0.5)
+    assert _angle(plain.strokes[0]) == pytest.approx(2.0, abs=0.5)  # 下限保証の 2° のみ
 
 
 # --- 配置 ---
@@ -109,6 +153,15 @@ def test_cjk_fits_cell_and_is_vertically_centered():
 
 def _latin(char: str, strokes: list[np.ndarray]) -> tuple[float, float, float, float]:
     return _bbox(position_strokes(strokes, _at(char), LS))
+
+
+def test_small_kana_sits_on_the_bottom_line_of_the_other_chars():
+    from src.layout.char_metrics import effective_char_scale
+
+    box = [np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])]
+    kanji_bottom = _bbox(position_strokes(box, _at("漢"), LS))[1]
+    small = _bbox(position_strokes(box, _at("っ", fs=5.0 * effective_char_scale("っ")), LS))
+    assert small[1] == pytest.approx(kanji_bottom, abs=0.15)  # 下に落ち込まない
 
 
 def test_latin_letters_sit_in_case_bands_whatever_the_sample_size():
@@ -233,6 +286,29 @@ def test_kanjivg_route_applies_brush_finishes(kanjivg_dir):
     assert len(rendered.strokes[0]) > len(raw[0])  # 払いの延長
     digit = _renderer(kanjivg_dir=kanjivg_dir).render(_at("2"))
     assert set(digit.finishes) == {NONE}
+
+
+def test_geometric_glyphs_are_drawn_by_hand_not_by_ruler():
+    """サンプルの無い英字・記号も、定規の直線ではなく毎回少し違う手書きの線になる。"""
+    r = _renderer(augmenter=HandwritingAugmenter(seed=0))
+    z1, z2 = (r.render(_at("Z")).strokes[0] for _ in range(2))
+    assert z1.shape != z2.shape or not np.allclose(z1, z2)
+    ruler = position_strokes(latin_glyph("Z"), _at("Z"), LS)[0]
+    d = np.diff(z1, axis=0)
+    turns = np.abs((np.diff(np.arctan2(d[:, 1], d[:, 0])) + np.pi) % (2 * np.pi) - np.pi)
+    assert len(z1) > len(ruler) and turns.max() < 2.0  # 角が丸い（素の Z は 135° の折れ）
+    eq = r.render(_at("=")).strokes
+    assert all(np.ptp(s[:, 1]) > 1e-3 for s in eq)  # 等号の横棒も完全な水平線ではない
+
+
+def test_finishing_and_variation_do_not_change_the_char_size(kanjivg_dir):
+    """払いの延長や揺らぎの後も、配置で決めた大きさを保つ（経路で大きさが変わらない）。"""
+    raw, _ = KanjiVGStore(kanjivg_dir).load("人")
+    expected = _bbox(position_strokes(raw, _at("人"), LS))
+    r = _renderer(kanjivg_dir=kanjivg_dir, augmenter=HandwritingAugmenter(seed=0))
+    for _ in range(5):
+        x0, y0, x1, y1 = _bbox(r.render(_at("人")).strokes)
+        assert max(x1 - x0, y1 - y0) == pytest.approx(expected[2] - expected[0], rel=0.02)
 
 
 def test_line_segment_and_whitespace():

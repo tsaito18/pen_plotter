@@ -7,6 +7,7 @@ KanjiVG は Y-UP、ユーザー筆跡は iPad Canvas そのままの Y-DOWN。
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from functools import lru_cache
 from pathlib import Path
 
@@ -53,7 +54,8 @@ class KanjiVGStore:
         return list(strokes), list(types)
 
     def _load_uncached(self, char: str) -> tuple[tuple[Stroke, ...] | None, tuple[str, ...]]:
-        if self.root is None:
+        # 「/」「..」等はパスとして解釈されてしまうので引かない
+        if self.root is None or char in ("", ".", "..") or "/" in char or "\\" in char:
             return None, ()
         char_dir = self.root / char
         if not char_dir.is_dir():
@@ -103,6 +105,10 @@ class UserStrokeDB:
 
     def __len__(self) -> int:
         return len(self._samples)
+
+    def items(self) -> Iterator[tuple[str, list[list[Stroke]]]]:
+        """``(文字, その字の全サンプル)`` を返す。"""
+        return iter(self._samples.items())
 
     def best_sample(self, char: str) -> list[Stroke] | None:
         samples = self._samples.get(char)

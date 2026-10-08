@@ -104,9 +104,9 @@ def position_strokes(
     rendered_w = ranges[0] * scale
     rendered_h = ranges[1] * scale
     x_offset = placement.x + (cell_width - rendered_w) / 2
-    # 小書き仮名・句読点は行ボックス中央だと浮くため下寄せ（字種で判定）
+    # 小書き仮名は行ボックス中央だと浮くため、周りの字の下端に揃える
     if char_type_scale(char) < 0.6:
-        y_offset = placement.y + 0.1 * line_spacing
+        y_offset = placement.y + (line_spacing - _body_size(placement)) / 2
     else:
         y_offset = placement.y + (line_spacing - rendered_h) / 2
 
