@@ -326,6 +326,29 @@ _SMALL_KANA_SCALE = 0.55
 _SMALL_PUNCT_SCALE = 0.35
 
 
+# 半角文字の字送り（本文フォントサイズ比、字間は別途加算）。本人の手書きレポートの
+# スキャン実測（Cursor / Measure: 小文字の字送り平均 ≈0.45、大文字 ≈0.6）に合わせた
+# 字ごとの幅。等幅だと i・l の両側が空き、m・w が詰まって活字のように見える。
+_HALFWIDTH_ADVANCE_DEFAULT = 0.55
+_HALFWIDTH_ADVANCES: dict[str, float] = {
+    **dict.fromkeys("il.,:;'!|", 0.22),
+    **dict.fromkeys("jftrI()[]{}", 0.3),
+    **dict.fromkeys(" J", 0.4),
+    **dict.fromkeys("abcdeghknopqsuvxyz", 0.42),
+    **dict.fromkeys("0123456789", 0.5),
+    **dict.fromkeys("mw", 0.6),
+    **dict.fromkeys("ABCDEFGHKLNOPQRSTUVXYZ", 0.55),
+    **dict.fromkeys("MW", 0.68),
+    **dict.fromkeys("αβγδεζηθικλνξοπρστυχϵς", 0.45),
+    **dict.fromkeys("μφψωϕ", 0.52),
+}
+
+
+def halfwidth_advance(ch: str) -> float:
+    """半角 1 文字の字送り（本文フォントサイズ比、字間を除く）。"""
+    return _HALFWIDTH_ADVANCES.get(ch, _HALFWIDTH_ADVANCE_DEFAULT)
+
+
 def char_type_scale(ch: str) -> float:
     """字種に応じたサイズ倍率を返す（個別調整テーブル優先）。
 

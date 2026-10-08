@@ -15,7 +15,7 @@ from src.handwriting.finishing import HANE, HARAI, NONE, TOME
 from src.layout.placement import CharPlacement, MathSpec
 from src.render.char_renderer import CharRenderer, _enforce_horizontal_rise, waver_scale
 from src.render.math_image import formula_aspect, formula_ink_em, render_latex_to_strokes
-from src.render.positioning import position_strokes
+from src.render.positioning import X_HEIGHT, position_strokes
 from src.render.preview import render_page_preview, stroke_widths
 
 LS = 8.0
@@ -57,6 +57,21 @@ def test_latin_glyphs_follow_x_height_cap_and_descender_bands():
     assert _bbox(latin_glyph("H"))[3] == pytest.approx(0.95)
 
 
+def test_curly_braces_point_outward():
+    left, right = symbol_glyph("{"), symbol_glyph("}")
+    assert left and right
+    (lx0, _, lx1, _), (rx0, _, rx1, _) = _bbox(left), _bbox(right)
+    tip = np.concatenate(left)[np.argmin(np.concatenate(left)[:, 0])]
+    assert tip[1] == pytest.approx(0.5, abs=0.05)  # { は中央の尖りが左へ出る
+    assert np.isclose(lx0 + lx1, 2 - (rx0 + rx1))  # } は { の左右反転
+
+
+def test_omega_is_one_rounded_stroke_without_a_top_bar():
+    (omega,) = symbol_glyph("ω")  # 横棒があると ϖ に見える
+    assert omega[0, 1] > 0.5 and omega[-1, 1] > 0.5  # 両端は上
+    assert omega[:, 1].min() < 0.2
+
+
 def test_s_is_not_mirrored():
     s = latin_glyph("S")[0]
     upper = s[s[:, 1] > 0.6]
@@ -92,12 +107,81 @@ def test_cjk_fits_cell_and_is_vertically_centered():
     assert (y0 + y1) / 2 == pytest.approx(100.0 + LS / 2)
 
 
-def test_latin_logical_fit_keeps_case_heights_and_baseline():
-    a = position_strokes(latin_glyph("a"), _at("a"), LS, logical_latin=True)
-    h = position_strokes(latin_glyph("H"), _at("H"), LS, logical_latin=True)
-    p = position_strokes(latin_glyph("p"), _at("p"), LS, logical_latin=True)
-    assert _bbox(a)[3] < _bbox(h)[3]
-    assert _bbox(p)[1] < _bbox(h)[1]  # ディセンダはベースラインより下
+def _latin(char: str, strokes: list[np.ndarray]) -> tuple[float, float, float, float]:
+    return _bbox(position_strokes(strokes, _at(char), LS))
+
+
+def test_latin_letters_sit_in_case_bands_whatever_the_sample_size():
+    """本人サンプルは大きさがバラバラ（s が A より大きい等）でも、字種の帯に揃う。"""
+    small_e = [np.array([[0.0, 0.0], [0.3, 0.1], [0.0, 0.3]])]
+    big_e = [s * 3 for s in small_e]
+    assert _latin("e", small_e) == pytest.approx(_latin("e", big_e))
+    tall_box = [np.array([[0.0, 0.0], [0.4, 1.0]])]
+    e, cap, p = (_latin(c, tall_box) for c in "eAp")
+    baseline = cap[1]
+    assert e[1] == pytest.approx(baseline)  # 小文字も大文字も同じベースライン
+    assert (e[3] - baseline) == pytest.approx(0.55 * (cap[3] - baseline), rel=0.02)  # x-height
+    assert p[1] < baseline < p[3] < cap[3]  # ディセンダ
+    assert _latin("A", latin_glyph("A"))[1] == pytest.approx(baseline)  # 幾何英字も同じ帯
+    # ギリシャ文字も英字と同じ帯（ω を漢字大に引き伸ばすと ∞、π は ∏ に見える）
+    omega, phi = _latin("ω", symbol_glyph("ω")), _latin("φ", symbol_glyph("φ"))
+    assert omega[1] == pytest.approx(baseline) and omega[3] == pytest.approx(e[3])
+    assert phi[1] < baseline and phi[3] > e[3]
+
+
+def test_wide_latin_samples_are_narrowed_to_their_advance():
+    from src.layout.char_metrics import effective_char_scale, halfwidth_advance
+
+    flat_m = [np.array([[0.0, 0.0], [1.0, 0.5], [2.0, 0.0], [3.0, 0.5]])]
+    x0, _y0, x1, _y1 = _latin("m", flat_m)
+    body = 5.0 / effective_char_scale("m")  # 字種・密度の倍率を外した本文サイズ
+    assert x1 - x0 <= halfwidth_advance("m") * body
+    assert x0 >= 10.0
+
+
+def test_operators_are_small_and_sit_on_the_math_axis():
+    """= + - 等をセル幅いっぱいに伸ばすと隣の字に触れる（ω=2 が一続きに見える）。"""
+    cap = _latin("A", [np.array([[0.0, 0.0], [0.4, 1.0]])])
+    baseline, cap_h = cap[1], cap[3] - cap[1]
+    for op in "=+-<>×":
+        x0, y0, x1, y1 = _bbox(position_strokes(symbol_glyph(op), _at(op), LS))
+        assert x1 - x0 < 0.45 * cap_h
+        assert baseline < (y0 + y1) / 2 < baseline + X_HEIGHT * cap_h
+
+
+def test_brackets_hug_the_text_inside_them():
+    tall = [np.array([[0.0, 0.0], [-0.2, 0.5], [0.0, 1.0]])]
+    opening = _bbox(position_strokes(tall, _at("（"), LS))
+    closing = _bbox(position_strokes(tall, _at("）"), LS))
+    cell_mid = 10.0 + 5.0 * 0.95 / 2
+    assert opening[0] > cell_mid  # 開き括弧はセルの右（中身の側）に寄る
+    assert closing[2] < cell_mid
+    height = opening[3] - opening[1]
+    assert 0.7 * 5.0 < height < 0.95 * 5.0  # 漢字より少し小さい
+    assert (opening[1] + opening[3]) / 2 == pytest.approx(100.0 + LS / 2)
+
+
+def test_corner_brackets_are_upright_and_sit_at_the_top_or_bottom():
+    left = position_strokes(symbol_glyph("「"), _at("「"), LS)
+    right = position_strokes(symbol_glyph("」"), _at("」"), LS)
+    (stroke,) = left
+    assert stroke[0, 1] == pytest.approx(stroke[1, 1])  # 横画から書き始め
+    assert stroke[-1, 1] < stroke[0, 1]  # 縦画は下へ（┌ の形。└ ではない）
+    mid = 100.0 + LS / 2
+    assert _bbox(left)[1] > mid - 0.5 and _bbox(right)[3] < mid + 0.5
+    assert _bbox(left)[0] > _bbox(right)[0]  # 「は右寄り、」は左寄り
+
+
+def test_brackets_prefer_the_users_own_sample(tmp_path: Path):
+    from tests.conftest import line, write_sample
+
+    write_sample(tmp_path, "（", [line(30, 10, 20, 50) + line(20, 50, 30, 90)[1:]])
+    r = _renderer(user_strokes_dir=tmp_path)
+    r.render(_at("（"))
+    r.render(_at("("))  # 半角も全角の本人サンプルで描く
+    r.render(_at("）"))
+    assert r.coverage.user_strokes == ["（", "("]
+    assert r.coverage.geometric == ["）"]
 
 
 def test_slant_rotates_about_glyph_center():

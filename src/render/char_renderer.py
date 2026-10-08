@@ -67,6 +67,10 @@ _CHAR_SUBSTITUTIONS: dict[str, str] = {
     **{chr(0xFF10 + i): str(i) for i in range(10)},  # 全角数字
 }
 
+# 本人サンプルがあれば幾何字形より優先する記号（括弧）と、その代用サンプル
+_USER_FIRST_SYMBOLS = frozenset("（）()「」『』［］[]｛｝{}【】")
+_USER_SAMPLE_ALIASES = {"(": "（", ")": "）", "[": "［", "]": "］", "{": "｛", "}": "｝"}
+
 # 揺らぎを乗せない（形が崩れやすい）句読点・長音・括弧類
 _SMOOTH_CHARS = frozenset("、。，．・ー～—―()（）「」『』【】〈〉《》〔〕")
 
@@ -245,7 +249,8 @@ class CharRenderer:
         smooth = original in _SMOOTH_CHARS or char in _SMOOTH_CHARS
 
         rendered = (
-            self._render_symbol(placement)
+            (char in _USER_FIRST_SYMBOLS and self._render_user_strokes(placement, smooth))
+            or self._render_symbol(placement)
             or self._render_user_strokes(placement, smooth)
             or self._render_latin(placement)
             or self._render_ml(placement, smooth)
@@ -295,7 +300,10 @@ class CharRenderer:
     def _render_user_strokes(
         self, placement: CharPlacement, smooth: bool
     ) -> tuple[str, RenderedChar] | None:
-        sample = self.user_db.best_sample(placement.char)
+        char = placement.char
+        sample = self.user_db.best_sample(char)
+        if sample is None and char in _USER_SAMPLE_ALIASES:
+            sample = self.user_db.best_sample(_USER_SAMPLE_ALIASES[char])
         if sample is None:
             return None
         glyph = _jitter_strokes(_normalize_user_strokes(sample), self.rng)
@@ -308,7 +316,7 @@ class CharRenderer:
         glyph = latin_glyph(placement.char)
         if glyph is None:
             return None
-        positioned = position_strokes(glyph, placement, self.line_spacing, logical_latin=True)
+        positioned = position_strokes(glyph, placement, self.line_spacing)
         positioned = self._distort(positioned, WAVER_GEOMETRIC)
         return "geometric", RenderedChar(positioned, [NONE] * len(positioned))
 

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from src.layout.char_metrics import effective_char_scale
+from src.layout.char_metrics import effective_char_scale, halfwidth_advance
 from src.layout.line_breaking import break_paragraph_by_width, is_halfwidth
 from src.layout.math_layout import (
     CHAR_WIDTH_RATIO,
@@ -77,12 +77,19 @@ def _is_kanji(ch: str) -> bool:
     )
 
 
+# 全角化する半角句読点（直前が空白以外の半角文字なら対象外）
+_FULLWIDTH_TARGET_RE = re.compile(r"(?<![!-~])[,.]")
+
+
 def normalize_body_punctuation(text: str) -> str:
-    """本文の句読点を全角「，」「．」に統一する（数式内の ``.`` ``,`` は変えない）。"""
+    """本文の句読点を全角「，」「．」に統一する。
+
+    数式内と、半角文字の直後の ``.`` ``,``（小数点・桁区切り・英文）は半角のまま残す。
+    """
 
     def _normalize(seg: str) -> str:
-        seg = seg.replace(",", "，").replace("、", "，")
-        return seg.replace(".", "．").replace("。", "．")
+        seg = _FULLWIDTH_TARGET_RE.sub(lambda m: "，" if m.group(0) == "," else "．", seg)
+        return seg.replace("、", "，").replace("。", "．")
 
     result: list[str] = []
     last_end = 0
@@ -242,16 +249,15 @@ class Typesetter:
         """本文 1 文字の字送り(mm)。"""
         letter_spacing = self.font_size * _LETTER_SPACING_SCALE
         if is_halfwidth(ch):
-            return self.font_size * 0.55 + letter_spacing
+            return self.font_size * halfwidth_advance(ch) + letter_spacing
         if _is_kanji(ch):
             return self.font_size * _KANJI_ADVANCE_SCALE + letter_spacing
         return self.font_size * (0.45 + 0.55 * effective_char_scale(ch)) + letter_spacing
 
     def _char_advance(self, ch: str, is_heading: bool, line_font_size: float) -> float:
         if is_heading:
-            return (
-                line_font_size * effective_char_scale(ch) + line_font_size * _LETTER_SPACING_SCALE
-            )
+            em = halfwidth_advance(ch) if is_halfwidth(ch) else effective_char_scale(ch)
+            return line_font_size * (em + _LETTER_SPACING_SCALE)
         return self.body_char_advance(ch)
 
     def _line_right_x(self, area: ContentArea, is_heading: bool, body_level: int) -> float:

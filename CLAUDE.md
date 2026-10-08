@@ -143,7 +143,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - Phase 9 進行中: 少量サンプル対応（Contrastive StyleEncoder + TransformerDeformer実装済み、訓練・推論パイプライン統合済み）
 - 訓練: ユーザーデータのみ（381文字/925サンプル）、CASIA不使用
 - ストロークアライメント（Hungarian + MHD + マージ/スプリット検出）実装済み — 訓練時use_aligner=True対応
-- 170テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
+- 182テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -172,7 +172,8 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - **きれいさ/バランス優先デフォルト（2026-06）**: per-stroke独立ランダム変形（instance_variation/温度/messiness）が過剰だと各画がバラつき「汚い・ストローク間バランス崩れ」になる（実測で判明：横棒うねりやtremorは主因でなく、揺らぎの積み重ねが主因）。デフォルトを揺らぎ最小化（instance_variation=0.1, temperature=0.2, messiness=0.4）。揺らぎはGUIスライダーで増やせる設計
 - **温度の機能化**: V3 per-point offsetは決定論的でtemperatureがデッドコードだった。推論時に低周波の相関ノイズ（`inference._temperature_noise`、TEMP_NOISE_AMP=0.12×temperature、clamp前に注入、点間補間で滑らか）を加えtemperatureを有効化。同字でも毎回わずかに変わる。temperature=0で従来と完全一致（後方互換）。上げ過ぎると酔っ払い字になるため控えめが適正
 - **横棒の右上がり矯正**: 日本語手書きの習性再現。全変形（slant含む）後の最終段で水平画のみ緩い右上がりを下限保証（`render/char_renderer._enforce_horizontal_rise`、_RISE_MIN_ANGLE=2°）。既に右上がりの画・数字は対象外。字がslantで傾いても横棒は右下がりにならない
-- **英字x-height統一**: `glyphs/geometric.py` の英字(LATIN)グリフ上端をx-height(0.70)/ascender(0.95)/descender(下端<0)で統一し「RePort」→「report」（混在の最大要因を解消）
+- **英字・ギリシャ文字は字種の帯で配置（2026-10）**: 本人サンプルは基準枠なしで1字ずつ書いたため大きさがバラバラ（s が A より大きい）。bbox をセルいっぱいに広げず、`render/positioning._position_latin` が x-height(大文字の0.55)・アセンダ・ディセンダの帯へ合わせる（幾何字形・本人サンプル共通）。字送りは `layout/char_metrics.halfwidth_advance` の字ごとの幅（小文字≈0.42em、i/l 0.22、m/w 0.6）。値は本人の手書きレポート（`data_examples/report_examples/`）のスキャン実測。ギリシャ文字も欧文扱い（`is_halfwidth`）で、ω/π が漢字大に伸びて ∞/∏ に見えるのを解消
+- **括弧・演算子の配置（2026-10）**: 括弧は中身の側へ寄せ、高さは漢字の0.85（「」は上端/下端に揃える）。（）は本人サンプルを優先（半角 ( ) も全角サンプルで代用）。= + - < > × 等は大文字高さの0.6の正方枠に描き、ベースライン上0.3の数式の軸に置く。半角文字の直後の `.` `,`（小数点・英文）は全角化しない
 - **tremor絶対長化**: `apply_tremor`の周波数をストローク全長正規化から実弧長(mm)基準（spatial_freq 0.3-0.5 cycles/mm、波長2-3.3mm）へ。短い横棒のさざ波が長短によらず一定波長の緩いうねりに
 - **waver経路統一**: 描画経路ごとの質感差を縮小（幾何英字3.0→1.5, 数式画像6.0→2.5, 記号0→0.4で定規直線感解消, 画数逓減floor 0.3→0.5）
 - ストローク単位の幾何バリエーション（回転・スケール・シフト）で自然さ追加
@@ -204,7 +205,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - レポート用紙背景プレビュー（data/report_paper.jpg自動ロード）
 - リファクタリング済み（2026-09）: パッケージを層構造に再編（render/glyphs/handwriting/pipeline/settings）、V1/V2(LSTM+MDN)の死蔵コードと旧互換シムを削除、テストを振る舞い中心に整理。固定seedのG-code出力がリファクタ前とバイト一致することを確認済み
 - **xDraw A4 ペンプロッタ実機テスト成功**（ホーミング・ペン制御・描画動作確認済み）
-- 幾何ストローク生成: 、。・（）／ASCII数式記号(+,-,=,<,>,*,/,%,:,;,!,?)は`glyphs/geometric.py`の幾何字形で描画（字形欠損回避）
+- 幾何ストローク生成: 、。・（）「」{}／ASCII数式記号(+,-,=,<,>,*,/,%,:,;,!,?)は`glyphs/geometric.py`の幾何字形で描画（字形欠損回避）
 - 数字(0-9)はML変形を**スキップ**しKanjiVG素の参照字形を直接使う（`render/char_renderer._is_ml_deformable`）。モデルはCJKのみ訓練のため数字にper-point offsetを当てると字形が壊れる（例: 「2」の下の横線が崩れる）。数字は終端リフト（はらい/はね）も無効化（`finishes=["none"]`、下線等の歪み防止）
 - **句点。/ピリオド.** は丸(円)ではなくピリオド風の短い点(2点ダッシュ)で描く（`render/positioning._position_period`、レポート体裁・「点が丸になる」回避）
 - **本文ASCII英字の手書き感**: 幾何字形(直線/円)は`WAVER_GEOMETRIC`(=1.5)でelastic+tremorを乗せ「きれいすぎ」を解消（経路別の揺らぎ強度は `render/char_renderer.py` 冒頭の定数に集約）

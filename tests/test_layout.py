@@ -144,8 +144,10 @@ def test_complexity_helpers():
 # --- Typesetter: 本文 ---
 
 
-def test_normalize_body_punctuation_skips_math():
-    assert normalize_body_punctuation("a,b.c、d。 $1.5, 2$") == "a，b．c，d． $1.5, 2$"
+def test_normalize_body_punctuation_skips_math_and_halfwidth_text():
+    text = "あ,い.う、え。 0.1 uF, 1,000 Fig. 2 $1.5, 2$"
+    # 和文の後は全角、小数点・英文の後（直前が半角文字）は半角のまま
+    assert normalize_body_punctuation(text) == "あ，い．う，え． 0.1 uF, 1,000 Fig. 2 $1.5, 2$"
 
 
 def test_text_wraps_and_paginates():
@@ -160,6 +162,10 @@ def test_text_wraps_and_paginates():
 def test_advance_depends_on_char_kind():
     ts = _typesetter()
     assert ts.body_char_advance("a") < ts.body_char_advance("あ") < ts.body_char_advance("漢")
+    # 英字は字ごとの幅（実物の手書き実測で、平均は全角の約半分）
+    assert ts.body_char_advance("i") < ts.body_char_advance("a") < ts.body_char_advance("m")
+    assert ts.body_char_advance("a") < 0.5 * ts.body_char_advance("漢")
+    assert ts.body_char_advance("ω") < 0.6 * ts.body_char_advance("漢")  # ギリシャ文字も欧文幅
 
 
 def test_paragraph_indent_rules():
