@@ -109,3 +109,11 @@ iPad では同じ LAN から `http://<PC の IP>:7860/collect` を開く（`make
 - [ ] 2 ページ以上で用紙交換の案内が出て、続けると 2 ページ目を描く。
 - [ ] 停止でペンが上がる。緊急停止で物理動作が止まり、原点復帰後に再開できる。
 - [ ] `error:*` / `ALARM:*` を返す行で止まり、ログに内容が出る。
+
+## 開発（画面のつくり）
+
+- 画面は Preact + htm。ライブラリは `src/ui/static/vendor/` に同梱し、各 HTML の import map で読むのでビルドも npm も要らない（更新手順は `vendor/README.md`）。
+- 画面ごとに `state.js`（状態と操作。`store.js` のストア）と `view.js`（状態を読んで描くだけ）に分ける。
+  用紙ビューア・プロッタ・エディタ・書き込みパッドのような命令的な部品は state.js が持ち、Preact が作った要素に結び付ける（Preact には描き直させない）。
+- 画面テスト: `uv sync --extra e2e` → `uv run playwright install chromium` → `pytest -m e2e`。
+  プロッタはブラウザ内の偽シリアルに置き換えて、清書 → 2 ページ送信（一時停止・用紙交換・停止）、筆跡の保存・取り消し・見直し・依頼・モデル切り替えまで通す。

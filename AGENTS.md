@@ -16,7 +16,7 @@
 - Python 3.11+
 - パッケージ管理: `uv`
 - ML: PyTorch
-- UI: Web UI（FastAPI + 素の HTML/CSS/JS、WebSerial 送信）、Tkinter（予備の送信 GUI）
+- UI: Web UI（FastAPI + Preact/htm を同梱・ビルド不要、WebSerial 送信）、Tkinter（予備の送信 GUI）
 - プレビュー: Matplotlib
 - 実機: xDraw A4 ペンプロッタ、GRBL 互換 DrawCore firmware
 - テスト: pytest

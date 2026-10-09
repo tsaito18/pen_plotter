@@ -8,6 +8,7 @@ Playwright とブラウザが無い環境では丸ごとスキップする（``u
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import socket
 import threading
@@ -19,6 +20,7 @@ import pytest
 
 pytest.importorskip("fastapi")
 playwright_api = pytest.importorskip("playwright.sync_api")
+expect = playwright_api.expect
 
 from src.pipeline import PlotterPipeline  # noqa: E402
 from src.ui.server import create_app  # noqa: E402
@@ -253,14 +255,17 @@ def test_collect_first_run_write_save_and_undo(browser, server: _Server, tmp_pat
     page.fill("#welcomeInput", "hana")
     page.keyboard.press("Enter")
     page.wait_for_selector("#welcome", state="hidden")
+    page.wait_for_function(
+        "!['？', '　'].includes(document.getElementById('subjectChar').textContent)"
+    )
     char = page.text_content("#subjectChar")
 
     _draw(page, [[(0.2, 0.3), (0.8, 0.3)], [(0.5, 0.15), (0.5, 0.85)]])
-    assert page.text_content("#strokeText").startswith("2 画")
+    expect(page.locator("#strokeText")).to_have_text(re.compile(r"^2 画"))
     page.click("#saveBtn")
     page.wait_for_function(f"document.getElementById('subjectChar').textContent !== '{char}'")
     assert len(_sample_files(server.root, "hana", char)) == 1
-    assert page.text_content("#tallySession") == "1"
+    expect(page.locator("#tallySession")).to_have_text("1")
 
     page.click(".toast-action")  # 保存の取り消し
     stats = "fetch('/api/collect/stats?profile=hana').then(r => r.json())"
@@ -279,23 +284,27 @@ def test_collect_pen_rejects_palm_and_two_finger_tap_undoes(browser, server: _Se
           const fire = (type, id, kind, x, y) => live.dispatchEvent(new PointerEvent(type, {
             pointerId: id, pointerType: kind, pressure: 0.6, bubbles: true, cancelable: true,
             clientX: r.left + r.width * x, clientY: r.top + r.height * y }));
-          const text = () => document.getElementById('strokeText').textContent;
+          // 画面の描き直しは非同期なので、1 拍おいてから読む
+          const text = async () => {
+            await new Promise((res) => setTimeout(res, 0));
+            return document.getElementById('strokeText').textContent;
+          };
           const out = [];
           for (const y of [0.3, 0.6]) {
             fire('pointerdown', 2, 'pen', 0.2, y);
             for (let i = 1; i <= 10; i++) fire('pointermove', 2, 'pen', 0.2 + i * 0.06, y);
             fire('pointerup', 2, 'pen', 0.8, y);
           }
-          out.push(text());
+          out.push(await text());
           fire('pointerdown', 5, 'touch', 0.3, 0.8); fire('pointermove', 5, 'touch', 0.6, 0.8);
           fire('pointerup', 5, 'touch', 0.6, 0.8);
-          out.push(text());
+          out.push(await text());
           fire('pointerdown', 7, 'touch', 0.4, 0.5); fire('pointerdown', 8, 'touch', 0.6, 0.5);
           await new Promise((res) => setTimeout(res, 60));
           fire('pointerup', 7, 'touch', 0.4, 0.5); fire('pointerup', 8, 'touch', 0.6, 0.5);
-          out.push(text());
+          out.push(await text());
           fire('pointerdown', 1, 'mouse', 0.3, 0.3); fire('pointerup', 1, 'mouse', 0.3, 0.3);
-          out.push(text());
+          out.push(await text());
           return out.map((t) => t.split(' ')[0]);
         }"""
     )

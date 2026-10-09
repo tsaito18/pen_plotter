@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import fields
 from pathlib import Path
@@ -35,6 +36,31 @@ def test_index_serves_the_app_shell_and_assets(client: TestClient):
     assert '<script type="module"' in html and "Pen Plotter" in html
     for asset in ["app.js", "plotter.js", "paper.js", "editor.js", "base.css", "studio.css"]:
         assert client.get(f"/static/{asset}").status_code == 200, asset
+
+
+def test_every_module_import_resolves_without_a_build_step(client: TestClient):
+    """画面は import map とブラウザの ES Modules だけで動く（ビルドしない）ので、
+
+    両画面の import map の行き先と、static 配下の JS の import 先がすべて配信されること。
+    """
+    static = Path(__file__).resolve().parents[1] / "src" / "ui" / "static"
+    bare: set[str] = set()
+    for page in ["/", "/collect"]:
+        html = client.get(page).text
+        found = re.search(r'<script type="importmap">(.*?)</script>', html, re.S)
+        imports = json.loads(found.group(1))
+        for target in imports["imports"].values():
+            assert client.get(target).status_code == 200, target
+        bare |= set(imports["imports"])
+    for path in static.rglob("*.js"):
+        if "vendor" in path.parts:
+            continue
+        for spec in re.findall(r'^import [^;]*? from "([^"]+)";', path.read_text(), re.M):
+            if spec.startswith("."):
+                url = "/static/" + (path.parent / spec).resolve().relative_to(static).as_posix()
+                assert client.get(url).status_code == 200, f"{path.name}: {spec}"
+            else:
+                assert spec in bare, f"{path.name}: {spec} が import map に無い"
 
 
 def test_bootstrap_describes_every_setting_profiles_and_examples(client: TestClient):

@@ -198,6 +198,11 @@ kbd {
 
 /* ------------------------------------------------------------------ app shell */
 
+/* Preact の描画先。箱を作らず、中の .app をそのまま body の子として並べる */
+.root {
+  display: contents;
+}
+
 .app {
   display: grid;
   grid-template-rows: var(--topbar) minmax(0, 1fr);

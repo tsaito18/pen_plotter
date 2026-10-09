@@ -8,7 +8,7 @@
 - Python 3.11+ (venvは3.12で作成、IPEX互換性のため)
 - PyTorch (ML) — XPU版でIntel Arc GPU対応予定
 - Matplotlib (プレビュー)
-- Web UI: FastAPI + uvicorn（API）、素の HTML/CSS/JS（ES Modules・ビルド不要）、WebSerial でプロッタ送信
+- Web UI: FastAPI + uvicorn（API）、Preact + htm（`static/vendor/` に同梱・import map で読み込み・ビルド不要）、WebSerial でプロッタ送信
 - xDraw A4 ペンプロッタ（GRBL互換 DrawCore ファームウェア）
 - パッケージマネージャー: uv
 
@@ -143,7 +143,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - Phase 9 進行中: 少量サンプル対応（Contrastive StyleEncoder + TransformerDeformer実装済み、訓練・推論パイプライン統合済み）
 - 訓練: ユーザーデータのみ（381文字/925サンプル）、CASIA不使用
 - ストロークアライメント（Hungarian + MHD + マージ/スプリット検出）実装済み — 訓練時use_aligner=True対応
-- 199テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
+- 207テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）。うち 8 件は実ブラウザの画面テスト（`tests/test_ui_e2e.py`、`-m e2e`。`uv sync --extra e2e` と Chromium が無ければスキップ）
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -222,7 +222,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - ホーミング: `$H`（左上角に移動）→ `G92 X0 Y297 Z0`（左上角を紙座標(0,297)に設定）
 - 紙座標: (0,0)=左下、(210,297)=右上
 - G-code送信: Windows側で `python scripts/run_plotter_gui.py` または `python -m src.plotter_gui` で GUI を起動（src/plotter_gui/）。CH340 自動検出・ホーミング・ペンテスト・進捗表示・緊急停止が GUI 操作で可能。実機チェックリストは docs/plotter_gui_checklist.md
-- **Web UI（2026-10）**: `scripts/run_ui.py` → スタジオ `http://localhost:7860/`（PC。書く→清書→描く）と筆跡 `http://<PCのIP>:7860/collect`（iPad。集める・見直す・学習）を 1 サーバーで配る。Gradio と旧収集サーバー（http.server・8080）は廃止。素の HTML/CSS/JS（`static/`: 共通 `base.css`・`common.js`・`icons.svg`、スタジオ `index.html`・`app.js`・`paper.js`・`plotter.js`・`editor.js`、筆跡 `collect.html`・`collect.js`・`pad.js`・`glyph.js`）。
+- **Web UI（2026-10）**: `scripts/run_ui.py` → スタジオ `http://localhost:7860/`（PC。書く→清書→描く）と筆跡 `http://<PCのIP>:7860/collect`（iPad。集める・見直す・学習）を 1 サーバーで配る。Gradio と旧収集サーバー（http.server・8080）は廃止。Preact + htm（ビルド不要。`static/vendor/` に同梱し各 HTML の import map で読む）。`static/`: 共通 `base.css`・`common.js`（html/Icon/トースト/API）・`store.js`（小さな状態ストア）・`icons.svg`、スタジオ `index.html`・`app.js`（起動）・`studio/state.js`（状態と操作）・`studio/view.js`（画面）、筆跡 `collect.html`・`collect.js`・`collect/state.js`・`collect/view.js`。canvas・textarea を扱う命令的な部品（`paper.js`・`plotter.js`・`editor.js`・`pad.js`・`glyph.js`）は Preact に描き直させず state.js が持って結び付ける。画面テストは要素 ID に依存するので ID を変えるときは `tests/test_ui_e2e.py` も直す。
   - スタジオ: `/api/layout`（組版のみ＝ライブ下書き）、`/api/render`（NDJSON で進捗→ページごとのストローク＋**同じストロークから作った G-code**＋行範囲 spans。gzip すると進捗が溜まるのでこの応答だけ無圧縮）。seed（書きぶり番号）で再現。送信は `plotter.js`（stop-and-wait、一時停止はペンを上げた直後、停止はペン上げ、緊急停止は `!`+0x18、ページ間で用紙交換）。用紙ビューア `paper.js` は base 層＋追記型インク層のキャッシュ（毎フレーム全画を描くと送信ループが詰まる）
   - 筆跡: `collector/service.CollectorService`（プロファイルはリクエストごと＝iPad と PC で別の人を同時に扱える）。削除は `<root>/.trash/` へ移すだけで取り消し可、スタジオからの「書いて教えて」依頼は `<root>/.state/queue-<id>.json`（保存で消える）。`.` 始まりのディレクトリはプロファイル扱いしない。書き込みは 512×512 論理座標・pointermove 粒度で記録（既存データと同じ）、画面の線だけ coalesced/predicted events で滑らかに。文字はディレクトリ名に使える 1 字だけ受け付ける（`validate_char`）
   - 学習・モデル: `/api/training*`（出力先は `--models-dir` 配下に限定）、`/api/models`・`/api/models/use`（清書に使うモデルを再起動なしで切替）。筆跡が増減すると `CollectorService.revision` が上がり、`PlotterPipeline(style_revision=...)` 経由で ML のスタイル推定を読み直す
