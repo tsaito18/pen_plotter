@@ -62,6 +62,9 @@ _KANJI_ADVANCE_SCALE = 1.08
 # インク幅で字送りを決めるときの字間（隣の字とのインクの隙間、本文サイズ比）。
 # 本人の手書きレポートと同じ行（33 字）の長さが字の大きさ比で一致する値（実測 34 字幅）。
 _INK_GAP = 0.32
+# 本文行を罫線の帯の中央からこの割合（行間比）だけ下げる。本人の手書きレポートでは字の
+# 下端から下の罫線まで平均 1.54mm で、帯の中央に置いた生成（2.08mm）より約 0.5mm 低い
+_TEXT_DROP = 0.07
 # 全角括弧は外側（括弧の外の字との間）を広めに空ける（実測: 内側 ≈0.25 字・外側 ≈0.7 字）
 _BRACKET_OUTER_GAP = 0.25
 _FULLWIDTH_BRACKETS = frozenset("（）「」『』【】〈〉《》〔〕［］｛｝")
@@ -515,6 +518,7 @@ class Typesetter:
             x += self.font_size  # 段落先頭の字下げ
 
         aug = self.augmenter
+        y -= self.config.line_spacing * _TEXT_DROP  # 罫線の少し上に乗せて書く
         line_y = y + aug.next_line_baseline() if aug else y
         line_density = aug.line_density_scale() if aug else 1.0
 

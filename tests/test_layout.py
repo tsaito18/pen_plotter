@@ -226,6 +226,15 @@ def test_augmented_placement_varies_but_stays_near_the_line():
     assert any(w.slant != 0 for w in wavy)
 
 
+def test_text_sits_a_little_below_the_middle_of_the_ruled_band():
+    """実物は罫線の少し上に乗せて書く（帯の中央より約 0.5mm 下。スキャン実測）。"""
+    ts = _typesetter()
+    row = ts.layout.line_positions()[0]
+    (first,) = [p for p in ts.typeset("漢")[0] if p.is_text]
+    drop = row - first.y
+    assert drop == pytest.approx(0.07 * ts.config.line_spacing, abs=1e-6)
+
+
 def test_same_seed_same_layout():
     def run() -> list[tuple[float, float, float]]:
         page = _typesetter(HandwritingAugmenter(seed=3)).typeset("手書きの揺らぎ")[0]

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from src.gcode.config import PlotterConfig
 from src.settings import Settings
 
 pytest.importorskip("fastapi")
@@ -74,6 +75,7 @@ def test_bootstrap_describes_every_setting_profiles_and_examples(client: TestCli
         "width": 210.0,
         "height": 297.0,
         "background": data["paper"]["background"],
+        "pen_width_mm": PlotterConfig().pen_width_mm,  # ビューアの線幅も同じペン幅
     }
     assert data["syntax"] and data["sources"]["kanjivg"] is True
 

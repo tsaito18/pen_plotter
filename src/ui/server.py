@@ -271,6 +271,7 @@ def create_app(
                 "width": defaults.paper_width,
                 "height": defaults.paper_height,
                 "background": report_paper_path() is not None,
+                "pen_width_mm": defaults.plotter_config().pen_width_mm,
             },
             "model": models.name_of(models.active),
             "collect": collector is not None,

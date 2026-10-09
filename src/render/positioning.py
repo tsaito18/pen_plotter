@@ -59,6 +59,11 @@ _BRACKET_MAX_WIDTH = 0.5  # セル幅に対する最大インク幅
 _HALFWIDTH_BRACKET_BAND = (-0.22, 1.05)  # 英文中の ( ) [ ] { } は大文字より上下に伸びる
 
 _COMMA_CHARS = ("、", ",", "，")
+# 読点の高さ（本文サイズ比）と、そのうちベースラインより上に出る割合（頭の点）
+_COMMA_HEIGHT = 0.26
+_COMMA_HEAD_ABOVE = 0.3
+# 句点の点の半径（本文サイズ比）。0.35mm のペンで塗りつぶされて小さな黒い点になる
+_PERIOD_RADIUS = 0.03
 _PERIOD_CHARS = (".", "。", "．")
 _MIDDLE_DOT = "・"
 
@@ -237,26 +242,19 @@ def _position_bracket(
 
 
 def _position_comma(strokes: list[Stroke], placement: CharPlacement, line_spacing: float) -> Stroke:
-    all_pts = np.concatenate(strokes, axis=0)
-    mins = all_pts.min(axis=0)
-    ranges = all_pts.max(axis=0) - mins
-
-    fs = placement.font_size
-    cell_width = _cell_width(placement)
-    target_h = fs * 0.3675
-    target_w = target_h * 0.72
-    scale_w = target_w / ranges[0] if ranges[0] > 1e-6 else float("inf")
-    scale_h = target_h / ranges[1] if ranges[1] > 1e-6 else float("inf")
-    scale = min(scale_w, scale_h)
-
-    rendered_w = ranges[0] * scale
-    rendered_h = ranges[1] * scale
-    x_offset = placement.x + (cell_width - rendered_w) / 2
-    y_offset = placement.y + line_spacing * 0.1
-    stroke = (strokes[0] - mins) * scale + np.array([x_offset, y_offset])
-    if placement.slant:
-        center = (x_offset + rendered_w / 2, y_offset + rendered_h / 2)
-        stroke = rotate_about([stroke], placement.slant, center)[0]
+    """読点「，」: 字の約 1/4 の高さで、頭をベースライン付近・尾をその下へ、枠の左寄りに置く。"""
+    body = _body_size(placement)
+    baseline = placement.y + (line_spacing - body) / 2
+    height = body * _COMMA_HEIGHT
+    x_left = placement.x + _punct_slot(placement) * 0.2
+    (stroke,) = _fit_band(
+        strokes[:1],
+        placement,
+        x_left=x_left,
+        y_bottom=baseline - height * (1 - _COMMA_HEAD_ABOVE),
+        height=height,
+        max_width=height,
+    )
     return stroke
 
 
@@ -274,13 +272,17 @@ def _position_middle_dot(
 
 
 def _position_period(placement: CharPlacement, line_spacing: float) -> Stroke:
-    """句点は丸ではなく短い斜めのダッシュ（ピリオド風の点）として描く。"""
-    fs = placement.font_size
-    dot_w = min(0.58, max(0.38, fs * 0.08))
-    dot_h = dot_w * 0.75
-    cx = placement.x + (_cell_width(placement) if is_halfwidth(placement.char) else fs * 0.55) / 2
-    cy = placement.y + line_spacing * 0.14
-    return np.array(
-        [[cx - dot_w / 2, cy + dot_h / 2], [cx + dot_w / 2, cy - dot_h / 2]],
-        dtype=np.float64,
-    )
+    """句点「．」: ベースライン上の小さな点（小円をペン幅が塗りつぶす）。大きな丸は描かない。"""
+    body = _body_size(placement)
+    radius = max(0.1, body * _PERIOD_RADIUS)
+    cx = placement.x + _punct_slot(placement) * (0.5 if is_halfwidth(placement.char) else 0.35)
+    cy = placement.y + (line_spacing - body) / 2 + radius
+    t = np.linspace(0.0, 2 * np.pi, 9)
+    return np.stack([cx + radius * np.cos(t), cy + radius * np.sin(t)], axis=1)
+
+
+def _punct_slot(placement: CharPlacement) -> float:
+    """句読点を置く枠の幅（組版の予約幅。無ければ字種の既定幅）。"""
+    if placement.advance is not None:
+        return placement.advance
+    return _cell_width(placement)

@@ -124,16 +124,23 @@ def circled_number_glyph(digits: list[list[Stroke]]) -> list[Stroke]:
 
 
 @_symbol_glyph("、", ",", "，")
-def _ideographic_comma() -> list[Stroke]:
-    # 正規化後の本文読点はすべて「，」(U+FF0C)に寄せるため同一形にする
-    return [np.array([[0.58, 0.48], [0.42, 0.26]], dtype=np.float64)]
+def _comma() -> list[Stroke]:
+    # 本文の読点は「，」に統一する。頭の小さな点（1 周）から左下へ緩く払う 1 筆。
+    # 短い直線だけだと句点・「、」と見分けにくい
+    t = np.linspace(np.pi / 2, np.pi / 2 + 2 * np.pi, 10)
+    head = np.stack([0.6 + 0.07 * np.cos(t), 0.8 + 0.07 * np.sin(t)], axis=1)
+    s = np.linspace(0.0, 1.0, 8)[1:, None]
+    p0, p1, p2 = np.array([0.6, 0.73]), np.array([0.66, 0.45]), np.array([0.42, 0.15])
+    tail = (1 - s) ** 2 * p0 + 2 * (1 - s) * s * p1 + s**2 * p2  # 2 次ベジェ
+    return [np.vstack([head, tail]).astype(np.float64)]
 
 
 @_symbol_glyph("。", ".", "．")
-def _ideographic_full_stop() -> list[Stroke]:
-    # 句点はレポート体裁に合わせ、丸(円)ではなくピリオド風の短い点(描けるドット)
-    # 正規化後の本文句点はすべて「．」(U+FF0E)に寄せるため同一形にする
-    return [np.array([[0.475, 0.245], [0.525, 0.205]], dtype=np.float64)]
+def _full_stop() -> list[Stroke]:
+    # 本文の句点は「．」に統一する。小さな点（ペン幅で塗りつぶされる小円）。
+    # 大きな丸（。）は書かない。配置側（positioning._position_period）が実寸で描き直す
+    t = np.linspace(0.0, 2 * np.pi, 9)
+    return [np.stack([0.5 + 0.05 * np.cos(t), 0.2 + 0.05 * np.sin(t)], axis=1)]
 
 
 @_symbol_glyph("・")

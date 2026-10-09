@@ -17,8 +17,7 @@ from src.render.char_renderer import CharRenderer, _enforce_horizontal_rise, wav
 from src.render.math_image import formula_aspect, formula_ink_em, render_latex_to_strokes
 from src.render.positioning import X_HEIGHT, position_strokes
 from src.render.preview import (
-    WIDTH_MAX,
-    WIDTH_MIN,
+    WIDTH_MIN_RATIO,
     render_page_preview,
     stroke_contact,
     stroke_widths,
@@ -358,9 +357,24 @@ def test_slant_rotates_about_glyph_center():
     assert tilted[0, 0] != pytest.approx(upright[0, 0])
 
 
-def test_period_is_a_short_dash_not_a_circle():
-    (dot,) = position_strokes(symbol_glyph("．"), _at("．"), LS)
-    assert len(dot) == 2 and np.linalg.norm(dot[1] - dot[0]) < 1.0
+def test_period_and_comma_are_easy_to_tell_apart():
+    """「．」は小さな点、「，」は頭の点から左下へ払う形（どちらも短い斜線だと「、」と紛れる）。"""
+    from src.layout.char_metrics import effective_char_scale
+
+    fs_period, fs_comma = (5.0 * effective_char_scale(c) for c in "．，")
+    (dot,) = position_strokes(symbol_glyph("．"), _at("．", fs=fs_period), LS)
+    (comma,) = position_strokes(symbol_glyph("，"), _at("，", fs=fs_comma), LS)
+    kanji_bottom = 100.0 + (LS - 5.0) / 2
+    dx0, dy0, dx1, dy1 = _bbox([dot])
+    assert max(dx1 - dx0, dy1 - dy0) < 0.5  # ペン幅で塗りつぶされる小さな点
+    assert np.linalg.norm(dot[0] - dot[-1]) < 0.1  # 線ではなく閉じた点
+    assert abs((dy0 + dy1) / 2 - kanji_bottom) < 0.4  # 字の下端（ベースライン）に置く
+    assert (dx0 + dx1) / 2 < 10.0 + 5.0 * 0.95 / 2  # 枠の左寄り
+    _, cy0, _, cy1 = _bbox([comma])
+    assert cy1 - cy0 > 2.5 * (dy1 - dy0)  # 点より明らかに縦に長い
+    head, tail = comma[0], comma[-1]
+    assert head[1] > tail[1] and tail[0] < head[0]  # 頭から左下へ払う
+    assert cy0 < kanji_bottom < cy1  # 頭はベースライン付近、尾はその下へ
 
 
 # --- 描画経路 ---
@@ -594,9 +608,29 @@ def test_preview_width_is_the_contact_ratio_scaled():
     stroke = np.column_stack([np.linspace(0, 10, 50), np.zeros(50)])
     contact = stroke_contact(stroke, HARAI, cfg)
     assert contact.shape == (49,) and contact.max() == 1.0 and contact[-1] < 1.0
-    expected = WIDTH_MIN + (WIDTH_MAX - WIDTH_MIN) * contact
+    pen = cfg.pen_width_mm
+    expected = pen * (WIDTH_MIN_RATIO + (1 - WIDTH_MIN_RATIO) * contact)  # 線幅は mm
     assert np.allclose(stroke_widths(stroke, HARAI, cfg), expected)
+    # 既定のペン幅は本人の手書きレポートのスキャン実測（同じペンで描く）
+    assert PlotterConfig().pen_width_mm == pytest.approx(0.35)
     assert stroke_contact(stroke[:1], HARAI, cfg).shape == (0,)
+
+
+def test_preview_draws_lines_at_the_real_pen_width(tmp_path: Path):
+    """プレビュー画像上の線の太さが、ペン幅(mm)と同じ実寸になる（図の大きさに依らない）。"""
+    from PIL import Image
+
+    path = tmp_path / "page.png"
+    stroke = np.column_stack([np.linspace(20, 190, 200), np.full(200, 150.0)])
+    cfg = PlotterConfig(pen_width_mm=0.6)
+    render_page_preview([stroke], [NONE], path, config=cfg)
+    img = np.asarray(Image.open(path).convert("L"))
+    frame = np.where((img < 60).mean(axis=0) > 0.5)[0]  # 用紙の外枠（縦線）
+    px_per_mm = (frame.max() - frame.min()) / 210
+    column = img[:, img.shape[1] // 2] < 128
+    rows = np.where(column)[0]
+    line = rows[(rows > img.shape[0] * 0.3) & (rows < img.shape[0] * 0.7)]
+    assert len(line) / px_per_mm == pytest.approx(0.6, abs=0.12)
 
 
 def test_render_page_preview_writes_png(tmp_path: Path):

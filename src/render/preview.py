@@ -1,7 +1,8 @@
 """ページのプレビュー画像（matplotlib）。
 
 線幅は G-code の Z 補間と同じ接触率（:mod:`src.handwriting.finishing`）から導くため、
-払い・はねの抜けや筆圧の濃淡が実機の見え方と一致する。
+払い・はねの抜けや筆圧の濃淡が実機の見え方と一致する。太さは実寸（mm）で、
+完全接触のときにペン幅 :attr:`PlotterConfig.pen_width_mm` になる（図の大きさに依らない）。
 """
 
 from __future__ import annotations
@@ -22,10 +23,10 @@ from src.handwriting.finishing import (
     pressure_modulation,
 )
 
-# 線幅（pt）: 完全接触＝実機の単線太さ相当、終端の抜けでも消えない最小幅
-WIDTH_MAX = 0.9
-WIDTH_MIN = 0.15
+# 終端の抜けでも消えない最小幅（ペン幅比）
+WIDTH_MIN_RATIO = 0.17
 INK_COLOR = "#1a1a1a"
+_PT_PER_INCH = 72.0
 
 
 def stroke_contact(stroke: Stroke, finish: str, config: PlotterConfig) -> np.ndarray:
@@ -43,18 +44,20 @@ def stroke_contact(stroke: Stroke, finish: str, config: PlotterConfig) -> np.nda
 
 
 def stroke_widths(stroke: Stroke, finish: str, config: PlotterConfig) -> list[float]:
-    """各セグメント（``N-1`` 本）の線幅。接触率に比例する（2 点未満は空）。"""
+    """各セグメント（``N-1`` 本）の線幅(mm)。接触率に比例する（2 点未満は空）。"""
     seg_contact = stroke_contact(stroke, finish, config)
-    return (WIDTH_MIN + (WIDTH_MAX - WIDTH_MIN) * seg_contact).tolist()
+    ratio = WIDTH_MIN_RATIO + (1.0 - WIDTH_MIN_RATIO) * seg_contact
+    return (config.pen_width_mm * ratio).tolist()
 
 
-def draw_stroke(ax: Axes, stroke: Stroke, finish: str, config: PlotterConfig) -> None:
+def draw_stroke(
+    ax: Axes, stroke: Stroke, finish: str, config: PlotterConfig, pt_per_mm: float
+) -> None:
     if len(stroke) < 2:
         return
     segments = np.stack([stroke[:-1], stroke[1:]], axis=1)
-    ax.add_collection(
-        LineCollection(segments, linewidths=stroke_widths(stroke, finish, config), colors=INK_COLOR)
-    )
+    widths = np.asarray(stroke_widths(stroke, finish, config)) * pt_per_mm
+    ax.add_collection(LineCollection(segments, linewidths=widths, colors=INK_COLOR))
 
 
 def render_page_preview(
@@ -88,13 +91,19 @@ def render_page_preview(
         ax.add_patch(
             patches.Rectangle((0, 0), w, h, linewidth=1.0, edgecolor="black", facecolor="none")
         )
-        for i, stroke in enumerate(strokes):
-            draw_stroke(ax, stroke, finishes[i] if i < len(finishes) else NONE, config)
         ax.set_xlim(-2, w + 2)
         ax.set_ylim(-2, h + 2)
         ax.set_aspect("equal")
         ax.axis("off")
         plt.tight_layout()
+        # 線幅(mm)を pt に直すため、確定した軸の実寸（インチ）から 1mm あたりの pt を求める
+        fig.canvas.draw()
+        box = ax.get_window_extent()
+        x0, x1 = ax.get_xlim()
+        pt_per_mm = box.width / fig.dpi * _PT_PER_INCH / (x1 - x0)
+        for i, stroke in enumerate(strokes):
+            finish = finishes[i] if i < len(finishes) else NONE
+            draw_stroke(ax, stroke, finish, config, pt_per_mm)
         fig.savefig(str(save_path), dpi=300)
     finally:
         plt.close(fig)
