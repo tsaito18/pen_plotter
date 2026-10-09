@@ -6,9 +6,17 @@ LINE_START_PROHIBITED: set[str] = set("。、，．）」』】〉》〕!?！？
 LINE_END_PROHIBITED: set[str] = set("（「『【〈《〔")
 
 
+SUPERSCRIPTS: dict[str, str] = {
+    **{c: str(i) for i, c in enumerate("⁰¹²³⁴⁵⁶⁷⁸⁹")},
+    "⁺": "+",
+    "⁻": "-",
+}
+"""上付き文字 → 元の字（m/s² の ² など。元の字を小さく右肩に描く）。"""
+
+
 def is_halfwidth(ch: str) -> bool:
-    """欧文の幅で組む文字か（ASCII とギリシャ文字）。"""
-    return ord(ch) < 128 or 0x0391 <= ord(ch) <= 0x03F5
+    """欧文の幅で組む文字か（ASCII・ギリシャ文字・上付き数字）。"""
+    return ord(ch) < 128 or 0x0391 <= ord(ch) <= 0x03F5 or ch in SUPERSCRIPTS
 
 
 def break_paragraph_by_width(

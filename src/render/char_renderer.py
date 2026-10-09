@@ -2,7 +2,8 @@
 
 文字は次の優先順で字形を決める（先に見つかったものを使う）:
 
-1. 数式: matplotlib 描画 → 細線化（:mod:`src.render.math_image`）
+1. 数式: matplotlib の配置へ手書き字形を貼る（:mod:`src.render.math_handwriting`）。
+   組版できない式は matplotlib 描画 → 細線化（:mod:`src.render.math_image`）
 2. 幾何字形: 記号・句読点・ギリシャ文字・数式記号・丸数字（括弧は本人サンプルを優先）
 3. ユーザー筆跡: 本人が書いたサンプル（英字も含む）
 4. 幾何英字: 英字サンプルが無いとき
@@ -40,8 +41,17 @@ from src.handwriting.finishing import (
     classify_finishes,
     infer_finishes,
 )
+from src.layout.line_breaking import SUPERSCRIPTS
+from src.layout.mathtext import (
+    MATH_BLOCK_CAP_RATIO,
+    MATH_INLINE_CAP_RATIO,
+    detect_top_level_fraction_bar,
+    extract_math_layout,
+    math_scale,
+)
 from src.layout.placement import CharPlacement
-from src.render.math_image import render_latex_to_strokes
+from src.render.math_handwriting import render_math_handwritten
+from src.render.math_image import glyph_skeleton, render_latex_to_strokes
 from src.render.positioning import position_strokes
 
 logger = logging.getLogger(__name__)
@@ -80,6 +90,10 @@ _SMOOTH_CHARS = frozenset("、。，．・ー～—―()（）「」『』【】
 
 # 「日本語だけ描く」モードでも描く字（句読点・数字）
 _JAPANESE_MODE_EXTRA = frozenset("、。，．,.")
+
+# 上付き文字は元の字をこの倍率で描き、下端を大文字高さのこの割合まで上げる
+_SUPERSCRIPT_SCALE = 0.6
+_SUPERSCRIPT_RISE = 0.45
 
 # 読点は終端を払う
 _COMMA_CHARS = frozenset("、,，")
@@ -285,8 +299,15 @@ class CharRenderer:
             cov.skipped.append(original)
             return RenderedChar()
 
-        char = _CHAR_SUBSTITUTIONS.get(original, original)
-        if char != original:
+        if original in SUPERSCRIPTS:
+            return self._render_superscript(placement)
+        return self._render_glyph(placement, original)
+
+    def _render_glyph(self, placement: CharPlacement, original: str) -> RenderedChar:
+        """文字 1 字を経路の優先順に描き、使った経路を ``original`` の名で記録する。"""
+        cov = self.coverage
+        char = _CHAR_SUBSTITUTIONS.get(placement.char, placement.char)
+        if char != placement.char:
             placement = replace(placement, char=char)
         smooth = original in _SMOOTH_CHARS or char in _SMOOTH_CHARS
 
@@ -306,6 +327,22 @@ class CharRenderer:
         getattr(cov, source).append(original)
         return result
 
+    def _render_superscript(self, placement: CharPlacement) -> RenderedChar:
+        """上付き文字（² ⁻ 等）: 元の字を小さく描き、大文字高さの中ほどより上へ置く。"""
+        cap = placement.font_size
+        small = cap * _SUPERSCRIPT_SCALE
+        baseline = placement.y + (self.line_spacing - cap) / 2
+        # 小さい字は行ボックスの縦中央に描かれるので、その中央を上付きの位置へ合わせる
+        center = baseline + cap * _SUPERSCRIPT_RISE + small / 2
+        sub = replace(
+            placement,
+            char=SUPERSCRIPTS[placement.char],
+            y=center - self.line_spacing / 2,
+            font_size=small,
+            advance=None,
+        )
+        return self._render_glyph(sub, placement.char)
+
     # ------------------------------------------------------------------
     # 経路
     # ------------------------------------------------------------------
@@ -313,6 +350,11 @@ class CharRenderer:
     def _render_math(self, placement: CharPlacement) -> RenderedChar:
         spec = placement.math
         assert spec is not None
+        if spec.handwritten:
+            strokes = self._render_math_handwritten(placement)
+            if strokes is not None:
+                self.coverage.geometric.append(spec.source)
+                return RenderedChar(strokes, [NONE] * len(strokes))
         bbox = spec.bbox
         if spec.align == "baseline":
             # 本文字形は行ボックス内で縦中央寄せされるため、数式のベースラインも
@@ -325,6 +367,65 @@ class CharRenderer:
         self.coverage.geometric.append(spec.source)
         strokes = self._distort(strokes, WAVER_MATH_IMAGE)
         return RenderedChar(strokes, [NONE] * len(strokes))
+
+    def _render_math_handwritten(self, placement: CharPlacement) -> list[Stroke] | None:
+        """matplotlib の配置へ手書き字形を貼る。組版できなければ None（活字の細線化へ）。"""
+        spec = placement.math
+        assert spec is not None
+        layout = extract_math_layout(spec.source)
+        if layout is None:
+            return None
+        inline = spec.align == "baseline"
+        cap_ratio = MATH_INLINE_CAP_RATIO if inline else MATH_BLOCK_CAP_RATIO
+        scale = math_scale(placement.font_size, cap_ratio)
+        x0, y0, w, h = spec.bbox
+        bar_pt = detect_top_level_fraction_bar(layout) if spec.fraction_bar_y is not None else None
+        if inline:
+            # 本文の英字と同じベースライン（行ボックスに大文字の高さを縦中央寄せ）
+            baseline = y0 + (self.line_spacing - placement.font_size * cap_ratio) / 2
+        elif spec.fraction_bar_y is not None and bar_pt is not None:
+            baseline = spec.fraction_bar_y - bar_pt * scale
+        else:
+            ink_h = (layout.height + layout.depth) * scale
+            baseline = y0 + h / 2 - ink_h / 2 + layout.depth * scale
+        return render_math_handwritten(
+            layout,
+            scale=scale,
+            x_left=x0 + (w - layout.width * scale) / 2,
+            baseline=baseline,
+            glyph_source=self._math_glyph,
+            distort=self._distort,
+        )
+
+    def _math_glyph(self, char: str, is_large: bool) -> tuple[list[Stroke], float] | None:
+        """数式中の 1 字の字形（単位系）と揺らぎ倍率。
+
+        本文と同じ順（括弧は本人サンプル → 幾何記号 → 本人サンプル → 幾何英字 → KanjiVG）。
+        本人サンプルは傾くと細い字（1・l）が崩れるので揺らぎを足さない。どれも無い字・
+        大型記号は活字を細線化する。
+        """
+        if not is_large:
+            char = _CHAR_SUBSTITUTIONS.get(char, char)
+            if char in _USER_FIRST_SYMBOLS and (sample := self._user_sample(char)) is not None:
+                return _normalize_user_strokes(sample), 0.0
+            if (glyph := symbol_glyph(char)) is not None:
+                return self._hand_drawn(glyph), WAVER_SYMBOL
+            if (sample := self._user_sample(char)) is not None:
+                return _normalize_user_strokes(sample), 0.0
+            if (glyph := latin_glyph(char)) is not None:
+                return self._hand_drawn(glyph), WAVER_GEOMETRIC
+            reference, _ = self.kanjivg.load(char)
+            if reference is not None:
+                return reference, 1.0
+        skeleton = glyph_skeleton(char)
+        return (skeleton, WAVER_MATH_IMAGE) if skeleton else None
+
+    def _user_sample(self, char: str) -> list[Stroke] | None:
+        """本人サンプル（半角の括弧は全角のサンプルで代用）。"""
+        sample = self.user_db.best_sample(char)
+        if sample is None and char in _USER_SAMPLE_ALIASES:
+            sample = self.user_db.best_sample(_USER_SAMPLE_ALIASES[char])
+        return sample
 
     def _render_symbol(self, placement: CharPlacement) -> tuple[str, RenderedChar] | None:
         char = placement.char
@@ -344,10 +445,7 @@ class CharRenderer:
     def _render_user_strokes(
         self, placement: CharPlacement, smooth: bool
     ) -> tuple[str, RenderedChar] | None:
-        char = placement.char
-        sample = self.user_db.best_sample(char)
-        if sample is None and char in _USER_SAMPLE_ALIASES:
-            sample = self.user_db.best_sample(_USER_SAMPLE_ALIASES[char])
+        sample = self._user_sample(placement.char)
         if sample is None:
             return None
         glyph = _jitter_strokes(_normalize_user_strokes(sample), self.rng)

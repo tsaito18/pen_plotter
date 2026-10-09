@@ -27,6 +27,17 @@ from src.layout.math_layout import (
     MathParser,
     MathPlacement,
 )
+from src.layout.mathtext import (
+    MATH_BLOCK_CAP_RATIO,
+    MATH_INLINE_CAP_RATIO,
+    detect_top_level_fraction_bar,
+    extract_math_layout,
+    handwrite_draw_width_mm,
+    math_scale,
+    promote_top_level_frac_to_dfrac,
+    space_adjacent_fractions,
+    split_math_for_width,
+)
 from src.layout.page_layout import ContentArea, PageConfig, PageLayout
 from src.layout.placement import CharPlacement, MathSpec
 from src.layout.table_layout import detect_pipe_table
@@ -263,12 +274,15 @@ class Typesetter:
         font_size: float | None = None,
         augmenter: HandwritingAugmenter | None = None,
         ink_width: Callable[[str], float | None] | None = None,
+        handwrite_math: bool = True,
     ) -> None:
         self.config = page_config
         self.layout = PageLayout(page_config)
         self.font_size = font_size if font_size is not None else page_config.line_spacing * 0.9
         self.augmenter = augmenter
         self.ink_width = ink_width
+        # 構造式（分数・根号・添字）を本文と同じ手書き字形で描く（False は活字の細線化）
+        self.handwrite_math = handwrite_math
 
     # --- 字送り ---
 
@@ -322,7 +336,14 @@ class Typesetter:
 
         body_src = _TAG_RE.sub("", math_src)
         h_mm = formula_ink_em(body_src) * self.font_size
+        if self._handwrites(body_src):
+            width = handwrite_draw_width_mm(body_src, self.font_size, MATH_INLINE_CAP_RATIO)
+            return width or 0.0, h_mm
         return h_mm * formula_aspect(body_src), h_mm
+
+    def _handwrites(self, body_src: str) -> bool:
+        """この式を手書きで描くか（matplotlib が組版できない式は活字の細線化へ）。"""
+        return self.handwrite_math and extract_math_layout(body_src) is not None
 
     def inline_math_width(self, math_src: str) -> float:
         """インライン数式が占める幅(mm)。折り返しとカーソル前進の両方がこれを使う。"""
@@ -566,8 +587,13 @@ class Typesetter:
                 out.append(CharPlacement(ch, x, y, self.font_size))
                 x += self.body_char_advance(ch)
             return x
-        box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
         draw_w, h_mm = self._inline_math_draw_size(math_src)
+        body_src = _TAG_RE.sub("", math_src)
+        if self._handwrites(body_src):
+            spec = MathSpec(body_src, (x, y, draw_w, h_mm), "baseline", handwritten=True)
+            out.append(CharPlacement("", x, y, self.font_size, math=spec))
+            return x + draw_w
+        box = MathLayoutEngine.layout(elements, x=x, y=y, font_size=self.font_size)
         # font_size は先頭要素のもの（ベースライン揃えの基準。分数始まりの式では縮小サイズ）
         font_size = box.placements[0].font_size if box.placements else self.font_size
         spec = MathSpec(math_src, (x, y, draw_w, h_mm), "baseline")
@@ -596,6 +622,10 @@ class Typesetter:
         body_src = _TAG_RE.sub("", math_src).strip()
         groups = _split_by_linebreak(_strip_tag(elements))
         line_spacing = self.config.line_spacing
+        if len(groups) == 1:
+            src = space_adjacent_fractions(promote_top_level_frac_to_dfrac(body_src))
+            if self._handwrites(src):
+                return self._place_handwritten_block(src, tag_elem, row, rows, area, out)
 
         boxes = [MathLayoutEngine.layout(g, x=0.0, y=0.0, font_size=self.font_size) for g in groups]
         if boxes:
@@ -635,16 +665,108 @@ class Typesetter:
             body_right = center_x + draw_w
 
         if tag_elem is not None:
-            tag_width = MathLayoutEngine.layout(
-                [tag_elem], x=0, y=0, font_size=self.font_size
-            ).width
-            # 式番号は本体の直後（1 文字空け）。本文幅を超える場合のみ右端へ寄せる。
-            tag_x = min(body_right + self.font_size, area.x + area.width - tag_width)
-            tag_box = MathLayoutEngine.layout(
-                [tag_elem], x=tag_x, y=last_baseline_y, font_size=self.font_size
-            )
-            out.extend(_text_placements(tag_box.placements))
+            self._place_tag(tag_elem, body_right, last_baseline_y, area, out)
         return required_rows
+
+    def _place_handwritten_block(
+        self,
+        src: str,
+        tag_elem: MathElement | None,
+        row: int,
+        rows: list[float],
+        area: ContentArea,
+        out: list[CharPlacement],
+    ) -> int:
+        """手書きのブロック数式を置く。本文幅を超える式は関係演算子・加減の前で改行する。
+
+        途中の行が入らなければ置いた行を取り消して -1 を返す（式全体を次ページへ送る）。
+        """
+        start = len(out)
+        lines = split_math_for_width(src, self.font_size, area.width)
+        used = 0
+        for i, line_src in enumerate(lines):
+            tag = tag_elem if i == len(lines) - 1 else None
+            consumed = self._place_handwritten_block_line(
+                line_src, tag, row + used, rows, area, out
+            )
+            if consumed == -1:
+                del out[start:]
+                return -1
+            used += consumed
+        return used
+
+    def _place_handwritten_block_line(
+        self,
+        src: str,
+        tag_elem: MathElement | None,
+        row: int,
+        rows: list[float],
+        area: ContentArea,
+        out: list[CharPlacement],
+    ) -> int:
+        """手書きのブロック数式 1 行ぶん。主分数は分数線を罫線に乗せる（分子=上の行・分母=下の行）。
+
+        Returns:
+            消費した行数。残り行不足なら -1。
+        """
+        layout = extract_math_layout(src)
+        assert layout is not None
+        line_spacing = self.config.line_spacing
+        font_size = self.font_size
+        scale = math_scale(font_size, MATH_BLOCK_CAP_RATIO)
+        if layout.width * scale > area.width:  # 分けても収まらない式だけ縮める
+            font_size *= area.width / (layout.width * scale)
+            scale = math_scale(font_size, MATH_BLOCK_CAP_RATIO)
+        draw_w = layout.width * scale
+        height = (layout.height + layout.depth) * scale
+        remaining = len(rows) - row
+
+        bar_pt = detect_top_level_fraction_bar(layout)
+        if bar_pt is not None:
+            above = (layout.height - bar_pt) * scale
+            below = (bar_pt + layout.depth) * scale
+            rows_above = max(1, math.ceil(above / line_spacing))
+            required = rows_above + max(1, math.ceil(below / line_spacing))
+            if remaining < required:
+                return -1
+            bar_y: float | None = rows[row + rows_above - 1]
+            center_y = bar_y
+            y_bottom = bar_y - below
+        else:
+            required = max(2, math.ceil(height / line_spacing))
+            if remaining < required:
+                return -1
+            bar_y = None
+            # 帯の上端は先頭行の上の罫線、下端は最終行の罫線
+            center_y = (rows[row] + line_spacing + rows[row + required - 1]) / 2
+            y_bottom = center_y - height / 2
+
+        x_left = area.x + (area.width - draw_w) / 2
+        spec = MathSpec(
+            src,
+            (x_left, y_bottom, draw_w, height),
+            "center",
+            handwritten=True,
+            fraction_bar_y=bar_y,
+        )
+        out.append(CharPlacement("", x_left, y_bottom, font_size, math=spec))
+        if tag_elem is not None:
+            self._place_tag(tag_elem, x_left + draw_w, center_y - line_spacing / 2, area, out)
+        return required
+
+    def _place_tag(
+        self,
+        tag_elem: MathElement,
+        body_right: float,
+        y: float,
+        area: ContentArea,
+        out: list[CharPlacement],
+    ) -> None:
+        """式番号を本体の直後（1 文字空け）に置く。本文幅を超える場合のみ右端へ寄せる。"""
+        tag_width = MathLayoutEngine.layout([tag_elem], x=0, y=0, font_size=self.font_size).width
+        tag_x = min(body_right + self.font_size, area.x + area.width - tag_width)
+        tag_box = MathLayoutEngine.layout([tag_elem], x=tag_x, y=y, font_size=self.font_size)
+        out.extend(_text_placements(tag_box.placements))
 
     def _place_table(
         self,

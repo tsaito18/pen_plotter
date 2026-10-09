@@ -17,11 +17,16 @@ class MathSpec:
         bbox: ``(x_left, y, width, height)`` mm。``align="baseline"`` のとき ``y`` は
             本文行ボックスの下端（本文文字の ``placement.y`` と同じ基準）。
         align: ``"center"``=ブロック数式（bbox 中央）/ ``"baseline"``=インライン数式。
+        handwritten: matplotlib の配置へ本文と同じ手書き字形を貼る（False は活字の細線化）。
+            縮尺は配置要素の ``font_size``（本文の字の大きさ）から決める。
+        fraction_bar_y: ブロック数式の主分数線を乗せる罫線の y(mm)。None なら bbox の中央。
     """
 
     source: str
     bbox: tuple[float, float, float, float]
     align: MathAlign = "center"
+    handwritten: bool = False
+    fraction_bar_y: float | None = None
 
 
 @dataclass(frozen=True)

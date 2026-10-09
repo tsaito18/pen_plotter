@@ -105,6 +105,15 @@ def _render_formula_unit_strokes(
     return (aspect, tuple(result)) if result else None
 
 
+def glyph_skeleton(char: str) -> list[Stroke] | None:
+    """1 字（∑ ∫ など手書き字形の無い記号）を細線化した字形（縦横比を保った単位系 Y-UP）。"""
+    rendered = _render_formula_unit_strokes(char)
+    if not rendered:
+        return None
+    aspect, strokes = rendered
+    return [s * np.array([aspect, 1.0]) for s in strokes]
+
+
 def formula_draw_width_mm(math_src: str, h_mm: float) -> float:
     """数式を高さ h_mm で描いたときの実際の描画幅(mm)。式番号の配置に使う。
 

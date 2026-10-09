@@ -387,6 +387,13 @@ def _almost_equal_to() -> list[Stroke]:
     return [wave1, wave2]
 
 
+@_symbol_glyph("≒")
+def _approximately_equal_or_image_of() -> list[Stroke]:
+    top = np.array([[0.2, 0.4], [0.8, 0.4]], dtype=np.float64)
+    bot = np.array([[0.2, 0.6], [0.8, 0.6]], dtype=np.float64)
+    return [top, bot, small_dot(0.2, 0.82, 0.04), small_dot(0.8, 0.18, 0.04)]
+
+
 @_symbol_glyph("∞")
 def _infinity() -> list[Stroke]:
     t = np.linspace(0, 2 * np.pi, 40)

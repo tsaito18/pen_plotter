@@ -87,6 +87,28 @@ _LATEX_OPERATORS: dict[str, str] = {
     "lim": "lim",
     "max": "max",
     "min": "min",
+    # 逆三角・双曲線・その他の関数名（未対応だと式から名前が丸ごと抜ける）
+    **{
+        name: name
+        for name in (
+            "arcsin",
+            "arccos",
+            "arctan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "sec",
+            "csc",
+            "cot",
+            "sup",
+            "inf",
+            "det",
+            "deg",
+            "dim",
+            "gcd",
+            "arg",
+        )
+    },
 }
 _LATEX_TEXT_COMMANDS: set[str] = {"mathrm", "text", "mathbf", "mathit"}
 _LATEX_ACCENTS: set[str] = {
