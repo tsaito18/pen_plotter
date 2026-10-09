@@ -8,7 +8,6 @@ PRETRAIN_CP  ?= data/models/pretrain_checkpoint.pt
 USER_DIR     ?= data/user_strokes
 REF_DIR      ?= data/strokes
 PORT         ?= 7860
-COLLECT_PORT ?= 8080
 EPOCHS_PRE   ?= 80
 EPOCHS_FT    ?= 20
 TAG          ?= latest
@@ -17,12 +16,12 @@ help: ## ヘルプを表示
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-ui: ## Web UI を起動
+ui: ## Web UI（スタジオ / と筆跡 /collect）を起動
 	$(RUN) python scripts/run_ui.py --checkpoint $(CHECKPOINT) --kanjivg-dir $(REF_DIR) \
 		--user-strokes-dir $(USER_DIR) --port $(PORT)
 
-collect: ## 手書きサンプル収集 UI を起動
-	$(RUN) python scripts/collect_strokes.py --output-dir $(USER_DIR) --port $(COLLECT_PORT)
+collect: ## 筆跡の収集画面（Web UI の /collect）を起動
+	$(RUN) python scripts/collect_strokes.py --output-dir $(USER_DIR) --port $(PORT) --checkpoint $(CHECKPOINT)
 
 pretrain: ## 変形モデルをユーザー筆跡で訓練
 	$(RUN) python scripts/train.py pretrain --user-dir $(USER_DIR) --ref-dir $(REF_DIR) \

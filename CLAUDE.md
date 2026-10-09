@@ -8,7 +8,7 @@
 - Python 3.11+ (venvは3.12で作成、IPEX互換性のため)
 - PyTorch (ML) — XPU版でIntel Arc GPU対応予定
 - Matplotlib (プレビュー)
-- Web UI: FastAPI + uvicorn（API）、素の HTML/CSS/JS（ES Modules・ビルド不要）、WebSerial でプロッタ送信
+- Web UI: FastAPI + uvicorn（API）、Preact + htm（`static/vendor/` に同梱・import map で読み込み・ビルド不要）、WebSerial でプロッタ送信
 - xDraw A4 ペンプロッタ（GRBL互換 DrawCore ファームウェア）
 - パッケージマネージャー: uv
 
@@ -29,7 +29,7 @@
 
 ### ディレクトリ構成（依存は上から下へ。下の層は上の層を import しない）
 ```
-src/ui/          Web UI（server.py: FastAPI API, static/: 画面・用紙ビューア・WebSerial 送信, content.py: 例文・書式早見表）
+src/ui/          Web UI（server.py: スタジオの API, collect_api.py: 筆跡の API・モデル選択, static/: 画面, content.py: 例文・書式早見表）
 src/pipeline.py  テキスト→組版→ストローク→プレビュー/G-code（PlotterPipeline）
 src/settings.py  生成設定 Settings（UI・CLI・パイプラインの既定値の単一ソース）
 src/diagnostics.py レイアウト診断（字形欠損・文字かぶり）
@@ -40,7 +40,7 @@ src/handwriting/ 手書きの揺らぎ（augmentation, pink_noise）と筆遣い
 src/model/       ML（deformers, style_encoder, aligner, data, training, inference）— torch 依存はここだけ
 src/gcode/       G-code 生成・プロッタ設定・キャリブレーション
 src/comm/, src/plotter_gui/  GRBL シリアル通信・Tkinter 送信 GUI
-src/collector/   手書きサンプル収集（iPad UI, KanjiVG パーサー, プロファイル, 訓練ジョブ）
+src/collector/   手書きサンプル収集（service: 保存・見直し・収集順・依頼キュー, KanjiVG パーサー, プロファイル, 訓練ジョブ）
 src/geometry.py, src/resources.py  共通の型・幾何関数 / 同梱データのパス解決
 ```
 - 文字の描画経路（`render/char_renderer.py`）: 数式 → 幾何字形（記号・句読点・ギリシャ文字）→ ユーザー筆跡 → 幾何英字 → 部品合成（本人の書いた部品で組み立て、CJKのみ）→ ML変形（CJKのみ）→ KanjiVG参照
@@ -88,8 +88,8 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 | `scripts/prepare_kanjivg.py --download` | KanjiVGデータ取得・変換（6,699文字）＋部品表 `components.json`。既存データに部品表だけ足すときは `--components-only` |
 | `scripts/train.py pretrain` | ユーザーデータ直接訓練（UserDeformationTrainer → pretrain_checkpoint.pt） |
 | `scripts/train.py finetune` | ファインチューニング（StyleEncoderのみ → finetuned.pt） |
-| `scripts/collect_strokes.py` | ガイド付き手書きサンプル収集（381文字セット） |
-| `scripts/run_ui.py` | Web UI（手書きスタジオ）起動。手順は docs/web_ui.md |
+| `scripts/collect_strokes.py` | 筆跡の収集画面（Web UI の `/collect`）を開いて起動（旧オプション互換） |
+| `scripts/run_ui.py` | Web UI 起動（スタジオ `/` と筆跡 `/collect`）。手順は docs/web_ui.md |
 | `scripts/compare_handwriting.py` | 固定seedの手書きページPNG（改善前後のA/B比較） |
 | `scripts/preview_chars.py` | ML変形の品質確認グリッド（参照字形×サンプル） |
 | `scripts/diagnose_layout.py` | レイアウト診断（字形欠損・文字かぶり） |
@@ -143,7 +143,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - Phase 9 進行中: 少量サンプル対応（Contrastive StyleEncoder + TransformerDeformer実装済み、訓練・推論パイプライン統合済み）
 - 訓練: ユーザーデータのみ（381文字/925サンプル）、CASIA不使用
 - ストロークアライメント（Hungarian + MHD + マージ/スプリット検出）実装済み — 訓練時use_aligner=True対応
-- 207テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
+- 229テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）。うち 8 件は実ブラウザの画面テスト（`tests/test_ui_e2e.py`、`-m e2e`。`uv sync --extra e2e` と Chromium が無ければスキップ）
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -229,6 +229,10 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - ホーミング: `$H`（左上角に移動）→ `G92 X0 Y297 Z0`（左上角を紙座標(0,297)に設定）
 - 紙座標: (0,0)=左下、(210,297)=右上
 - G-code送信: Windows側で `python scripts/run_plotter_gui.py` または `python -m src.plotter_gui` で GUI を起動（src/plotter_gui/）。CH340 自動検出・ホーミング・ペンテスト・進捗表示・緊急停止が GUI 操作で可能。実機チェックリストは docs/plotter_gui_checklist.md
-- **Web UI（手書きスタジオ, 2026-10）**: `scripts/run_ui.py` → `http://localhost:7860`。Gradio を廃し FastAPI＋素の JS で全面刷新。`/api/layout`（組版のみ＝入力中のライブ下書き・設定検証）、`/api/render`（NDJSON で進捗→結果。ページごとのストローク＋**同じストロークから作った G-code**＋行範囲 spans。gzip すると進捗が溜まるのでこの応答だけ無圧縮）。seed（書きぶり番号）で再現。送信は `static/plotter.js`（stop-and-wait、一時停止はペンを上げた直後、停止はペン上げ、緊急停止は `!`+0x18、ページ間で用紙交換）。用紙ビューア `static/paper.js` は base 層＋追記型インク層のキャッシュで描画（毎フレーム全画を描くと送信ループが詰まる）。手順は docs/web_ui.md
+- **Web UI（2026-10）**: `scripts/run_ui.py` → スタジオ `http://localhost:7860/`（PC。書く→清書→描く）と筆跡 `http://<PCのIP>:7860/collect`（iPad。集める・見直す・学習）を 1 サーバーで配る。Gradio と旧収集サーバー（http.server・8080）は廃止。Preact + htm（ビルド不要。`static/vendor/` に同梱し各 HTML の import map で読む）。`static/`: 共通 `base.css`・`common.js`（html/Icon/トースト/API）・`store.js`（小さな状態ストア）・`icons.svg`、スタジオ `index.html`・`app.js`（起動）・`studio/state.js`（状態と操作）・`studio/view.js`（画面）、筆跡 `collect.html`・`collect.js`・`collect/state.js`・`collect/view.js`。canvas・textarea を扱う命令的な部品（`paper.js`・`plotter.js`・`editor.js`・`pad.js`・`glyph.js`）は Preact に描き直させず state.js が持って結び付ける。画面テストは要素 ID に依存するので ID を変えるときは `tests/test_ui_e2e.py` も直す。
+  - スタジオ: `/api/layout`（組版のみ＝ライブ下書き）、`/api/render`（NDJSON で進捗→ページごとのストローク＋**同じストロークから作った G-code**＋行範囲 spans。gzip すると進捗が溜まるのでこの応答だけ無圧縮）。seed（書きぶり番号）で再現。送信は `plotter.js`（stop-and-wait、一時停止はペンを上げた直後、停止はペン上げ、緊急停止は `!`+0x18、ページ間で用紙交換）。用紙ビューア `paper.js` は base 層＋追記型インク層のキャッシュ（毎フレーム全画を描くと送信ループが詰まる）
+  - 筆跡: `collector/service.CollectorService`（プロファイルはリクエストごと＝iPad と PC で別の人を同時に扱える）。削除は `<root>/.trash/` へ移すだけで取り消し可、スタジオからの「書いて教えて」依頼は `<root>/.state/queue-<id>.json`（保存で消える）。`.` 始まりのディレクトリはプロファイル扱いしない。書き込みは 512×512 論理座標・pointermove 粒度で記録（既存データと同じ）、画面の線だけ coalesced/predicted events で滑らかに。文字はディレクトリ名に使える 1 字だけ受け付ける（`validate_char`）
+  - 学習・モデル: `/api/training*`（出力先は `--models-dir` 配下に限定）、`/api/models`・`/api/models/use`（清書に使うモデルを再起動なしで切替）。筆跡が増減すると `CollectorService.revision` が上がり、`PlotterPipeline(style_revision=...)` 経由で ML のスタイル推定を読み直す
+  - 手順は docs/web_ui.md
 - 開発サーバー(192.168.86.100)からの .gcode 取得は、当面は手動 scp。GUI への取込みは Phase 2 で予定
 - Extension ソース: git@github.com:tsaito18/xdraw_inkscape_extension.git
