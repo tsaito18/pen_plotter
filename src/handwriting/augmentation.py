@@ -50,7 +50,11 @@ def _densify(points: np.ndarray, spacing: float) -> np.ndarray:
 class AugmentConfig:
     """揺らぎの強度。長さ系は標準偏差（mm）、傾きは rad。"""
 
-    baseline_drift: float = 0.3
+    # 行・字の上下の揺らぎ(mm)。本人の手書きレポートの実測（行ごとの罫線からの高さの
+    # ばらつき 0.50mm、字ごとの下端のばらつき 0.40mm）に近づく値（汚さ 0.4 のとき）
+    baseline_drift: float = 0.6
+    # 字ごとの独立な上下のガタつき(mm)。実物は隣の字とほぼ無相関（ラグ 1 相関 -0.06）
+    char_baseline_jitter: float = 0.4
     size_variation: float = 0.05
     slant_variation: float = 0.02
     spacing_variation: float = 0.5
@@ -63,7 +67,7 @@ class AugmentConfig:
     pink_octaves: int = 16
 
     def scaled(self, messiness: float) -> AugmentConfig:
-        """レイアウト揺らぎ 4 項目（ベースライン・字間・サイズ・傾き）を一括倍率した設定。
+        """レイアウト揺らぎ（ベースライン・字ごとの上下・字間・サイズ・傾き）を一括倍率した設定。
 
         GUI の「汚さ」スライダー用。``messiness=1.0`` で素の値、``0`` で揺らぎなし。
         密度系は字形の質感なので据え置く。
@@ -71,6 +75,7 @@ class AugmentConfig:
         return replace(
             self,
             baseline_drift=self.baseline_drift * messiness,
+            char_baseline_jitter=self.char_baseline_jitter * messiness,
             spacing_variation=self.spacing_variation * messiness,
             size_variation=self.size_variation * messiness,
             slant_variation=self.slant_variation * messiness,
@@ -111,7 +116,8 @@ class HandwritingAugmenter:
         """行内の次の文字のベースラインオフセット(mm)。"""
         if not self.enabled:
             return 0.0
-        return self._draw("char_baseline", self.config.baseline_drift * 0.5)
+        wave = self._draw("char_baseline", self.config.baseline_drift * 0.5)
+        return wave + float(self.rng.normal(0.0, self.config.char_baseline_jitter))
 
     def next_char_spacing(self) -> float:
         """次の文字の字間オフセット(mm)。"""

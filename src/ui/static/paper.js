@@ -4,8 +4,10 @@
 // → プロット進捗（未描画は淡く）→ ペン先マーカー。
 // ズームはホイール（Ctrl/⌘ 併用またはピンチ）、パンはドラッグ / ホイール。
 
-const INK_MAX_MM = 0.3; // 完全接触の線幅（0.3mm シャーペン相当）
-const INK_MIN_MM = 0.05; // 払いの抜けの最小幅
+// 完全接触の線幅はサーバ（PlotterConfig.pen_width_mm＝実物のスキャン実測）から受け取る
+let INK_MAX_MM = 0.35;
+const INK_MIN_RATIO = 0.17; // 払いの抜けの最小幅（ペン幅比、preview.WIDTH_MIN_RATIO と同じ）
+let INK_MIN_MM = INK_MAX_MM * INK_MIN_RATIO;
 const CHUNK = 96; // 進捗描画用にストロークをまとめる単位
 const WIDTH_BUCKETS = 8;
 
@@ -78,6 +80,10 @@ export class PaperView {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
     this.paper = paper;
+    if (paper.pen_width_mm) {
+      INK_MAX_MM = paper.pen_width_mm;
+      INK_MIN_MM = INK_MAX_MM * INK_MIN_RATIO;
+    }
     this.scale = 1; // CSS px / mm
     this.ox = 0;
     this.oy = 0;

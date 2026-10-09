@@ -113,12 +113,26 @@ def test_same_seed_gives_same_sequence():
 
 
 def test_char_baseline_drifts_smoothly_with_pink_noise():
-    pink = HandwritingAugmenter(seed=0)
-    white = HandwritingAugmenter(AugmentConfig(use_pink_noise=False), seed=0)
+    # 波の成分だけを見る（字ごとの独立なガタつきは別のテスト）
+    pink = HandwritingAugmenter(AugmentConfig(char_baseline_jitter=0.0), seed=0)
+    white = HandwritingAugmenter(
+        AugmentConfig(use_pink_noise=False, char_baseline_jitter=0.0), seed=0
+    )
     pink_series = np.array([pink.next_char_baseline() for _ in range(3000)])
     white_series = np.array([white.next_char_baseline() for _ in range(3000)])
     assert _lag1_autocorr(pink_series) > 0.5
     assert abs(_lag1_autocorr(white_series)) < 0.1
+
+
+def test_char_baseline_has_an_independent_per_char_jitter():
+    """実物の字の上下は隣の字とほぼ無相関のガタつきを含む（ゆるやかな波だけでは足りない）。"""
+    cfg = AugmentConfig(baseline_drift=0.0, char_baseline_jitter=0.3)
+    aug = HandwritingAugmenter(cfg, seed=0)
+    y = np.array([aug.next_char_baseline() for _ in range(2000)])
+    assert y.std() == pytest.approx(0.3, rel=0.1)
+    assert abs(_lag1_autocorr(y)) < 0.1
+    default = AugmentConfig().char_baseline_jitter
+    assert AugmentConfig().scaled(0.5).char_baseline_jitter == default / 2
 
 
 def test_density_scales_stay_within_configured_range():
