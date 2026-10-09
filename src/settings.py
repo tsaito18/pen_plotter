@@ -28,6 +28,8 @@ class Settings:
         instance_variation: 同じ字を書くたびに形を変える強さ ∈[0,1]。
         entry_taper: 入筆（始筆を軽く入れる）強さ ∈[0,1]。【実機注意】始筆がかすれ得る。
         connection_strength: 連綿（近い画を薄いつなぎ線で続ける）強さ ∈[0,1]。
+        finish_strength: 払い・はねの終端を抜く（細く・薄くする）強さ ∈[0,1]。既定 0 は
+            鉛筆の手書きどおり先まで同じ太さ（先細りは筆ペンのようで不自然になる）。
         plot_page_numbers: ページ番号を手書きで入れるか。
         paper_width / paper_height: 用紙寸法 (mm)。
     """
@@ -44,6 +46,7 @@ class Settings:
     instance_variation: float = 0.1
     entry_taper: float = 0.0
     connection_strength: float = 0.0
+    finish_strength: float = 0.0
     plot_page_numbers: bool = True
     paper_width: float = 210.0
     paper_height: float = 297.0
@@ -66,6 +69,7 @@ class Settings:
             paper_height=self.paper_height,
             pressure_variation=self.pressure_variation,
             entry_taper=self.entry_taper,
+            finish_strength=self.finish_strength,
         )
 
     def validate(self) -> list[str]:

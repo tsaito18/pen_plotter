@@ -13,7 +13,6 @@ from src.handwriting.finishing import (
     HARAI,
     NONE,
     TOME,
-    apply_finishing,
     arc_length_from_end,
     classify_finish,
     contact_profile,
@@ -25,9 +24,41 @@ from src.handwriting.finishing import (
 from src.handwriting.pink_noise import PinkNoise1D
 
 
+def _max_turn(stroke: np.ndarray) -> float:
+    """隣り合う区間の向きの変化の最大値(rad)。"""
+    d = np.diff(stroke, axis=0)
+    ang = np.arctan2(d[:, 1], d[:, 0])
+    return float(np.abs((np.diff(ang) + np.pi) % (2 * np.pi) - np.pi).max())
+
+
 def _lag1_autocorr(x: np.ndarray) -> float:
     x = x - x.mean()
     return float((x[:-1] * x[1:]).mean() / x.var())
+
+
+# --- 幾何字形の手書き化 ---
+
+
+def test_hand_drawn_rounds_corners_and_bends_straight_lines():
+    z = np.array([[0.1, 0.9], [0.9, 0.9], [0.1, 0.1], [0.9, 0.1]])  # 「Z」の 1 筆
+    (out,) = HandwritingAugmenter(seed=0).hand_drawn([z])
+    assert _max_turn(out) < 0.6 * _max_turn(z)  # 角が丸くなる
+    assert np.allclose(out[[0, -1]], z[[0, -1]], atol=0.06)  # 始点・終点はほぼ同じ
+    top = out[out[:, 1] > 0.8]
+    assert np.ptp(top[:, 1]) > 0.003  # 横棒が定規の直線ではない
+    again = HandwritingAugmenter(seed=0).hand_drawn([z])[0]
+    other = HandwritingAugmenter(seed=1).hand_drawn([z])[0]
+    assert np.allclose(out, again)
+    assert out.shape != other.shape or not np.allclose(out, other)
+
+
+def test_hand_drawn_keeps_small_dots_small_and_is_off_when_disabled():
+    t = np.linspace(0, 2 * np.pi, 12)
+    dot = np.column_stack([0.5 + 0.05 * np.cos(t), 0.2 + 0.05 * np.sin(t)])
+    (out,) = HandwritingAugmenter(seed=0).hand_drawn([dot])
+    assert np.abs(out.mean(axis=0) - dot.mean(axis=0)).max() < 0.02
+    off = HandwritingAugmenter(AugmentConfig(enabled=False), seed=0)
+    assert off.hand_drawn([dot])[0] is dot
 
 
 # --- 1/f ノイズ ---
@@ -169,25 +200,6 @@ def test_classify_finish(kvg_type: str, expected: str):
 )
 def test_infer_finish_from_trajectory(points, expected):
     assert infer_finish_from_stroke(np.array(points, dtype=float)) == expected
-
-
-# --- 終端加工 ---
-
-
-def test_harai_and_hane_extend_along_terminal_tangent():
-    stroke = np.column_stack([np.linspace(0, 10, 11), np.zeros(11)])
-    harai, hane, tome = apply_finishing([stroke] * 3, [HARAI, HANE, TOME], scale=10.0)
-    assert harai[-1, 0] == pytest.approx(11.5)  # 0.15 * scale
-    assert hane[-1, 0] == pytest.approx(11.2)  # 0.12 * scale
-    assert np.allclose(harai[:, 1], 0) and np.allclose(hane[:, 1], 0)
-    assert tome is stroke
-
-
-def test_finishing_is_safe_for_degenerate_input():
-    dot = np.array([[1.0, 1.0], [1.0, 1.0]])
-    single = np.array([[0.0, 0.0]])
-    out = apply_finishing([dot, single, dot], [HARAI], scale=5.0)  # finishes が短くても可
-    assert out[0] is dot and out[1] is single and out[2] is dot
 
 
 # --- 接触率（Z リフト・線幅の単一ソース） ---

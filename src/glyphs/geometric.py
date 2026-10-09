@@ -231,6 +231,27 @@ def _right_square_bracket() -> list[Stroke]:
     return [np.array([[0.38, 0.9], [0.6, 0.9], [0.6, 0.1], [0.38, 0.1]], dtype=np.float64)]
 
 
+def _left_brace_points() -> Stroke:
+    # 上端から左へ反りながら下り、中央で左へ尖って、上半分を上下反転した形で下端へ
+    t = np.linspace(0.0, 1.0, 9)
+    upper = np.stack([0.42 + 0.2 * (1 - np.sin(np.pi / 2 * t)) ** 2, 0.95 - 0.37 * t], axis=1)
+    tip = np.array([[0.4, 0.55], [0.3, 0.5], [0.4, 0.45]])
+    lower = upper[::-1] * np.array([1.0, -1.0]) + np.array([0.0, 1.0])
+    return np.concatenate([upper, tip, lower]).astype(np.float64)
+
+
+@_symbol_glyph("{")
+def _left_brace() -> list[Stroke]:
+    return [_left_brace_points()]
+
+
+@_symbol_glyph("}")
+def _right_brace() -> list[Stroke]:
+    points = _left_brace_points()
+    points[:, 0] = 1.0 - points[:, 0]
+    return [points]
+
+
 @_symbol_glyph("~")
 def _tilde() -> list[Stroke]:
     t = np.linspace(0.0, 1.0, 20)
@@ -263,47 +284,42 @@ def _right_parenthesis() -> list[Stroke]:
     return [np.array(points)]
 
 
+# かぎ括弧は 1 筆: 「は横画を右から左へ引いて下へ折る（┌）、」は下ろして左へ折る（┘）
 @_symbol_glyph("「")
 def _left_corner_bracket() -> list[Stroke]:
-    return [
-        np.array([[0.8, 0.15], [0.25, 0.15]], dtype=np.float64),
-        np.array([[0.25, 0.15], [0.25, 0.45]], dtype=np.float64),
-    ]
+    return [np.array([[0.8, 0.85], [0.25, 0.85], [0.25, 0.3]], dtype=np.float64)]
 
 
 @_symbol_glyph("」")
 def _right_corner_bracket() -> list[Stroke]:
-    return [
-        np.array([[0.75, 0.55], [0.75, 0.85]], dtype=np.float64),
-        np.array([[0.75, 0.85], [0.2, 0.85]], dtype=np.float64),
-    ]
+    return [np.array([[0.75, 0.7], [0.75, 0.15], [0.2, 0.15]], dtype=np.float64)]
 
 
 @_symbol_glyph("『")
 def _left_white_corner_bracket() -> list[Stroke]:
     return [
-        np.array([[0.8, 0.15], [0.25, 0.15], [0.25, 0.45]], dtype=np.float64),
-        np.array([[0.65, 0.25], [0.35, 0.25], [0.35, 0.45]], dtype=np.float64),
+        np.array([[0.8, 0.85], [0.25, 0.85], [0.25, 0.3]], dtype=np.float64),
+        np.array([[0.65, 0.72], [0.38, 0.72], [0.38, 0.4]], dtype=np.float64),
     ]
 
 
 @_symbol_glyph("』")
 def _right_white_corner_bracket() -> list[Stroke]:
     return [
-        np.array([[0.75, 0.55], [0.75, 0.85], [0.2, 0.85]], dtype=np.float64),
-        np.array([[0.65, 0.55], [0.65, 0.75], [0.35, 0.75]], dtype=np.float64),
+        np.array([[0.75, 0.7], [0.75, 0.15], [0.2, 0.15]], dtype=np.float64),
+        np.array([[0.62, 0.6], [0.62, 0.28], [0.35, 0.28]], dtype=np.float64),
     ]
 
 
 @_symbol_glyph("ω")
 def _greek_omega() -> list[Stroke]:
-    # ω: 左右の半円を底辺でつないだ形
-    t_left = np.linspace(np.pi, 2 * np.pi, 16)
-    left = np.stack([0.28 + 0.20 * np.cos(t_left), 0.45 + 0.30 * np.sin(t_left)], axis=1)
-    t_right = np.linspace(np.pi, 2 * np.pi, 16)
-    right = np.stack([0.72 + 0.20 * np.cos(t_right), 0.45 + 0.30 * np.sin(t_right)], axis=1)
-    bridge = np.array([[0.20, 0.45], [0.80, 0.45]], dtype=np.float64)
-    return [left, right, bridge]
+    # ω: 左上から下りて丸く中央へ戻り、もう一度丸く下りて右上へ抜ける 1 筆（丸い w）
+    t = np.linspace(np.pi, 2 * np.pi, 16)
+    left = np.stack([0.3 + 0.2 * np.cos(t), 0.55 + 0.45 * np.sin(t)], axis=1)
+    right = np.stack([0.7 + 0.2 * np.cos(t), 0.55 + 0.45 * np.sin(t)], axis=1)
+    lead_in = np.array([[0.16, 0.95]])
+    lead_out = np.array([[0.84, 0.95]])
+    return [np.concatenate([lead_in, left, right[1:], lead_out]).astype(np.float64)]
 
 
 @_symbol_glyph("φ")

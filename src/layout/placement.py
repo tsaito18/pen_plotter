@@ -34,6 +34,7 @@ class CharPlacement:
         y: 行ボックス下端(mm)。字形は ``y`` から ``line_spacing`` の帯に収まる。
         font_size: 字の目標高(mm)。字種・密度・揺らぎの倍率は焼き込み済み。
         slant: 文字単位の微小傾き(rad)。
+        advance: 組版が予約した字送り(mm)。字形はこの幅の中央に置く（None なら字種の既定幅）。
         line_segment: 罫線 ``(x1, y1, x2, y2)``。表の罫線に使う。
         math: 数式の描画指定。
     """
@@ -43,6 +44,7 @@ class CharPlacement:
     y: float
     font_size: float
     slant: float = 0.0
+    advance: float | None = None
     line_segment: tuple[float, float, float, float] | None = None
     math: MathSpec | None = None
 

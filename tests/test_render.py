@@ -15,7 +15,7 @@ from src.handwriting.finishing import HANE, HARAI, NONE, TOME
 from src.layout.placement import CharPlacement, MathSpec
 from src.render.char_renderer import CharRenderer, _enforce_horizontal_rise, waver_scale
 from src.render.math_image import formula_aspect, formula_ink_em, render_latex_to_strokes
-from src.render.positioning import position_strokes
+from src.render.positioning import X_HEIGHT, position_strokes
 from src.render.preview import (
     WIDTH_MAX,
     WIDTH_MIN,
@@ -63,6 +63,21 @@ def test_latin_glyphs_follow_x_height_cap_and_descender_bands():
     assert _bbox(latin_glyph("H"))[3] == pytest.approx(0.95)
 
 
+def test_curly_braces_point_outward():
+    left, right = symbol_glyph("{"), symbol_glyph("}")
+    assert left and right
+    (lx0, _, lx1, _), (rx0, _, rx1, _) = _bbox(left), _bbox(right)
+    tip = np.concatenate(left)[np.argmin(np.concatenate(left)[:, 0])]
+    assert tip[1] == pytest.approx(0.5, abs=0.05)  # { は中央の尖りが左へ出る
+    assert np.isclose(lx0 + lx1, 2 - (rx0 + rx1))  # } は { の左右反転
+
+
+def test_omega_is_one_rounded_stroke_without_a_top_bar():
+    (omega,) = symbol_glyph("ω")  # 横棒があると ϖ に見える
+    assert omega[0, 1] > 0.5 and omega[-1, 1] > 0.5  # 両端は上
+    assert omega[:, 1].min() < 0.2
+
+
 def test_s_is_not_mirrored():
     s = latin_glyph("S")[0]
     upper = s[s[:, 1] > 0.6]
@@ -77,6 +92,7 @@ def test_kanjivg_store_loads_strokes_with_types(kanjivg_dir: Path):
     strokes, types = store.load("人")
     assert len(strokes) == 2 and types == ["㇒", "㇏"]
     assert store.load("無") == (None, [])
+    assert store.load("/") == store.load("..") == (None, [])  # パスとして不正な字
     assert KanjiVGStore(None).load("人") == (None, [])
 
 
@@ -85,6 +101,129 @@ def test_user_db_prefers_the_most_careful_sample(user_strokes_root: Path):
     assert "十" in db and len(db) == 2
     assert len(db.best_sample("十")[0]) == 30  # 点数の多いサンプル
     assert db.best_sample("無") is None
+
+
+# --- 書き癖 ---
+
+
+def _angle(stroke: np.ndarray) -> float:
+    d = stroke[-1] - stroke[0]
+    return float(np.degrees(np.arctan2(d[1], d[0])))
+
+
+def test_writing_style_tilts_horizontals_and_verticals_separately():
+    from src.glyphs.style import WritingStyle
+
+    h = np.array([[0.0, 0.5], [1.0, 0.5]])
+    v = np.array([[0.5, 1.0], [0.5, 0.0]])
+    out_h, out_v = WritingStyle(horizontal_rise_deg=7.0, vertical_lean_deg=-2.0).apply([h, v])
+    assert _angle(out_h) == pytest.approx(7.0)  # 横画は右上がり
+    assert _angle(out_v) == pytest.approx(-92.0)  # 縦画は上が右へ傾く
+    assert WritingStyle().apply([h])[0] is h  # 恒等
+
+
+def test_writing_style_is_estimated_from_the_users_samples(tmp_path: Path, kanjivg_dir: Path):
+    from src.glyphs.style import WritingStyle, estimate_writing_style
+    from tests.conftest import line, write_sample
+
+    rise = np.tan(np.radians(7.0)) * 80  # 筆跡は Y-DOWN なので右上がり = y が減る
+    for i in range(3):
+        write_sample(tmp_path, "十", [line(10, 50, 90, 50 - rise), line(50, 10, 52, 90)], index=i)
+    style = estimate_writing_style(UserStrokeDB(tmp_path), KanjiVGStore(kanjivg_dir), min_pairs=3)
+    assert style.horizontal_rise_deg == pytest.approx(7.0, abs=0.5)
+    assert style.vertical_lean_deg == pytest.approx(1.4, abs=0.5)  # 下端が右へずれた縦画
+    empty = estimate_writing_style(UserStrokeDB(None), KanjiVGStore(kanjivg_dir))
+    assert empty == WritingStyle()  # データが足りなければ変えない
+
+
+def test_reference_glyphs_take_on_the_users_style(kanjivg_dir: Path):
+    from src.glyphs.style import WritingStyle
+
+    plain = _renderer(kanjivg_dir=kanjivg_dir, writing_style=WritingStyle()).render(_at("一"))
+    styled = _renderer(kanjivg_dir=kanjivg_dir, writing_style=WritingStyle(7.0, 0.0))
+    (stroke,) = styled.render(_at("一")).strokes
+    assert _angle(stroke) == pytest.approx(7.0, abs=0.5)
+    assert _angle(plain.strokes[0]) == pytest.approx(2.0, abs=0.5)  # 下限保証の 2° のみ
+
+
+# --- 部品合成 ---
+
+
+def _box(x0: float, y0: float, x1: float, y1: float) -> list[list[tuple[float, float]]]:
+    """「口」を 3 画で（左縦 → 上と右の折れ → 下）。座標は呼び出し側の向きのまま。"""
+    from tests.conftest import line
+
+    return [
+        line(x0, y1, x0, y0),
+        line(x0, y1, x1, y1) + line(x1, y1, x1, y0)[1:],
+        line(x0, y0, x1, y0),
+    ]
+
+
+@pytest.fixture
+def parts_world(tmp_path: Path) -> tuple[Path, Path]:
+    """KanjiVG（Y-UP）に「吅」「品」と部品表、本人は「吅」だけ書いた（Y-DOWN）。"""
+    import json
+
+    from src.glyphs.compose import COMPONENTS_FILE
+    from tests.conftest import write_sample
+
+    kvg, user = tmp_path / "kvg", tmp_path / "user"
+    write_sample(kvg, "吅", _box(1, 3, 4, 7) + _box(6, 3, 9, 7))
+    write_sample(kvg, "品", _box(3, 6, 7, 9) + _box(1, 1, 4, 5) + _box(6, 1, 9, 5))
+    table = {
+        "吅": {"strokes": 6, "parts": [["口", "left", [0, 1, 2]], ["口", "right", [3, 4, 5]]]},
+        "品": {
+            "strokes": 9,
+            "parts": [
+                ["口", "top", [0, 1, 2]],
+                ["口", "left", [3, 4, 5]],
+                ["口", "right", [6, 7, 8]],
+            ],
+        },
+    }
+    (kvg / COMPONENTS_FILE).write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
+    # 本人の「吅」: 右下がりに傾いた手書き（Y-DOWN）
+    flip = [[(x * 10, 100 - y * 10 + x) for x, y in s] for s in _box(1, 3, 4, 7) + _box(6, 3, 9, 7)]
+    write_sample(user, "吅", flip)
+    return kvg, user
+
+
+def test_unwritten_char_is_built_from_the_users_own_parts(parts_world):
+    from src.glyphs.compose import ComponentComposer, load_components
+
+    kvg, user = parts_world
+    store = KanjiVGStore(kvg)
+    composer = ComponentComposer(load_components(kvg), UserStrokeDB(user), store)
+    built = composer.compose("品")
+    assert built is not None and len(built) == 9
+    reference, _ = store.load("品")
+    # 各部品は KanjiVG の部品の位置・大きさに入り、線は本人のもの（参照そのものではない）
+    for got, ref in zip(built, reference, strict=True):
+        assert np.allclose(_bbox([got]), _bbox([ref]), atol=0.6)
+    assert not np.allclose(built[3], reference[3], atol=0.05)
+    assert composer.compose("吅") is None  # 本人が書いた字は自分自身からは組み立てない
+    assert composer.compose("無") is None
+
+
+def test_parts_written_in_a_different_stroke_order_are_not_used(parts_world):
+    from src.glyphs.compose import ComponentComposer, load_components
+    from tests.conftest import write_sample
+
+    kvg, user = parts_world
+    shuffled = _box(1, 3, 4, 7)[::-1] + _box(6, 3, 9, 7)[::-1]  # 書き順が逆
+    write_sample(user, "吅", [[(x * 10, 100 - y * 10) for x, y in s] for s in shuffled], index=0)
+    composer = ComponentComposer(load_components(kvg), UserStrokeDB(user), KanjiVGStore(kvg))
+    assert composer.compose("品") is None  # 形の合わない部品は使わず、従来の経路に任せる
+
+
+def test_renderer_uses_composed_glyphs_for_unwritten_chars(parts_world):
+    kvg, user = parts_world
+    r = _renderer(kanjivg_dir=kvg, user_strokes_dir=user)
+    r.render(_at("品"))
+    r.render(_at("吅"))
+    assert r.coverage.composed == ["品"] and r.coverage.user_strokes == ["吅"]
+    assert r.ink_width_ratio("品") is not None
 
 
 # --- 配置 ---
@@ -98,12 +237,96 @@ def test_cjk_fits_cell_and_is_vertically_centered():
     assert (y0 + y1) / 2 == pytest.approx(100.0 + LS / 2)
 
 
-def test_latin_logical_fit_keeps_case_heights_and_baseline():
-    a = position_strokes(latin_glyph("a"), _at("a"), LS, logical_latin=True)
-    h = position_strokes(latin_glyph("H"), _at("H"), LS, logical_latin=True)
-    p = position_strokes(latin_glyph("p"), _at("p"), LS, logical_latin=True)
-    assert _bbox(a)[3] < _bbox(h)[3]
-    assert _bbox(p)[1] < _bbox(h)[1]  # ディセンダはベースラインより下
+def _latin(char: str, strokes: list[np.ndarray]) -> tuple[float, float, float, float]:
+    return _bbox(position_strokes(strokes, _at(char), LS))
+
+
+def test_small_kana_sits_on_the_bottom_line_of_the_other_chars():
+    from src.layout.char_metrics import effective_char_scale
+
+    box = [np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])]
+    kanji_bottom = _bbox(position_strokes(box, _at("漢"), LS))[1]
+    small = _bbox(position_strokes(box, _at("っ", fs=5.0 * effective_char_scale("っ")), LS))
+    assert small[1] == pytest.approx(kanji_bottom, abs=0.15)  # 下に落ち込まない
+
+
+def test_latin_letters_sit_in_case_bands_whatever_the_sample_size():
+    """本人サンプルは大きさがバラバラ（s が A より大きい等）でも、字種の帯に揃う。"""
+    small_e = [np.array([[0.0, 0.0], [0.3, 0.1], [0.0, 0.3]])]
+    big_e = [s * 3 for s in small_e]
+    assert _latin("e", small_e) == pytest.approx(_latin("e", big_e))
+    tall_box = [np.array([[0.0, 0.0], [0.4, 1.0]])]
+    e, cap, p = (_latin(c, tall_box) for c in "eAp")
+    baseline = cap[1]
+    assert e[1] == pytest.approx(baseline)  # 小文字も大文字も同じベースライン
+    assert (e[3] - baseline) == pytest.approx(0.55 * (cap[3] - baseline), rel=0.02)  # x-height
+    assert p[1] < baseline < p[3] < cap[3]  # ディセンダ
+    assert _latin("A", latin_glyph("A"))[1] == pytest.approx(baseline)  # 幾何英字も同じ帯
+    # ギリシャ文字も英字と同じ帯（ω を漢字大に引き伸ばすと ∞、π は ∏ に見える）
+    omega, phi = _latin("ω", symbol_glyph("ω")), _latin("φ", symbol_glyph("φ"))
+    assert omega[1] == pytest.approx(baseline) and omega[3] == pytest.approx(e[3])
+    assert phi[1] < baseline and phi[3] > e[3]
+
+
+def test_wide_latin_samples_are_narrowed_to_their_advance():
+    from src.layout.char_metrics import effective_char_scale, halfwidth_advance
+
+    flat_m = [np.array([[0.0, 0.0], [1.0, 0.5], [2.0, 0.0], [3.0, 0.5]])]
+    x0, _y0, x1, _y1 = _latin("m", flat_m)
+    body = 5.0 / effective_char_scale("m")  # 字種・密度の倍率を外した本文サイズ
+    assert x1 - x0 <= halfwidth_advance("m") * body
+    assert x0 >= 10.0
+
+
+def test_operators_are_small_and_sit_on_the_math_axis():
+    """= + - 等をセル幅いっぱいに伸ばすと隣の字に触れる（ω=2 が一続きに見える）。"""
+    cap = _latin("A", [np.array([[0.0, 0.0], [0.4, 1.0]])])
+    baseline, cap_h = cap[1], cap[3] - cap[1]
+    for op in "=+-<>×":
+        x0, y0, x1, y1 = _bbox(position_strokes(symbol_glyph(op), _at(op), LS))
+        assert x1 - x0 < 0.45 * cap_h
+        assert baseline < (y0 + y1) / 2 < baseline + X_HEIGHT * cap_h
+
+
+def test_brackets_hug_the_text_inside_them():
+    tall = [np.array([[0.0, 0.0], [-0.2, 0.5], [0.0, 1.0]])]
+    opening = _bbox(position_strokes(tall, _at("（"), LS))
+    closing = _bbox(position_strokes(tall, _at("）"), LS))
+    cell_mid = 10.0 + 5.0 * 0.95 / 2
+    assert opening[0] > cell_mid  # 開き括弧はセルの右（中身の側）に寄る
+    assert closing[2] < cell_mid
+    height = opening[3] - opening[1]
+    assert 0.7 * 5.0 < height < 0.95 * 5.0  # 漢字より少し小さい
+    assert (opening[1] + opening[3]) / 2 == pytest.approx(100.0 + LS / 2)
+
+
+def test_corner_brackets_are_upright_and_sit_at_the_top_or_bottom():
+    left = position_strokes(symbol_glyph("「"), _at("「"), LS)
+    right = position_strokes(symbol_glyph("」"), _at("」"), LS)
+    (stroke,) = left
+    assert stroke[0, 1] == pytest.approx(stroke[1, 1])  # 横画から書き始め
+    assert stroke[-1, 1] < stroke[0, 1]  # 縦画は下へ（┌ の形。└ ではない）
+    mid = 100.0 + LS / 2
+    assert _bbox(left)[1] > mid - 0.5 and _bbox(right)[3] < mid + 0.5
+    assert _bbox(left)[0] > _bbox(right)[0]  # 「は右寄り、」は左寄り
+
+
+def test_brackets_prefer_the_users_own_sample(tmp_path: Path):
+    from tests.conftest import line, write_sample
+
+    write_sample(tmp_path, "（", [line(30, 10, 20, 50) + line(20, 50, 30, 90)[1:]])
+    r = _renderer(user_strokes_dir=tmp_path)
+    r.render(_at("（"))
+    r.render(_at("("))  # 半角も全角の本人サンプルで描く
+    r.render(_at("）"))
+    assert r.coverage.user_strokes == ["（", "("]
+    assert r.coverage.geometric == ["）"]
+
+
+def test_glyph_is_centered_in_the_slot_the_typesetter_reserved():
+    box = [np.array([[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]])]
+    x0, _, x1, _ = _bbox(position_strokes(box, _at("り", advance=8.0), LS))
+    assert (x0 + x1) / 2 == pytest.approx(10.0 + 4.0)
 
 
 def test_slant_rotates_about_glyph_center():
@@ -150,11 +373,36 @@ def test_route_priority_user_then_ml_then_kanjivg(kanjivg_dir, user_strokes_root
 
 def test_kanjivg_route_applies_brush_finishes(kanjivg_dir):
     rendered = _renderer(kanjivg_dir=kanjivg_dir).render(_at("人"))
-    assert rendered.finishes == [HARAI, HARAI]
+    assert rendered.finishes == [HARAI, HARAI]  # 筆法は実機の Z リフトとプレビューの線幅に使う
     raw, _ = KanjiVGStore(kanjivg_dir).load("人")
-    assert len(rendered.strokes[0]) > len(raw[0])  # 払いの延長
+    placed = position_strokes(raw, _at("人"), LS)
+    # 払いを接線方向へ伸ばさない（本人の払いは KanjiVG と同じかやや短い。伸ばすと字が尖る）
+    assert np.allclose(rendered.strokes[0][-1], placed[0][-1], atol=1e-6)
     digit = _renderer(kanjivg_dir=kanjivg_dir).render(_at("2"))
     assert set(digit.finishes) == {NONE}
+
+
+def test_geometric_glyphs_are_drawn_by_hand_not_by_ruler():
+    """サンプルの無い英字・記号も、定規の直線ではなく毎回少し違う手書きの線になる。"""
+    r = _renderer(augmenter=HandwritingAugmenter(seed=0))
+    z1, z2 = (r.render(_at("Z")).strokes[0] for _ in range(2))
+    assert z1.shape != z2.shape or not np.allclose(z1, z2)
+    ruler = position_strokes(latin_glyph("Z"), _at("Z"), LS)[0]
+    d = np.diff(z1, axis=0)
+    turns = np.abs((np.diff(np.arctan2(d[:, 1], d[:, 0])) + np.pi) % (2 * np.pi) - np.pi)
+    assert len(z1) > len(ruler) and turns.max() < 2.0  # 角が丸い（素の Z は 135° の折れ）
+    eq = r.render(_at("=")).strokes
+    assert all(np.ptp(s[:, 1]) > 1e-3 for s in eq)  # 等号の横棒も完全な水平線ではない
+
+
+def test_finishing_and_variation_do_not_change_the_char_size(kanjivg_dir):
+    """払いの延長や揺らぎの後も、配置で決めた大きさを保つ（経路で大きさが変わらない）。"""
+    raw, _ = KanjiVGStore(kanjivg_dir).load("人")
+    expected = _bbox(position_strokes(raw, _at("人"), LS))
+    r = _renderer(kanjivg_dir=kanjivg_dir, augmenter=HandwritingAugmenter(seed=0))
+    for _ in range(5):
+        x0, y0, x1, y1 = _bbox(r.render(_at("人")).strokes)
+        assert max(x1 - x0, y1 - y0) == pytest.approx(expected[2] - expected[0], rel=0.02)
 
 
 def test_line_segment_and_whitespace():
@@ -229,16 +477,19 @@ def test_inline_math_renders_inside_its_box():
 
 
 def test_preview_width_tapers_like_the_z_lift():
-    cfg = PlotterConfig()
+    cfg = PlotterConfig(finish_strength=1.0)
     stroke = np.column_stack([np.linspace(0, 10, 50), np.zeros(50)])
     tome, harai, hane = (stroke_widths(stroke, f, cfg) for f in (TOME, HARAI, HANE))
     assert len(set(tome)) == 1
     assert harai[-1] < harai[0] and hane[-1] < hane[0]
+    half = stroke_widths(stroke, HARAI, PlotterConfig(finish_strength=0.5))
+    assert harai[-1] < half[-1] < half[0]  # 強さに比例して抜ける
+    assert len(set(stroke_widths(stroke, HARAI, PlotterConfig()))) == 1  # 既定は抜かない
     assert stroke_widths(stroke[:1], HARAI, cfg) == []
 
 
 def test_preview_width_is_the_contact_ratio_scaled():
-    cfg = PlotterConfig()
+    cfg = PlotterConfig(finish_strength=1.0)  # 払いを抜く設定（既定は抜かない）
     stroke = np.column_stack([np.linspace(0, 10, 50), np.zeros(50)])
     contact = stroke_contact(stroke, HARAI, cfg)
     assert contact.shape == (49,) and contact.max() == 1.0 and contact[-1] < 1.0

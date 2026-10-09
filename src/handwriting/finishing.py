@@ -1,7 +1,7 @@
 """筆遣い（とめ・はね・払い・連綿・筆圧）を表現する純粋関数群。
 
 - 筆法の決定: KanjiVG の ``kvg:type`` を分類し、無い字（かな等）は軌跡から推定する。
-- 軌跡の加工: 払い・はねの終端を接線方向へ延長する（:func:`apply_finishing`）。
+- 字形は加工しない（払いを接線方向へ伸ばすと字が尖る。本人の払いは KanjiVG と同じかやや短い）。
 - 接触率: 終端リフト・筆圧・入筆を ``contact ∈ [0, 1]`` 列として返す。G-code の
   Z 補間とプレビューの線幅はどちらもこの接触率から導くため、見た目＝実機になる。
 - 連綿: 近い画どうしを確率的につなぎ画（:data:`CONNECT`）で結ぶ。
@@ -10,8 +10,6 @@ numpy のみに依存する（torch 不要）。
 """
 
 from __future__ import annotations
-
-from dataclasses import dataclass
 
 import numpy as np
 
@@ -351,78 +349,3 @@ def entry_modulation(stroke: np.ndarray, entry_length: float, strength: float) -
     arc_from_start = np.concatenate([[0.0], np.cumsum(seg)])
     t = np.clip(arc_from_start / entry_length, 0.0, 1.0)
     return (1.0 - strength) + strength * t
-
-
-@dataclass(frozen=True)
-class FinishingConfig:
-    """終端加工のパラメータ。長さ比はすべて ``scale``（配置時の font_size mm）に対する割合。
-
-    Attributes:
-        harai_ext_ratio: 払いの延長長さ / ``scale``。
-        harai_points: 払いで末尾に追加する点数。
-        hane_hook_ratio: はねの延長長さ / ``scale``。
-        hane_points: はねで末尾に追加する点数。
-        tangent_window: 終端接線の算出に使う終端点数。
-    """
-
-    harai_ext_ratio: float = 0.15
-    harai_points: int = 5
-    hane_hook_ratio: float = 0.12
-    hane_points: int = 4
-    tangent_window: int = 3
-
-
-def _terminal_tangent(stroke: np.ndarray, k: int) -> np.ndarray | None:
-    """終端の進行方向単位ベクトル（末尾から ``k`` 点さかのぼった差分）。ゼロ長なら None。"""
-    n = len(stroke)
-    if n < 2:
-        return None
-    v = stroke[-1] - stroke[-1 - min(k, n - 1)]
-    norm = float(np.linalg.norm(v))
-    if norm < 1e-9:
-        return None
-    return v / norm
-
-
-def _extend_along_tangent(
-    stroke: np.ndarray, length: float, n_points: int, tangent_window: int
-) -> np.ndarray:
-    """終端接線方向へ ``length`` だけ ``n_points`` 点を等間隔に延長する。"""
-    tangent = _terminal_tangent(stroke, tangent_window)
-    if tangent is None:
-        return stroke
-    end = stroke[-1]
-    ext = np.array(
-        [end + tangent * (length * i / n_points) for i in range(1, n_points + 1)],
-        dtype=float,
-    )
-    return np.vstack([stroke, ext])
-
-
-def apply_finishing(
-    strokes: list[np.ndarray],
-    finishes: list[str],
-    scale: float,
-    config: FinishingConfig | None = None,
-) -> list[np.ndarray]:
-    """各ストロークの終端を筆法に応じて加工する（入力と同数・同順）。
-
-    払い＝終端接線方向へ細く流すよう延長。はね＝KanjiVG の鉤は既にフック形状を
-    経路に含むため、回転せず終端接線方向へ短く延長して跳ねを強調する（実機では
-    この延長区間で Z を持ち上げて細く抜く）。とめ・none は無加工。``finishes`` が
-    短い場合の不足分と 2 点未満のストロークは無加工。
-    """
-    cfg = config or FinishingConfig()
-    out: list[np.ndarray] = []
-    for i, stroke in enumerate(strokes):
-        finish = finishes[i] if i < len(finishes) else NONE
-        if len(stroke) >= 2 and finish == HARAI:
-            stroke = _extend_along_tangent(
-                stroke, scale * cfg.harai_ext_ratio, cfg.harai_points, cfg.tangent_window
-            )
-        elif len(stroke) >= 2 and finish == HANE:
-            stroke = _extend_along_tangent(
-                stroke, scale * cfg.hane_hook_ratio, cfg.hane_points, cfg.tangent_window
-            )
-        out.append(stroke)
-    return out

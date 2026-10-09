@@ -33,7 +33,10 @@ def stroke_contact(stroke: Stroke, finish: str, config: PlotterConfig) -> np.nda
     pts = np.asarray(stroke, dtype=float)
     if len(pts) < 2:
         return np.zeros(0)
-    contact = contact_profile(finish, arc_length_from_end(pts), config.finish_lift_length_mm)
+    floor = 1.0 - config.finish_strength  # 抜きの強さ 0 なら終端も完全接触
+    contact = contact_profile(
+        finish, arc_length_from_end(pts), config.finish_lift_length_mm, floor, floor
+    )
     contact = contact * pressure_modulation(pts, config.pressure_variation)
     contact = contact * entry_modulation(pts, config.entry_length_mm, config.entry_taper)
     return (contact[:-1] + contact[1:]) / 2.0

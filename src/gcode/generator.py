@@ -137,7 +137,10 @@ class GCodeGenerator:
             lines.append(self.config.pen_down_command)
 
         arc = arc_length_from_end(stroke)
-        contact = contact_profile(finish, arc, self.config.finish_lift_length_mm)
+        floor = 1.0 - self.config.finish_strength  # 抜きの強さ 0 なら終端も完全接触
+        contact = contact_profile(
+            finish, arc, self.config.finish_lift_length_mm, harai_min=floor, hane_min=floor
+        )
         # 画内の筆圧変調（濃淡）と入筆ランプを乗算。終端リフトと同じ contact 系で Z へ。
         contact = contact * pressure_modulation(stroke, self.config.pressure_variation)
         contact = contact * entry_modulation(
