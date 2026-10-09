@@ -40,6 +40,7 @@ from src.handwriting.finishing import (
     classify_finishes,
     infer_finishes,
 )
+from src.layout.line_breaking import SUPERSCRIPTS
 from src.layout.placement import CharPlacement
 from src.render.math_image import render_latex_to_strokes
 from src.render.positioning import position_strokes
@@ -80,6 +81,10 @@ _SMOOTH_CHARS = frozenset("、。，．・ー～—―()（）「」『』【】
 
 # 「日本語だけ描く」モードでも描く字（句読点・数字）
 _JAPANESE_MODE_EXTRA = frozenset("、。，．,.")
+
+# 上付き文字は元の字をこの倍率で描き、下端を大文字高さのこの割合まで上げる
+_SUPERSCRIPT_SCALE = 0.6
+_SUPERSCRIPT_RISE = 0.45
 
 # 読点は終端を払う
 _COMMA_CHARS = frozenset("、,，")
@@ -285,8 +290,15 @@ class CharRenderer:
             cov.skipped.append(original)
             return RenderedChar()
 
-        char = _CHAR_SUBSTITUTIONS.get(original, original)
-        if char != original:
+        if original in SUPERSCRIPTS:
+            return self._render_superscript(placement)
+        return self._render_glyph(placement, original)
+
+    def _render_glyph(self, placement: CharPlacement, original: str) -> RenderedChar:
+        """文字 1 字を経路の優先順に描き、使った経路を ``original`` の名で記録する。"""
+        cov = self.coverage
+        char = _CHAR_SUBSTITUTIONS.get(placement.char, placement.char)
+        if char != placement.char:
             placement = replace(placement, char=char)
         smooth = original in _SMOOTH_CHARS or char in _SMOOTH_CHARS
 
@@ -305,6 +317,22 @@ class CharRenderer:
         source, result = rendered
         getattr(cov, source).append(original)
         return result
+
+    def _render_superscript(self, placement: CharPlacement) -> RenderedChar:
+        """上付き文字（² ⁻ 等）: 元の字を小さく描き、大文字高さの中ほどより上へ置く。"""
+        cap = placement.font_size
+        small = cap * _SUPERSCRIPT_SCALE
+        baseline = placement.y + (self.line_spacing - cap) / 2
+        # 小さい字は行ボックスの縦中央に描かれるので、その中央を上付きの位置へ合わせる
+        center = baseline + cap * _SUPERSCRIPT_RISE + small / 2
+        sub = replace(
+            placement,
+            char=SUPERSCRIPTS[placement.char],
+            y=center - self.line_spacing / 2,
+            font_size=small,
+            advance=None,
+        )
+        return self._render_glyph(sub, placement.char)
 
     # ------------------------------------------------------------------
     # 経路

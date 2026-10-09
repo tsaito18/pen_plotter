@@ -288,6 +288,27 @@ def test_operators_are_small_and_sit_on_the_math_axis():
         assert baseline < (y0 + y1) / 2 < baseline + X_HEIGHT * cap_h
 
 
+def test_nearly_equal_sign_is_an_operator_with_two_dots():
+    """≒ は = に点を 2 つ（左上・右下）添えた形で、演算子と同じ軸に置く。"""
+    strokes = symbol_glyph("≒")
+    assert strokes is not None and len(strokes) == 4
+    eq = _bbox(position_strokes(symbol_glyph("="), _at("="), LS))
+    ne = _bbox(position_strokes(strokes, _at("≒"), LS))
+    assert (ne[1] + ne[3]) / 2 == pytest.approx((eq[1] + eq[3]) / 2, abs=0.3)
+
+
+def test_superscript_digits_are_small_and_raised(kanjivg_dir):
+    """m/s² の ² は数字 2 を小さくして右肩に上げる（欠けて空白にならない）。"""
+    r = _renderer(kanjivg_dir=kanjivg_dir)
+    two = _bbox(r.render(_at("2")).strokes)
+    sup = _bbox(r.render(_at("²")).strokes)
+    minus = r.render(_at("⁻")).strokes
+    assert r.coverage.missing_glyphs == []
+    assert minus
+    assert sup[3] - sup[1] < 0.7 * (two[3] - two[1])
+    assert sup[1] > (two[1] + two[3]) / 2 - 0.1  # 下端が通常の数字の中ほどより上
+
+
 def test_brackets_hug_the_text_inside_them():
     tall = [np.array([[0.0, 0.0], [-0.2, 0.5], [0.0, 1.0]])]
     opening = _bbox(position_strokes(tall, _at("（"), LS))

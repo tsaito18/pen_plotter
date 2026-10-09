@@ -101,6 +101,9 @@ def test_latex_commands_are_not_rendered_literally():
     text = "".join(e.content for e in MathParser.parse(r"\left( x \right. \unknown"))
     assert "left" not in text and "unknown" not in text and "(" in text
     assert MathParser.parse(r"\cos x")[0].type == "operator"
+    for name in ("arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "det", "arg"):
+        (op, _) = MathParser.parse(rf"\{name} x")  # 未対応だと関数名が式から丸ごと抜ける
+        assert (op.type, op.content) == ("operator", name)
     assert [e.type for e in MathParser.parse(r"\bar{x}")] == ["accent"]
     assert [e.type for e in MathParser.parse(r"a \\ b")] == ["text", "linebreak", "text"]
 

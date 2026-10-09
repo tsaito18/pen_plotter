@@ -195,6 +195,7 @@ _HALFWIDTH_ADVANCES: dict[str, float] = {
     **dict.fromkeys("MW", 0.8),
     **dict.fromkeys("αβγδεζηθικλνξοπρστυχϵς", 0.45),
     **dict.fromkeys("μφψωϕ", 0.52),
+    **dict.fromkeys("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", 0.32),
 }
 
 

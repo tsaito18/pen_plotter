@@ -44,7 +44,7 @@ _LATIN_MAX_INK = 0.92
 
 # 演算子は大文字高さ比の正方枠（字形の単位正方形をそのまま写す）に描き、枠の中心を
 # 数式の軸（ベースラインからの高さ）に置く。セル幅いっぱいに伸ばすと隣の字に触れる。
-_OPERATORS = frozenset("+-=<>×÷±≠≈≤≥~")
+_OPERATORS = frozenset("+-=<>×÷±≠≈≒≤≥~")
 _OPERATOR_BOX = 0.6
 _OPERATOR_AXIS = 0.3
 
