@@ -237,6 +237,7 @@ def create_app(
                 "width": defaults.paper_width,
                 "height": defaults.paper_height,
                 "background": report_paper_path() is not None,
+                "pen_width_mm": defaults.plotter_config().pen_width_mm,
             },
             "sources": {
                 "ml": checkpoint_path is not None and Path(checkpoint_path).exists(),

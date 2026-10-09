@@ -143,7 +143,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - Phase 9 進行中: 少量サンプル対応（Contrastive StyleEncoder + TransformerDeformer実装済み、訓練・推論パイプライン統合済み）
 - 訓練: ユーザーデータのみ（381文字/925サンプル）、CASIA不使用
 - ストロークアライメント（Hungarian + MHD + マージ/スプリット検出）実装済み — 訓練時use_aligner=True対応
-- 207テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
+- 210テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
@@ -178,7 +178,8 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - **waver経路統一**: 描画経路ごとの質感差を縮小（幾何英字3.0→1.5, 数式画像6.0→2.5, 記号0→0.4で定規直線感解消, 画数逓減floor 0.3→0.5）
 - ストローク単位の幾何バリエーション（回転・スケール・シフト）で自然さ追加
 - 局所曲率特徴追加でストロークの曲がり角に大きなオフセット許容
-- augmentation設定（baseline_drift=0.3, spacing=0.2, size=0.05）＋文字単位の傾き(slant_variation=0.02)有効 — 手書きの揺らぎ。slantはCharPlacement.slant経由で`render/positioning.position_strokes`が文字中心回転
+- augmentation設定（baseline_drift=0.6, char_baseline_jitter=0.4, spacing=0.5, size=0.05、いずれも汚さ倍率を掛ける）＋文字単位の傾き(slant_variation=0.02)有効 — 手書きの揺らぎ。slantはCharPlacement.slant経由で`render/positioning.position_strokes`が文字中心回転
+- **行のうねり・罫線との位置（2026-10）**: 本人の手書きレポートのスキャンと同じ方法で測って合わせた（行の傾き・波・字ごとの上下・罫線からの高さ）。実物は罫線の少し上に乗せて書く（字の下端→下の罫線 1.54mm）ので本文行を帯の中央から行間の 7% 下げる（`typesetter._TEXT_DROP`）。字ごとの上下は隣の字とほぼ無相関のガタつき（ラグ1相関≈0）を含むので、1/f の波（`char_baseline`）に独立な正規乱数（`char_baseline_jitter`）を足す。行の傾き(実物 0±0.14°、スキャンの傾き -0.23° を罫線で補正)と波(0.15mm)はもともと一致していた
 - **汚さスライダー（GUI）**: `Settings.messiness`（0=整った字, **デフォルト0.4=バランス重視のきれい寄り**, 1.0=素値, 2=大きく乱れる）で baseline_drift/字間/サイズ/傾きを一括スケール。`AugmentConfig.scaled()` が単一ソース。GUIの「温度」（=ML per-point offsetの字形揺らぎ）とは別軸
 - **人らしさ3スライダー（GUI）**: 定幅ペン感を消し「人が書いた」感を出す調整軸。すべて実機キャリブ前提でデフォルトは控えめ。
   - `pressure_variation`(筆圧変化, 既定0.35): 画内の濃淡を `handwriting/finishing.pressure_modulation()` で変調（下ろし濃く・上げ薄く＋低周波揺らぎ）。contact に乗算するので preview線幅と実機Zが連動。0=均一(定幅ペン感)
@@ -186,6 +187,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
   - `entry_taper`(入筆, 実機既定0): 始筆を軽く入れて立ち上げる `handwriting/finishing.entry_modulation()`。収筆(はらい/はね)と対。**実機注意**: 始筆でZを動かすためかすれ得る→実機は0
   - `connection_strength`(連綿, 既定0): 同字の近い画を確率的に薄いつなぎ画(`CONNECT`)で結ぶ `handwriting/finishing.insert_connections()`。**近いほど高確率＋乱数**(`prob=strength*(1-gap/max_gap)`, `max_gap=strength*0.6*scale`)。generatorは`continue_from_prev`でペンを上げず継続=真の連綿。つなぎ画はZ一定(`CONNECT_CONTACT`)なので点線化しない。はらい/はねの後ろには付けない
   - **実機の制約**: 単線シャーペンは描画中にZを上下に振るとペンがバウンドして点線化する。よって筆圧変化・入筆(描画中Z変動)は実機デフォルト0。連綿はZ一定なのでOK。終端リフト(はらい/はね)は単調変化なのでOK
+- **線の太さ（2026-10）**: プレビュー・Web UI の線幅は実寸 mm で `PlotterConfig.pen_width_mm`（=0.35、本人の手書きレポートのスキャン実測。サンプルと同じペンで描く前提）が単一ソース。matplotlib は軸の実寸から pt に換算、Web UI は `/api/bootstrap` の `paper.pen_width_mm` を使う
 - ストローク太さ変化はプレビューのみ。実機は終端Zリフト（contact_profile, 距離mmベース）で払い・はねを表現
 - GPU(XPU) 自動検出・--device指定を pretrain/finetune に実装済み
 
@@ -212,7 +214,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - **xDraw A4 ペンプロッタ実機テスト成功**（ホーミング・ペン制御・描画動作確認済み）
 - 幾何ストローク生成: 、。・（）「」{}／ASCII数式記号(+,-,=,<,>,*,/,%,:,;,!,?)は`glyphs/geometric.py`の幾何字形で描画（字形欠損回避）
 - 数字(0-9)はML変形を**スキップ**しKanjiVG素の参照字形を直接使う（`render/char_renderer._is_ml_deformable`）。モデルはCJKのみ訓練のため数字にper-point offsetを当てると字形が壊れる（例: 「2」の下の横線が崩れる）。数字は終端リフト（はらい/はね）も無効化（`finishes=["none"]`、下線等の歪み防止）
-- **句点。/ピリオド.** は丸(円)ではなくピリオド風の短い点(2点ダッシュ)で描く（`render/positioning._position_period`、レポート体裁・「点が丸になる」回避）
+- **句読点は「，．」に統一（本文の 、。 も変換）**。「．」はベースライン上の小さな点（小円をペン幅が塗りつぶす、`render/positioning._position_period`）、「，」は頭の点から左下へ払う 1 筆（`glyphs/geometric._comma`、高さは字の約 1/4、頭はベースライン付近）。以前は両方とも短い斜線で「、」と見分けにくかった。大きな丸（。）は描かない
 - **本文ASCII英字の手書き感**: 幾何字形(直線/円)は`WAVER_GEOMETRIC`(=1.5)でelastic+tremorを乗せ「きれいすぎ」を解消（経路別の揺らぎ強度は `render/char_renderer.py` 冒頭の定数に集約）
 - **数式の書体統一**: 単純な変数列（添字/上付き/分数/根号/演算子語を含まない text/symbol のみ、かつ全文字が`_PLAIN_MATH_BODY_CHARS`に含まれる）は matplotlib でなく本文と同じ手書き経路で描画（`typesetter._place_inline_math`の plain 分岐）。`$u$ $S$ $V=IR$ $\sigma$` 等＝手書き、`$E=mc^2$ $S_U$ $\frac{F}{A}$ $\cos$` ＝印刷体のまま。本文に字形が無い記号(' ≃ √ 等)を含む式は matplotlib（□退行防止、診断ツールが検出）
 - **インライン数式のサイズ**: matplotlibは`bbox_inches=tight`+cropで墨範囲に切るため論理高(font_size)へスケールすると小文字uがem高まで拡大され「でかすぎ」。`formula_ink_em()`でインク高/em比を測り描画高=ink_em*font_sizeとし本文emと同縮尺に（`Typesetter._inline_math_draw_size`が幅予約・bbox・描画の単一ソース）
