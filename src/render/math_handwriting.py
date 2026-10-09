@@ -37,6 +37,9 @@ ROOT_WAVER = 2.5
 # 上付きのマイナス（10^{-4}）を数字の中ほどへ上げる量（字の大きさ比）
 _SUPERSCRIPT_MINUS_RISE = 0.18
 _DOT_CHARS = frozenset("·⋅・")
+# 小数点・中点の半径（字の大きさ比。本文の「．」と同じ）と最小半径(mm)
+_DOT_RADIUS = 0.03
+_DOT_MIN_RADIUS_MM = 0.1
 _PRIME_CHARS = frozenset("′'")
 _OPENING = "([{"
 _CLOSING = ")]}"
@@ -127,10 +130,18 @@ def render_math_handwritten(
             out.append(to_mm([(x0 + gw * 0.9, y0 + gh), (x0 + gw * 0.2, y0 + gh * 0.35)]))
             continue
         if g.char in _DOT_CHARS or g.char in _POINT_CHARS:
-            # 点は字形を引き伸ばすと読点のように大きくなるので、短い斜めの点にする
+            # 点は字形を引き伸ばすと大きくなるので、本文の「．」と同じ小さな丸（ペン幅で
+            # 塗りつぶれる）にする。カンマは頭から左下へ払う短い線
             cx, cy = x0 + gw / 2, y0 + gh / 2
-            d = g.fontsize * 0.03
-            out.append(to_mm([(cx - d, cy + d * 0.8), (cx + d, cy - d * 0.8)]))
+            if g.char == ",":
+                d = g.fontsize * 0.04
+                out.append(to_mm([(cx + d * 0.3, cy + d), (cx - d * 0.5, cy - d * 1.5)]))
+            else:
+                radius = max(_DOT_MIN_RADIUS_MM / scale, g.fontsize * _DOT_RADIUS)
+                t = np.linspace(0.0, 2 * np.pi, 9)
+                out.append(
+                    to_mm(np.column_stack([cx + radius * np.cos(t), cy + radius * np.sin(t)]))
+                )
             continue
         if (
             g.char in _MINUS_CHARS

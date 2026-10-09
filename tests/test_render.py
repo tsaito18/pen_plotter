@@ -573,6 +573,14 @@ def test_handwritten_accents_and_primes_are_drawn_over_their_letters():
     assert len(prime) == len(f_only) + 1  # プライムは短い 1 画（0 ではない）
 
 
+def test_handwritten_decimal_point_is_a_small_dot_like_the_body_period():
+    r = _renderer()
+    strokes = r.render(_handwritten(r"3.14", "baseline")).strokes
+    # 本文の「．」と同じ小さな丸（線にしない）
+    dots = [s for s in strokes if np.allclose(s[0], s[-1]) and np.ptp(s, axis=0).max() < 0.5]
+    assert len(dots) == 1
+
+
 def test_handwritten_large_brackets_span_their_content():
     r = _renderer()
     for src in (r"\left[\frac{a}{b}\right]", r"\left\{\frac{a}{b}\right\}"):
