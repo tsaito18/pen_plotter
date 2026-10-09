@@ -143,7 +143,7 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - Phase 9 進行中: 少量サンプル対応（Contrastive StyleEncoder + TransformerDeformer実装済み、訓練・推論パイプライン統合済み）
 - 訓練: ユーザーデータのみ（381文字/925サンプル）、CASIA不使用
 - ストロークアライメント（Hungarian + MHD + マージ/スプリット検出）実装済み — 訓練時use_aligner=True対応
-- 229テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）。うち 8 件は実ブラウザの画面テスト（`tests/test_ui_e2e.py`、`-m e2e`。`uv sync --extra e2e` と Chromium が無ければスキップ）
+- 250テスト（2026-09 に 1,386 件から振る舞い中心へ整理。`data/` 非依存）。うち 8 件は実ブラウザの画面テスト（`tests/test_ui_e2e.py`、`-m e2e`。`uv sync --extra e2e` と Chromium が無ければスキップ）
 
 ## 実装計画
 詳細は [plan.md](plan.md) を参照。
