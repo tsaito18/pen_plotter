@@ -1,7 +1,8 @@
-"""Web UI（手書きスタジオ）を起動する。
+"""Web UI を起動する（スタジオ ``/`` と筆跡 ``/collect`` を 1 つのサーバーで配る）。
 
 プロッタへの送信はブラウザの WebSerial で行うため、プロッタをつないだ PC の
-Chrome / Edge で ``http://localhost:<port>`` を開く。
+Chrome / Edge で ``http://localhost:<port>`` を開く。筆跡の収集は iPad などから
+``http://<この PC の IP>:<port>/collect`` を開く。
 """
 
 from __future__ import annotations
@@ -27,14 +28,28 @@ def main(argv: list[str] | None = None) -> None:
         default=Path("data/user_strokes"),
         help="ユーザー筆跡（人物プロファイルのルート）",
     )
+    parser.add_argument(
+        "--models-dir",
+        type=Path,
+        default=Path("data/models"),
+        help="モデルの置き場（選択できるモデルと学習の保存先）",
+    )
     parser.add_argument("--host", default="0.0.0.0", help="待ち受けアドレス（既定: LAN にも公開）")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--open", action="store_true", help="起動後にブラウザを開く")
+    parser.add_argument("--page", default="/", help="--open で開くページ（/ または /collect）")
     args = parser.parse_args(argv)
+    serve(args)
+
+
+def serve(args: argparse.Namespace) -> None:
+    """解析済みの引数でサーバーを起動する（``collect_strokes.py`` からも使う）。"""
 
     checkpoint = args.checkpoint if args.checkpoint and args.checkpoint.exists() else None
     kanjivg_dir = args.kanjivg_dir if args.kanjivg_dir.exists() else None
-    user_dir = args.user_strokes_dir if args.user_strokes_dir.exists() else None
+    # 筆跡はここへ保存するので、無ければ作る
+    args.user_strokes_dir.mkdir(parents=True, exist_ok=True)
+    user_dir = args.user_strokes_dir
     sources = [
         f"ML推論 ({checkpoint})" if checkpoint else "",
         f"ユーザー筆跡 ({user_dir})" if user_dir else "",
@@ -44,9 +59,15 @@ def main(argv: list[str] | None = None) -> None:
 
     import uvicorn
 
-    app = create_app(checkpoint_path=checkpoint, kanjivg_dir=kanjivg_dir, user_strokes_dir=user_dir)
-    url = f"http://localhost:{args.port}"
-    print(f"Web UI: {url}  （プロッタ送信はこの PC の Chrome / Edge で開く）")
+    app = create_app(
+        checkpoint_path=checkpoint,
+        kanjivg_dir=kanjivg_dir,
+        user_strokes_dir=user_dir,
+        models_dir=args.models_dir,
+    )
+    url = f"http://localhost:{args.port}{args.page}"
+    print(f"スタジオ: http://localhost:{args.port}/  （プロッタ送信はこの PC の Chrome / Edge で）")
+    print(f"筆跡:     http://<この PC の IP>:{args.port}/collect  （iPad の Safari などで）")
     if args.open:
         threading.Timer(1.0, webbrowser.open, args=(url,)).start()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

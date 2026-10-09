@@ -16,7 +16,7 @@
 - Python 3.11+
 - パッケージ管理: `uv`
 - ML: PyTorch
-- UI: Web UI（FastAPI + 素の HTML/CSS/JS、WebSerial 送信）、Tkinter（予備の送信 GUI）
+- UI: Web UI（FastAPI + Preact/htm を同梱・ビルド不要、WebSerial 送信）、Tkinter（予備の送信 GUI）
 - プレビュー: Matplotlib
 - 実機: xDraw A4 ペンプロッタ、GRBL 互換 DrawCore firmware
 - テスト: pytest
@@ -60,7 +60,7 @@ Windows 用 exe を作る場合は `docs/plotter_gui_build.md` を確認して�
 
 依存は上から下へ（下の層は上の層を import しない）。
 
-- `src/ui/`: Web UI（`server.py`＝FastAPI の API、`static/`＝画面・用紙ビューア・WebSerial 送信、`content.py`＝例文・書式早見表）
+- `src/ui/`: Web UI（`server.py`＝スタジオの API、`collect_api.py`＝筆跡の API・モデル選択、`static/`＝画面、`content.py`＝例文・書式早見表）
 - `src/pipeline.py`: テキスト→組版→ストローク→プレビュー/G-code（`PlotterPipeline`）
 - `src/settings.py`: 生成設定 `Settings`（UI・CLI・パイプラインの既定値の単一ソース）
 - `src/diagnostics.py`: レイアウト診断（字形欠損・文字かぶり）
@@ -71,7 +71,7 @@ Windows 用 exe を作る場合は `docs/plotter_gui_build.md` を確認して�
 - `src/model/`: ML（`deformers`、`style_encoder`、`aligner`、`data`、`training`、`inference`）。torch 依存はここだけ
 - `src/gcode/`: G-code 生成・プロッタ設定・キャリブレーション
 - `src/comm/`, `src/plotter_gui/`: GRBL シリアル通信、Tkinter 送信 GUI
-- `src/collector/`: 手書きサンプル収集、KanjiVG パーサー、プロファイル、訓練ジョブ
+- `src/collector/`: 手書きサンプル収集（`service.py`）、KanjiVG パーサー、プロファイル、訓練ジョブ
 - `scripts/`: CLI（`run_ui.py`、`train.py`、`collect_strokes.py` など）
 - `tests/`: pytest（`tests/conftest.py` が小さな合成データを作るので `data/` に依存しない）
 - `data/`: レポート用紙画像・複雑度マップ（`strokes`/`user_strokes`/`models` は git 管理外。`data_examples/` を参照）
@@ -176,7 +176,7 @@ ruff check src/ tests/ scripts/
 
 ## よく触る入口
 
-- Web UI: `scripts/run_ui.py`, `src/ui/server.py`, `src/ui/static/`
+- Web UI: `scripts/run_ui.py`, `src/ui/server.py`, `src/ui/collect_api.py`, `src/ui/static/`
 - 生成パイプライン: `src/pipeline.py`, `src/settings.py`
 - 文字の描画: `src/render/char_renderer.py`, `src/render/positioning.py`, `src/glyphs/geometric.py`
 - プレビュー: `src/render/preview.py`

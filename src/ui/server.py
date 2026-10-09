@@ -29,7 +29,8 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.collector.profiles import list_profiles
+from src.collector.service import CollectorService
+from src.collector.training_jobs import TrainingJobManager
 from src.layout.placement import CharPlacement
 from src.pipeline import PageStrokes, PlotterPipeline
 from src.render.char_renderer import CharCoverageReport
@@ -37,6 +38,7 @@ from src.render.preview import stroke_contact
 from src.resources import report_paper_path
 from src.settings import Settings
 from src.ui import content
+from src.ui.collect_api import ModelRegistry, build_collect_router
 
 logger = logging.getLogger(__name__)
 
@@ -179,30 +181,51 @@ def create_app(
     checkpoint_path: Path | str | None = None,
     kanjivg_dir: Path | str | None = None,
     user_strokes_dir: Path | str | None = None,
+    models_dir: Path | str | None = None,
 ) -> FastAPI:
-    """Web UI の ASGI アプリを作る。
+    """Web UI の ASGI アプリを作る（スタジオ ``/`` と筆跡 ``/collect``）。
 
     Args:
-        checkpoint_path: ML モデルのチェックポイント（無ければ ML 変形なし）。
+        checkpoint_path: 起動時に使う ML チェックポイント（無ければ ML 変形なし）。
         kanjivg_dir: KanjiVG 参照字形ディレクトリ。
-        user_strokes_dir: ユーザー筆跡（プロファイルのルート、または 1 人分）。
+        user_strokes_dir: ユーザー筆跡（プロファイルのルート）。筆跡の収集もここへ保存する。
+        models_dir: モデルの置き場（選択できるモデルと学習の保存先）。省略時は
+            ``checkpoint_path`` のあるディレクトリ。
     """
     user_root = Path(user_strokes_dir) if user_strokes_dir is not None else None
-    profiles = list_profiles(user_root) if user_root is not None and user_root.is_dir() else []
-    profile_ids = {p.id for p in profiles}
+    if models_dir is None and checkpoint_path is not None:
+        models_dir = Path(checkpoint_path).parent
+    models = ModelRegistry(models_dir, checkpoint_path)
+    collector = CollectorService(user_root, kanjivg_dir=kanjivg_dir) if user_root else None
+    training = TrainingJobManager(
+        root_dir=user_root or Path("data/user_strokes"),
+        ref_dir=Path(kanjivg_dir) if kanjivg_dir else None,
+    )
     # パイプライン（特に ML 推論）は並行実行に対応しないので清書は 1 件ずつ
     render_lock = threading.Lock()
 
-    def build(settings: Settings, req: RenderRequest | None = None) -> PlotterPipeline:
-        profile = req.profile if req and req.profile in profile_ids else None
+    def profile_list() -> list:
+        if collector is not None:
+            return collector.profiles()
+        return []
+
+    def build(
+        settings: Settings,
+        req: RenderRequest | None = None,
+        *,
+        profile: str | None = None,
+    ) -> PlotterPipeline:
+        ids = {p.id for p in profile_list()}
+        wanted = profile or (req.profile if req else None)
         return PlotterPipeline(
             settings,
-            checkpoint_path=checkpoint_path,
+            checkpoint_path=models.active,
             kanjivg_dir=kanjivg_dir,
             user_strokes_dir=user_strokes_dir,
-            profile=profile,
+            profile=wanted if wanted in ids else None,
             japanese_only=bool(req and req.japanese_only),
             seed=req.seed if req else 0,
+            style_revision=collector.revision if collector else 0,
         )
 
     app = FastAPI(title="Pen Plotter", docs_url=None, redoc_url=None)
@@ -212,6 +235,17 @@ def create_app(
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/collect", include_in_schema=False)
+    def collect_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "collect.html", headers={"Cache-Control": "no-cache"})
+
+    if collector is not None:
+        app.include_router(
+            build_collect_router(
+                collector, training, models, lambda pid: build(Settings(), profile=pid)
+            )
+        )
 
     @app.get("/api/bootstrap")
     def bootstrap() -> dict[str, Any]:
@@ -229,7 +263,7 @@ def create_app(
             ],
             "profiles": [
                 {"id": p.id, "characters": p.character_count, "samples": p.sample_count}
-                for p in profiles
+                for p in profile_list()
             ],
             "examples": [{"label": k, "text": v} for k, v in content.EXAMPLES.items()],
             "syntax": [asdict(row) for row in content.SYNTAX],
@@ -239,9 +273,11 @@ def create_app(
                 "background": report_paper_path() is not None,
                 "pen_width_mm": defaults.plotter_config().pen_width_mm,
             },
+            "model": models.name_of(models.active),
+            "collect": collector is not None,
             "sources": {
-                "ml": checkpoint_path is not None and Path(checkpoint_path).exists(),
-                "user": bool(profiles) or (user_root is not None and user_root.is_dir()),
+                "ml": models.active is not None,
+                "user": bool(profile_list()),
                 "kanjivg": kanjivg_dir is not None and Path(kanjivg_dir).is_dir(),
             },
         }

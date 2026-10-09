@@ -16,9 +16,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ml = ["torch==2.10.0", "torchvision==0.25.0", "scipy"]
+ml = ["torch==2.14.1+cu126", "torchvision==0.29.1+cu126", "scipy"]
 ui = ["fastapi", "uvicorn"]
 dev = ["pytest", "ruff"]
+e2e = ["playwright==1.63.0"]  # 画面テスト（tests/test_ui_e2e.py）。別途 playwright install chromium
 build = ["pyinstaller"]
 
 [tool.uv.sources]
@@ -60,4 +61,5 @@ testpaths = ["tests"]
 markers = [
     "slow: 実行に時間がかかるテスト（MLなど）",
     "hardware: 実機接続が必要なテスト",
+    "e2e: 実ブラウザでの画面テスト（Playwright が無ければスキップ）",
 ]

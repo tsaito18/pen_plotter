@@ -35,8 +35,13 @@ _CHAR_LEFT_SHIFT_MAX = 0.1
 
 
 @lru_cache(maxsize=4)
-def _load_inference(checkpoint: Path, user_strokes_dir: Path | None) -> object | None:
-    """ML 推論器（重いので同じ組み合わせはキャッシュして使い回す）。失敗時は None。"""
+def _load_inference(
+    checkpoint: Path, user_strokes_dir: Path | None, style_revision: int = 0
+) -> object | None:
+    """ML 推論器（重いので同じ組み合わせはキャッシュして使い回す）。失敗時は None。
+
+    ``style_revision`` は筆跡サンプルの版。変わるとスタイルを推定し直す。
+    """
     try:
         from src.model.inference import StrokeInference
 
@@ -67,6 +72,7 @@ class PlotterPipeline:
         profile: ``user_strokes_dir`` がプロファイルのルートのときに使うプロファイル ID。
         japanese_only: かな・漢字・句読点・数字以外を描かない。
         seed: 乱数 seed。配置・字形・ML の温度ノイズまで全ての揺らぎが再現できる。
+        style_revision: 筆跡サンプルの版（収集で増減したら変える。ML のスタイルを読み直す）。
     """
 
     def __init__(
@@ -79,6 +85,7 @@ class PlotterPipeline:
         profile: str | None = None,
         japanese_only: bool = False,
         seed: int | None = None,
+        style_revision: int = 0,
     ) -> None:
         self.settings = settings or Settings()
         self.page_config = self.settings.page_config()
@@ -89,7 +96,7 @@ class PlotterPipeline:
         user_dir = resolve_character_root(user_strokes_dir, profile)
         inference = None
         if checkpoint_path is not None and Path(checkpoint_path).exists():
-            inference = _load_inference(Path(checkpoint_path), user_dir)
+            inference = _load_inference(Path(checkpoint_path), user_dir, style_revision)
         self.renderer = CharRenderer(
             kanjivg_dir=kanjivg_dir,
             user_strokes_dir=user_dir,
