@@ -300,3 +300,114 @@ def test_zero_width_characters_take_no_space():
     plain = ts.typeset("あい")[0]
     with_zwsp = ts.typeset("あ​い﻿")[0]
     assert [(p.char, p.x) for p in with_zwsp] == [(p.char, p.x) for p in plain]
+
+
+# --- 数式の配置（mathtext）---
+
+
+def test_mathtext_layout_has_glyphs_and_fraction_bar():
+    from src.layout.mathtext import extract_math_layout
+
+    layout = extract_math_layout(r"\frac{a}{b}")
+    assert [g.char for g in layout.glyphs] == ["a", "b"]
+    assert len(layout.rects) == 1
+    a, b = layout.glyphs
+    assert a.baseline_y > layout.rects[0].center_y > b.baseline_y
+    assert extract_math_layout(r"\frac{a}") is None  # 解析できない式
+
+
+def test_fraction_bar_for_ruled_alignment():
+    from src.layout.mathtext import detect_top_level_fraction_bar, extract_math_layout
+
+    def bar(src: str) -> float | None:
+        return detect_top_level_fraction_bar(extract_math_layout(src))
+
+    assert bar(r"L = l + \dfrac{a}{b}") is not None
+    assert bar(r"\dfrac{a}{b} + \dfrac{c}{d}") is not None  # 横並びも同じ罫線に乗る
+    assert bar(r"x^2 + y^2") is None
+    assert bar(r"\sqrt{x}") is None  # 根号の屋根は分数線ではない
+    assert bar(r"\left(\frac{a}{b}\right)^2") is None  # 括弧で囲まれた分数
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        (r"\frac{a}{b}", r"\dfrac{a}{b}"),
+        (r"\sqrt{\frac{a}{b}}", r"\sqrt{\dfrac{a}{b}}"),
+        (r"\sqrt[3]{\frac{a}{b}}", r"\sqrt[3]{\dfrac{a}{b}}"),
+        (r"e^{\frac{x}{2}}", r"e^{\frac{x}{2}}"),  # 指数の中の分数は小さいまま
+        (r"x_{\frac{1}{2}}", r"x_{\frac{1}{2}}"),
+        (r"\frac{\frac{a}{b}}{c}", r"\dfrac{\frac{a}{b}}{c}"),  # 分子の中の分数も小さいまま
+        (r"\left(\frac{a}{b}\right)", r"\left(\dfrac{a}{b}\right)"),
+    ],
+)
+def test_only_top_level_fractions_are_promoted_to_display_size(src: str, expected: str):
+    from src.layout.mathtext import promote_top_level_frac_to_dfrac
+
+    assert promote_top_level_frac_to_dfrac(src) == expected
+
+
+def test_long_block_math_splits_before_relations_then_terms():
+    from src.layout.mathtext import handwrite_draw_width_mm, split_math_for_width
+
+    src = r"E = a_1 + a_2 + a_3 + a_4 + a_5 + a_6 + a_7 + a_8 = b_1 + b_2"
+    full = handwrite_draw_width_mm(src, FS, 0.85)
+    lines = split_math_for_width(src, FS, full * 0.45)
+    assert len(lines) >= 3 and "".join(lines) == src
+    assert all(handwrite_draw_width_mm(line, FS, 0.85) <= full * 0.45 for line in lines[1:])
+    assert lines[1].lstrip().startswith("=")
+    assert split_math_for_width(src, FS, full + 1) == [src]
+    assert split_math_for_width(r"\frac{a}{b}", FS, 1.0) == [r"\frac{a}{b}"]  # 切れ目が無い
+
+
+# --- Typesetter: 手書きの構造式 ---
+
+
+def test_structured_inline_math_is_handwritten_with_its_drawn_width():
+    from src.layout.mathtext import MATH_INLINE_CAP_RATIO, handwrite_draw_width_mm
+
+    page = _typesetter().typeset("式 $E=mc^2$ です")[0]
+    (math,) = [p for p in page if p.math is not None]
+    assert math.math.handwritten
+    width = handwrite_draw_width_mm("E=mc^2", FS, MATH_INLINE_CAP_RATIO)
+    assert math.math.bbox[2] == pytest.approx(width)
+    printed = Typesetter(PageConfig(), font_size=FS, handwrite_math=False).typeset("$E=mc^2$")[0]
+    assert not printed[0].math.handwritten
+
+
+def test_block_fraction_bar_sits_on_a_ruling_line():
+    ts = _typesetter()
+    page = ts.typeset("前\n$$L = l + \\frac{a}{b} \\tag{2}$$\n後")[0]
+    (math,) = [p for p in page if p.math is not None]
+    assert math.math.handwritten and "\\dfrac" in math.math.source
+    rows = ts.layout.line_positions()
+    assert any(math.math.fraction_bar_y == pytest.approx(y) for y in rows)
+    _x, y0, _w, h = math.math.bbox
+    assert y0 < math.math.fraction_bar_y < y0 + h  # 分子は上の行、分母は下の行
+    tag_y = next(p.y for p in page if p.char == "2")
+    assert tag_y + ts.config.line_spacing / 2 == pytest.approx(math.math.fraction_bar_y)
+    assert _rows(page)[0] == "前" and _rows(page)[-1] == "後"
+
+
+def test_long_block_math_is_split_into_lines_that_fit():
+    ts = _typesetter()
+    terms = " + ".join(f"a_{{{i}}}" for i in range(30))
+    page = ts.typeset(f"$$E = {terms} \\tag{{3}}$$")[0]
+    maths = [p.math for p in page if p.math is not None]
+    area = ts.layout.content_area()
+    assert len(maths) >= 2
+    assert all(area.x - 1e-6 <= m.bbox[0] and m.bbox[0] + m.bbox[2] <= area.x + area.width + 1e-6
+               for m in maths)  # fmt: skip
+    assert len({m.bbox[1] for m in maths}) == len(maths)  # 別々の行
+    tag_y = next(p.y for p in page if p.char == "3")
+    assert tag_y < maths[0].bbox[1]  # 式番号は最後の行
+
+
+def test_split_block_math_that_does_not_fit_moves_whole_to_next_page():
+    ts = _typesetter(margin_top=200, margin_bottom=15)  # 11 行のページ
+    rows = len(ts.layout.line_positions())
+    terms = " + ".join(f"a_{{{i}}}" for i in range(30))
+    pages = ts.typeset("本文\n" * (rows - 3) + f"$$E = {terms}$$")
+    assert len(pages) == 2
+    assert not any(p.math is not None for p in pages[0])  # 途中の行だけ前ページに残らない
+    assert len([p for p in pages[1] if p.math is not None]) >= 2

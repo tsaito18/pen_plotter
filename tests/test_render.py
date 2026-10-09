@@ -494,6 +494,86 @@ def test_inline_math_renders_inside_its_box():
     assert 10.0 - 0.1 <= x0 and x1 <= 10.0 + 5.0 * formula_aspect("E = mc^2") + 0.1
 
 
+def _handwritten(src: str, align: str = "center", bar_y: float | None = None, fs: float = 5.0):
+    from src.layout.mathtext import (
+        MATH_BLOCK_CAP_RATIO,
+        MATH_INLINE_CAP_RATIO,
+        handwrite_draw_width_mm,
+    )
+
+    ratio = MATH_INLINE_CAP_RATIO if align == "baseline" else MATH_BLOCK_CAP_RATIO
+    w = handwrite_draw_width_mm(src, fs, ratio)
+    spec = MathSpec(src, (10.0, 100.0, w, 10.0), align, handwritten=True, fraction_bar_y=bar_y)
+    return CharPlacement("", 10.0, 100.0, fs, math=spec)
+
+
+def _straight_horizontal(strokes):
+    return [s for s in strokes if len(s) == 2 and abs(s[0, 1] - s[1, 1]) < 1e-9]
+
+
+def test_handwritten_fraction_puts_numerator_over_a_drawn_bar(kanjivg_dir):
+    r = _renderer(kanjivg_dir=kanjivg_dir)
+    placement = _handwritten(r"\dfrac{a}{\sqrt{b}}", bar_y=105.0)
+    strokes = r.render(placement).strokes
+    (bar,) = [s for s in _straight_horizontal(strokes) if np.ptp(s[:, 0]) > 1.0]
+    assert bar[0, 1] == pytest.approx(105.0)  # 分数線は指定の罫線上
+    above = [s for s in strokes if s.min(axis=0)[1] > 105.0]
+    x0, _, x1, _ = _bbox(above)
+    # 分母の √ の中身を寄せても、分子は分数線の中央のまま
+    assert (x0 + x1) / 2 == pytest.approx(bar[:, 0].mean(), abs=0.6)
+    assert any(s.min(axis=0)[1] < 105.0 and len(s) == 4 for s in strokes)  # √ の折れ線
+    assert r.coverage.geometric == [r"\dfrac{a}{\sqrt{b}}"]
+
+
+def test_handwritten_root_roof_covers_its_content():
+    r = _renderer()
+    strokes = r.render(_handwritten(r"\sqrt{x+1}")).strokes
+    (root,) = [s for s in strokes if len(s) == 4]
+    content = [s for s in strokes if s is not root]
+    _x0, _y0, x1, y1 = _bbox(content)
+    assert root[2, 0] < _bbox(content)[0] + 0.3  # 中身は屋根の左端から始まる
+    assert x1 - 0.2 < root[3, 0] < x1 + 0.8  # 屋根は中身を右端まで覆う（余白は小さく）
+    assert root[2, 1] == pytest.approx(root[3, 1]) and root[2, 1] > y1
+
+
+def test_handwritten_inline_math_sits_on_the_body_baseline():
+    r = _renderer()
+    strokes = r.render(_handwritten(r"x^{2}", "baseline")).strokes
+    body_x = _bbox(r.render(_at("x", fs=5.0 * 0.8)).strokes)
+    xs = _bbox(strokes)
+    assert xs[1] == pytest.approx(body_x[1], abs=0.25)  # x の下端が本文の x と揃う
+    assert xs[3] > body_x[3] + 0.5  # 上付きの 2 は上へ出る
+    assert 10.0 - 0.3 <= xs[0] and xs[2] <= 10.0 + placement_width(r"x^{2}") + 0.3
+
+
+def test_handwritten_accents_and_primes_are_drawn_over_their_letters():
+    r = _renderer()
+    plain = r.render(_handwritten(r"x", "baseline")).strokes  # ベースラインが動かない配置で比べる
+    for src in (r"\bar{x}", r"\hat{x}", r"\vec{x}", r"\dot{x}", r"\tilde{x}"):
+        strokes = r.render(_handwritten(src, "baseline")).strokes
+        assert len(strokes) > len(plain), src  # アクセントが消えない
+        top = max(s[:, 1].max() for s in strokes)
+        assert top > _bbox(plain)[3] + 0.2, src  # 字の上に乗る
+    prime = r.render(_handwritten(r"f'")).strokes
+    f_only = r.render(_handwritten(r"f")).strokes
+    assert len(prime) == len(f_only) + 1  # プライムは短い 1 画（0 ではない）
+
+
+def test_handwritten_large_brackets_span_their_content():
+    r = _renderer()
+    for src in (r"\left[\frac{a}{b}\right]", r"\left\{\frac{a}{b}\right\}"):
+        strokes = r.render(_handwritten(src)).strokes
+        inner = r.render(_handwritten(r"\frac{a}{b}")).strokes
+        bracket_h = max(np.ptp(s[:, 1]) for s in strokes)
+        assert bracket_h > 0.9 * (_bbox(inner)[3] - _bbox(inner)[1]), src
+
+
+def placement_width(src: str) -> float:
+    from src.layout.mathtext import MATH_INLINE_CAP_RATIO, handwrite_draw_width_mm
+
+    return handwrite_draw_width_mm(src, 5.0, MATH_INLINE_CAP_RATIO)
+
+
 # --- プレビュー ---
 
 

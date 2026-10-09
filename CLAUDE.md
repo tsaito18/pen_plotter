@@ -33,9 +33,9 @@ src/ui/          Web UI（server.py: スタジオの API, collect_api.py: 筆跡
 src/pipeline.py  テキスト→組版→ストローク→プレビュー/G-code（PlotterPipeline）
 src/settings.py  生成設定 Settings（UI・CLI・パイプラインの既定値の単一ソース）
 src/diagnostics.py レイアウト診断（字形欠損・文字かぶり）
-src/render/      配置要素→手書きストローク（char_renderer: 経路選択, positioning, math_image: 数式の細線化, preview）
+src/render/      配置要素→手書きストローク（char_renderer: 経路選択, positioning, math_handwriting: 構造式の手書き, math_image: 数式の細線化, preview）
 src/glyphs/      字形ソース（geometric: 記号/英字の幾何字形, sources: KanjiVG・ユーザー筆跡, style: 書き癖の推定, compose: 部品合成）
-src/layout/      組版（typesetter, placement: 配置要素の型, math_layout, table_layout, line_breaking, char_metrics）
+src/layout/      組版（typesetter, placement: 配置要素の型, math_layout, mathtext: matplotlib の数式配置, table_layout, line_breaking, char_metrics）
 src/handwriting/ 手書きの揺らぎ（augmentation, pink_noise）と筆遣い（finishing: とめ/はね/払い/連綿/接触率）
 src/model/       ML（deformers, style_encoder, aligner, data, training, inference）— torch 依存はここだけ
 src/gcode/       G-code 生成・プロッタ設定・キャリブレーション
@@ -214,7 +214,8 @@ matplotlib デフォルト           : Y-UP（invert_yaxis() 不要）
 - 数字(0-9)はML変形を**スキップ**しKanjiVG素の参照字形を直接使う（`render/char_renderer._is_ml_deformable`）。モデルはCJKのみ訓練のため数字にper-point offsetを当てると字形が壊れる（例: 「2」の下の横線が崩れる）。数字は終端リフト（はらい/はね）も無効化（`finishes=["none"]`、下線等の歪み防止）
 - **句点。/ピリオド.** は丸(円)ではなくピリオド風の短い点(2点ダッシュ)で描く（`render/positioning._position_period`、レポート体裁・「点が丸になる」回避）
 - **本文ASCII英字の手書き感**: 幾何字形(直線/円)は`WAVER_GEOMETRIC`(=1.5)でelastic+tremorを乗せ「きれいすぎ」を解消（経路別の揺らぎ強度は `render/char_renderer.py` 冒頭の定数に集約）
-- **数式の書体統一**: 単純な変数列（添字/上付き/分数/根号/演算子語を含まない text/symbol のみ、かつ全文字が`_PLAIN_MATH_BODY_CHARS`に含まれる）は matplotlib でなく本文と同じ手書き経路で描画（`typesetter._place_inline_math`の plain 分岐）。`$u$ $S$ $V=IR$ $\sigma$` 等＝手書き、`$E=mc^2$ $S_U$ $\frac{F}{A}$ $\cos$` ＝印刷体のまま。本文に字形が無い記号(' ≃ √ 等)を含む式は matplotlib（□退行防止、診断ツールが検出）
+- **数式の書体統一**: 単純な変数列（添字/上付き/分数/根号/演算子語を含まない text/symbol のみ、かつ全文字が`_PLAIN_MATH_BODY_CHARS`に含まれる）は matplotlib でなく本文と同じ手書き経路で描画（`typesetter._place_inline_math`の plain 分岐）。`$u$ $S$ $V=IR$ $\sigma$` 等＝手書き、`$E=mc^2$ $S_U$ $\frac{F}{A}$ $\cos$` は下の「構造式の手書き化」で描く。本文に字形が無い記号(' ≃ √ 等)を含む式は matplotlib（□退行防止、診断ツールが検出）
+- **構造式の手書き化（2026-10、PR #36 から移植）**: 単純な変数列以外の数式も手書きで描く（`Typesetter(handwrite_math=True)` が既定。`MathSpec.handwritten`）。`layout/mathtext.extract_math_layout` が matplotlib の数式組版からグリフ・分数線の位置を取り出し、`render/math_handwriting` が各グリフのインク矩形へ本文と同じ字形（本人サンプル → 幾何字形 → KanjiVG → 活字の細線化）を縦横比を保って貼る。分数線は直線、根号は「入り→谷→屋根」の折れ線（中身を屋根の左端へ寄せる。中身は x と y の両方で判定）、中身の高さまで伸ばす大括弧は弧/折れ線、アクセント・プライムは短い線。縮尺は基準の大文字 M を本文の大文字高さ（インライン 0.8・ブロック 0.85 × font_size）にする一定値。ブロック数式は主分数を `\dfrac` に昇格（どの `{}` の中にも無い分数だけ。指数・分子分母の中は小さいまま）し、分数線を罫線に乗せる（分子=上の行・分母=下の行）。本文幅を超える式は関係演算子→加減の前で改行し、途中の行が入らなければ置いた行を取り消して式全体を次ページへ送る。matplotlib が組版できない式だけ従来の細線化（`render/math_image`）
 - **インライン数式のサイズ**: matplotlibは`bbox_inches=tight`+cropで墨範囲に切るため論理高(font_size)へスケールすると小文字uがem高まで拡大され「でかすぎ」。`formula_ink_em()`でインク高/em比を測り描画高=ink_em*font_sizeとし本文emと同縮尺に（`Typesetter._inline_math_draw_size`が幅予約・bbox・描画の単一ソース）
 - **G-codeストローク簡略化(RDP)**: リサンプリングが曲率に関係なく32点固定のため4.5mm字で約0.12mmの極短セグメントが連続しGRBLが加減速しきれず実機が「ガガガ」と震えて遅くなる。`simplify_stroke`(許容`PlotterConfig.simplify_tolerance_mm=0.05`)で共線冗長点を畳む（実測G1点数47%減・中央セグメント0.24→0.87mm、tremor温存・見た目不変）
 - **表(パイプ表)の列幅**は`Typesetter.body_char_advance`の実文字送りの最大で算出（文字数×fsだと半角過大・漢字過小でセルが縦罫線を越える）
